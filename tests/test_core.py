@@ -279,3 +279,36 @@ def test_repaint_mode_and_estimate():
         Image.fromarray(pic).save(pp)
         path, box, ov = fit_to_render(pp, rp, out)
         assert path == out and box == (30, 40, 170, 160) and ov > 0.9
+
+
+def test_provider_balances_and_affordability(monkeypatch):
+    from mastersmith import providers
+
+    class R:
+        def __init__(self, text=None, js=None):
+            self.text, self._js = text, js
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._js
+
+    def fake_get(url, headers=None, timeout=None):
+        if url == providers.FAL_BALANCE:
+            return R(text="135.5861")
+        if url == providers.OPENROUTER_CREDITS:
+            return R(js={"data": {"total_credits": 870, "total_usage": 712.26}})
+        return R(js={"data": {"usage_daily": 0.16, "usage_weekly": 11.75, "usage_monthly": 568.56, "limit": None}})
+
+    monkeypatch.setattr(providers.requests, "get", fake_get)
+    monkeypatch.setenv("FAL_KEY", "k")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    d = providers.balances(force=True)
+    assert d["fal"]["usd"] == 135.5861 and d["openrouter"]["usd"] == 157.74 and d["openrouter"]["key_usage_month_usd"] == 568.56
+    assert providers.short(d) == "fal $135.59, OpenRouter $157.74"
+    providers.check_affordable(100.0, d)
+    with pytest.raises(providers.ProviderBalanceLow):
+        providers.check_affordable(140.0, d)
+    unknown = {"fal": None, "openrouter": None, "errors": {"fal": "down"}, "checked": 0}
+    providers.check_affordable(1e6, unknown)       # an outage never blocks a build

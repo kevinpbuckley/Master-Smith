@@ -102,7 +102,9 @@ worse. So the pipeline spends on the picture and the seed and does the rest itse
 
 `mastersmith/pricing.py` prices every fal endpoint the pipeline may call; an unpriced endpoint is refused. A build
 reserves its worst-case estimate, spends, then settles to the real cost (fal table price + OpenRouter's reported
-usage). By default the ledger only keeps score of what your keys spent (`python -m mastersmith wallet show`). For a
+usage). The real account balances are read from fal and OpenRouter (`mastersmith/providers.py`): the chat header
+shows them, the director quotes against them, and a build whose worst case exceeds a known balance is refused before
+it spends anything. An unreadable balance never blocks a build. By default the ledger only keeps score of what your keys spent (`python -m mastersmith wallet show`). For a
 shared instance set `MASTERSMITH_ENFORCE_CREDITS=1`, top users up with `wallet add <user> <credits>` and give them
 API keys (`keys create <user>`); one credit is one cent and `MASTERSMITH_MARKUP` scales the charge.
 
@@ -119,6 +121,7 @@ With no keys created, every request is the local admin user. Otherwise `Authoriz
 | POST | `/v1/jobs/refinish` | `{source_job, overrides}` → re-finish an earlier job's seed |
 | GET | `/v1/jobs`, `/v1/jobs/{id}`, `/v1/jobs/{id}/files/{name}` | status, log, summary, previews, downloads |
 | GET | `/v1/estimate?name=..&category=..` | worst-case cost of a brief |
+| GET | `/v1/providers` | what the fal and OpenRouter accounts have left (cached a minute; `?refresh=1`) |
 | GET | `/v1/wallet`, `/v1/me`, `/healthz` | spend, identity, liveness |
 
 Jobs are queued and run one at a time by the worker thread (Blender is CPU-bound). Run more workers with

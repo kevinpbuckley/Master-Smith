@@ -20,10 +20,26 @@ export async function apiJson<T>(path: string, init: RequestInit = {}): Promise<
 
 export type Attachment = { path: string; name: string; kind: "image" | "mesh"; bytes?: number };
 
+export type Providers = {
+  fal: { usd: number } | null;
+  openrouter: {
+    usd: number;
+    bought_usd?: number;
+    key_usage_today_usd?: number;
+    key_usage_week_usd?: number;
+    key_usage_month_usd?: number;
+    key_limit_usd?: number;
+    key_limit_remaining_usd?: number;
+  } | null;
+  errors: Record<string, string>;
+  checked: number;
+};
+
 export type TurnData = {
   brief: Record<string, unknown> | null;
   last_job: string | null;
   balance: number;
+  providers: Providers | null;
   chat_cost_usd: number;
   tools: { name: string; args: unknown; result: string }[];
 };

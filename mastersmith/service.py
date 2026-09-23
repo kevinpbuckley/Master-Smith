@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import config, pricing
+from . import config, pricing, providers
 from .agent import Director
 from .pipeline import MESH_EXTENSIONS, seed_of
 from .spec import Spec
@@ -121,12 +121,17 @@ def last_seed(user, job_id):
 def _enqueue(user, spec, kind, source=None):
     if kind in ("refinish", "rework"):     # the seed is reused; only the finishing calls are held
         mode = (source or {}).get("mode") if isinstance(source, dict) else "refinish"
-        credits = pricing.estimate_rework(spec, mode)["credits"]
+        est = pricing.estimate_rework(spec, mode)
     else:
-        credits = pricing.estimate(spec)["credits"]
+        est = pricing.estimate(spec)
+    credits = est["credits"]
     bal = wallet.balance(user)
     if config.ENFORCE_CREDITS and bal < credits:
         return {"error": "insufficient credits", "needed": credits, "balance": bal}
+    try:
+        providers.check_affordable(est["usd"])      # a known provider balance below the worst case stops it here
+    except providers.ProviderBalanceLow as exc:
+        return {"error": "provider balance too low: %s" % exc, "needed_usd": est["usd"], "providers": exc.data}
     job_id = new_job_id()
     store.enqueue(job_id, user, kind, spec.to_dict(), source_job=json.dumps(source) if isinstance(source, dict) else source)
     return {"job_id": job_id, "status": "queued", "kind": kind, "estimate_credits": credits, "balance": bal}
@@ -217,7 +222,13 @@ def index():
 @app.get("/v1/me")
 def me(who=Depends(auth)):
     return {"user": who["user"], "role": who["role"], "balance": wallet.balance(who["user"]),
-            "local_mode": not store.has_keys(), "jobs": store.jobs_for(who["user"])}
+            "local_mode": not store.has_keys(), "providers": providers.balances(), "jobs": store.jobs_for(who["user"])}
+
+
+@app.get("/v1/providers")
+def provider_balances(refresh: bool = False, who=Depends(auth)):
+    """What the fal and OpenRouter accounts behind this instance have left (cached a minute; ?refresh=1 re-reads)."""
+    return providers.balances(force=refresh)
 
 
 @app.post("/v1/uploads")
@@ -250,7 +261,7 @@ def chat(body: ChatIn, who=Depends(auth)):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, "director error: %s" % str(exc)[:300])
     return {"reply": reply, "brief": d.spec.to_dict() if d.spec else None, "balance": wallet.balance(who["user"]),
-            "last_job": d.last_job_id, "chat_cost_usd": round(d.chat_cost_usd(), 5),
+            "providers": providers.balances(), "last_job": d.last_job_id, "chat_cost_usd": round(d.chat_cost_usd(), 5),
             "tools": [{"name": t["name"], "args": t.get("args"), "result": t.get("result")} for t in d.last_tools]}
 
 

@@ -335,3 +335,9 @@ pre.error {
 .error-inline {
   color: var(--bad);
 }
+.accounts {
+  color: var(--fg);
+}
+.accounts .low {
+  color: var(--bad);
+}

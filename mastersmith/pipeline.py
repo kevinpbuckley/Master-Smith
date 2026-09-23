@@ -7,7 +7,7 @@ import subprocess
 import time
 import uuid
 
-from . import config, pricing, skills
+from . import config, pricing, providers, skills
 from .fal import Fal, FalError
 from .images import Images
 from .llm import LLM
@@ -117,8 +117,9 @@ def repaint_seed(job, seed_glb, reference):
 
 
 def build(spec, user, wallet, log=print, job_id=None):
-    """Run a full build for `user`. Raises InsufficientCredits before spending anything."""
+    """Run a full build for `user`. Raises InsufficientCredits or ProviderBalanceLow before spending anything."""
     est = pricing.estimate(spec)
+    providers.check_affordable(est["usd"])
     hold = wallet.reserve(user, est["credits"], "build %s" % spec.name)   # raises when the balance is short
     job = Job(spec, user, wallet, log, job_id=job_id)
     skill = skills.load(spec.category)
@@ -200,7 +201,9 @@ def rework(seed_path, spec, user, wallet, ref_view=None, mode="refinish", log=pr
                         colour, else by the retexture vendor guided by a picture edited from `ref_view` (or by the
                         text alone when there is no picture) - then finished.
     Pays for the probe, repaint, rig and review calls only."""
-    credits = pricing.estimate_rework(spec, mode)["credits"]
+    est = pricing.estimate_rework(spec, mode)
+    providers.check_affordable(est["usd"])
+    credits = est["credits"]
     hold = wallet.reserve(user, credits, "%s %s" % (mode, spec.name))
     job = Job(spec, user, wallet, log, job_id=job_id)
     skill = skills.load(spec.category)

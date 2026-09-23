@@ -4,7 +4,7 @@ does the work, the model does the talking. That is what keeps OpenRouter spend t
 import json
 import os
 
-from . import config, pricing, skills
+from . import config, pricing, providers, skills
 from .llm import LLM
 from .pipeline import build
 from .spec import CATEGORIES, ENGINES, STYLES, Spec
@@ -111,8 +111,10 @@ TOOLS = [
 MAX_TOOL_ROUNDS = 4
 
 PRICING_NOTE_OWN_KEYS = ("Money: the customer runs this on their own fal.ai and OpenRouter keys. Quote the worst case as US dollars "
-                         "(estimate_usd, e.g. 'about $1.20 worst case'). There is no balance, no hold and no top-up: never say a "
-                         "build is unaffordable or ask them to add credits.")
+                         "(estimate_usd, e.g. 'about $1.20 worst case') next to what the two accounts have left "
+                         "(provider_balances_usd, e.g. 'fal has $135, OpenRouter $157'). There is no local balance, hold or top-up. "
+                         "Only when provider_too_low_for_this_build names an account say the build will be refused until that "
+                         "account is topped up at the provider.")
 PRICING_NOTE_ENFORCED = ("Credits: 1 credit = 1 cent. set_brief returns the balance and whether the build is affordable; "
                          "quote the credits it will hold and, when it is not affordable, say how many more are needed.")
 
@@ -152,9 +154,15 @@ class Director:
         """What the director may say about money. With credits enforced: the balance and whether the build is
         affordable. Otherwise the ledger only keeps score of the customer's own spend, and no balance is quoted."""
         bal = self.wallet.balance(self.user)
+        accounts = providers.balances()
+        money = {"provider_balances_usd": {k: (v or {}).get("usd") for k, v in accounts.items() if k in ("fal", "openrouter")}}
+        needed_usd = needed * config.CREDIT_USD / max(config.MARKUP, 1e-9)
+        low = [k for k, v in money["provider_balances_usd"].items() if v is not None and needed and v < needed_usd]
+        if low:
+            money["provider_too_low_for_this_build"] = low
         if config.ENFORCE_CREDITS:
-            return {"balance": bal, "affordable": bal >= needed}
-        return {"spent_so_far_usd": round(-bal / 100, 2), "credits_enforced": False}
+            return {**money, "balance": bal, "affordable": bal >= needed}
+        return {**money, "spent_so_far_usd": round(-bal / 100, 2), "credits_enforced": False}
 
     def _build(self, _a):
         if not self.spec:

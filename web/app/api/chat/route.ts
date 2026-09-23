@@ -38,6 +38,7 @@ export async function POST(req: Request) {
         brief: j.brief ?? null,
         last_job: j.last_job ?? null,
         balance: j.balance,
+        providers: j.providers ?? null,
         chat_cost_usd: j.chat_cost_usd,
         tools: j.tools ?? [],
       };

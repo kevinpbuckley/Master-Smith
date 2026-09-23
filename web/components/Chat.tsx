@@ -3,12 +3,32 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Attachment, TurnData } from "@/lib/api";
+import type { Attachment, Providers, TurnData } from "@/lib/api";
 import JobPanel from "./JobPanel";
 
 type SmithMessage = UIMessage<unknown, { turn: TurnData }>;
 
-type Me = { user: string; balance: number; local_mode: boolean; error?: string };
+type Me = { user: string; balance: number; local_mode: boolean; providers?: Providers | null; error?: string };
+
+function Accounts({ p }: { p: Providers | null | undefined }) {
+  if (!p) return null;
+  const cell = (label: string, v: { usd: number } | null, err?: string) =>
+    v ? (
+      <span className={v.usd < 2 ? "low" : ""} title={err}>
+        {label} ${v.usd.toFixed(2)}
+      </span>
+    ) : (
+      <span className="low" title={err}>
+        {label} ?
+      </span>
+    );
+  const month = p.openrouter?.key_usage_month_usd;
+  return (
+    <span className="accounts" title={month !== undefined ? `OpenRouter key: $${month.toFixed(2)} this month` : undefined}>
+      {cell("fal", p.fal, p.errors?.fal)} · {cell("OpenRouter", p.openrouter, p.errors?.openrouter)}
+    </span>
+  );
+}
 
 function newSessionId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now());
@@ -39,20 +59,23 @@ export default function Chat() {
   const latest = useMemo(() => {
     let job: string | null = null;
     let balance: number | null = null;
+    let providers: Providers | null = null;
     for (let i = messages.length - 1; i >= 0; i--) {
       const turn = messages[i].parts.find((p) => p.type === "data-turn");
       if (turn && turn.type === "data-turn") {
         if (balance === null) balance = turn.data.balance;
+        if (!providers) providers = turn.data.providers;
         if (turn.data.last_job) {
           job = turn.data.last_job;
           break;
         }
       }
     }
-    return { job, balance };
+    return { job, balance, providers };
   }, [messages]);
   const jobId = latest.job;
   const balance = latest.balance ?? me?.balance ?? 0;
+  const accounts = latest.providers ?? me?.providers;
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
@@ -109,8 +132,10 @@ export default function Chat() {
             <span className="error-inline">API offline: {me.error}</span>
           ) : me ? (
             <span className="dim">
+              <Accounts p={accounts} />
+              {accounts ? " · " : ""}
               {me.user}
-              {me.local_mode ? " (local)" : ""} · spent ${(-balance / 100).toFixed(2)}
+              {me.local_mode ? " (local)" : ""} · spent here ${(-balance / 100).toFixed(2)}
             </span>
           ) : null}
           <button className="ghost" onClick={reset} disabled={busy}>

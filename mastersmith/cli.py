@@ -11,6 +11,7 @@ import sys
 
 from . import config, pricing
 from .spec import Spec
+from .providers import ProviderBalanceLow
 from .wallet import InsufficientCredits, Wallet
 
 
@@ -64,6 +65,8 @@ def cmd_run(a):
         r = build(spec, a.user, w, log=_log)
     except InsufficientCredits as exc:
         sys.exit("insufficient credits: %s" % exc)
+    except ProviderBalanceLow as exc:
+        sys.exit("provider balance too low: %s" % exc)
     print(json.dumps({k: r.get(k) for k in ("status", "delivery_dir", "review", "bill", "error")}, indent=1, default=str))
 
 
@@ -76,8 +79,8 @@ def cmd_import(a):
     print("brief: %s" % json.dumps(spec.to_dict()))
     try:
         r = rework(os.path.abspath(a.path), spec, a.user, Wallet(), log=_log)
-    except InsufficientCredits as exc:
-        sys.exit("insufficient credits: %s" % exc)
+    except (InsufficientCredits, ProviderBalanceLow) as exc:
+        sys.exit("refused: %s" % exc)
     print(json.dumps({k: r.get(k) for k in ("status", "delivery_dir", "review", "bill", "error")}, indent=1, default=str))
 
 
