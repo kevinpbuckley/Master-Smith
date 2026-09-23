@@ -30,7 +30,8 @@ How a job goes:
    cost, then wait for them to say go (or change something).
 3. When they confirm, call make_reference FIRST (unless they say to skip the preview). It draws the reference
    picture(s) the mesh will be built from, for cents, and shows them to the customer in the chat. Tell them to look at
-   the picture and say go, or say what to change. If they want changes, call set_brief with the changed description
+   the pictures and say go, or say what to change. Never paste picture paths, URLs or markdown images into your reply:
+   the chat displays the pictures itself, with each angle labelled. If they want changes, call set_brief with the changed description
    (or edit_instructions for a small change to the same design) and make_reference again. When they approve, call
    build: it seeds from the approved picture and draws nothing new. If build returns a queued job_id, tell the customer
    the job is building and that the page shows progress; when they ask how it is going call job_status. When build
@@ -64,7 +65,8 @@ TOOLS = [
             "reference_images": {"type": "array", "items": {"type": "string"}, "description": "Every picture the customer supplied (up to 4)"},
             "search_query": {"type": "string", "description": "For a REAL, named thing (an M1 Abrams, a Willys MB, a Glock 17, a Ford F-150): its exact name, so a photograph is looked up on the web and the mesh is built from it. Empty for fictional or generic objects."},
             "research": {"type": "boolean", "description": "Force web research on or off (default: on when search_query is set and no pictures were supplied)"},
-            "multiview": {"type": "boolean", "description": "Seed from several views (default true for weapons/vehicles)"},
+            "multiview": {"type": "boolean", "description": "Draw and seed from several angles (default true for every category: the "
+                          "customer sees front/side/rear pictures before approving); false only when they ask for one picture"},
             "premium": {"type": "boolean", "description": "Dearer picture model for hard briefs"},
             "glass": {"type": "boolean", "description": "Give windows/lenses a glass material slot (default for vehicles, weapons, buildings)"},
             "rig": {"type": "boolean", "description": "Rig it: characters get a UE5-named humanoid skeleton with walk/run clips; vehicles get wheel bones; weapons get Muzzle/Grip/Sight socket bones"},
@@ -192,9 +194,11 @@ class Director:
         else:
             from .pipeline import make_reference_only
             r = make_reference_only(self.spec, self.user, self.wallet, log=self.log)
+            ref = r.get("reference") or {}
             out = {"job_id": r["job_id"], "dir": r["dir"], "status": r["status"], "error": r.get("error"),
-                   "views": (r.get("reference") or {}).get("views") or [], "pictures": (r.get("reference") or {}).get("views") or [],
-                   "checks": (r.get("reference") or {}).get("checks"), "usd_cost": (r.get("bill") or {}).get("usd_cost")}
+                   "views": ref.get("views") or [],
+                   "pictures": [{"label": p["label"], "url": p["path"]} for p in (ref.get("pictures") or [])],
+                   "checks": ref.get("checks"), "usd_cost": (r.get("bill") or {}).get("usd_cost")}
         if out.get("status") == "done" and out.get("dir"):
             self.reference = {"job_dir": out["dir"], "views": out.get("views") or [], "for": self._design()}
             self.last_pictures = list(out.get("pictures") or [])

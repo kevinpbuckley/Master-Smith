@@ -19,12 +19,12 @@ def test_spec_defaults_by_category():
     assert s.name == "MySniperRifle"
     assert s.tri_budget == 60000 and s.size_m == 1.0 and s.multiview
     c = Spec(name="Orc", description="x", category="character")
-    assert c.multiview is False and c.size_m == 1.8
+    assert c.multiview is True and c.size_m == 1.8      # every category draws its second view for approval
     assert Spec(name="RustyOilDrum", description="x").name == "RustyOilDrum"
     assert Spec(name="rusty oil-drum", description="x").name == "Rusty_oil-drum" or Spec(name="rusty oil-drum", description="x").name == "RustyOilDrum"
     assert Spec(name="QA_Smith_Crate", description="x").name == "QA_Smith_Crate"
-    assert Spec(name="Crate", description="x", category="prop").multiview is False
-    assert Spec(name="Crate", description="x", category="prop", multiview=True).multiview is True
+    assert Spec(name="Crate", description="x", category="prop").multiview is True
+    assert Spec(name="Crate", description="x", category="prop", multiview=False).multiview is False
     assert Spec(name="J", description="x", category="vehicle").glass is True and Spec(name="J", description="x", category="vehicle").rig is False
     assert Spec(name="J", description="x", category="vehicle").multiview is True   # issue #8: guarded orthographic views since 2026-09-18
     assert Spec(name="O", description="x", category="character").rig is True

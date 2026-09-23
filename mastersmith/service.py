@@ -174,9 +174,13 @@ def run_reference(user, spec_dict):
         store.finish(job_id, "refused", error=str(exc))
         return {"job_id": job_id, "status": "refused", "error": str(exc)}
     store.finish(job_id, r["status"], result=r, error=r.get("error"))
-    views = (r.get("reference") or {}).get("views") or []
+    ref = r.get("reference") or {}
+    views = ref.get("views") or []
+    # every angle the build will use, labelled: the primary view, then the orthographic or second views
+    labelled = ref.get("pictures") or [{"label": "reference", "path": v} for v in views]
     return {"job_id": job_id, "dir": r["dir"], "status": r["status"], "error": r.get("error"), "views": views,
-            "pictures": ["/v1/jobs/%s/files/%s" % (job_id, os.path.basename(v)) for v in views],
+            "pictures": [{"label": p["label"], "url": "/v1/jobs/%s/files/%s" % (job_id, os.path.basename(p["path"]))}
+                         for p in labelled if p.get("path") and os.path.exists(p["path"])],
             "checks": (r.get("reference") or {}).get("checks"), "source": (r.get("reference") or {}).get("source"),
             "usd_cost": (r.get("bill") or {}).get("usd_cost")}
 

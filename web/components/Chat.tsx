@@ -267,17 +267,31 @@ export default function Chat() {
   );
 }
 
-function Pictures({ urls, onApprove, onChange, busy }: { urls: string[]; onApprove: () => void; onChange: () => void; busy: boolean }) {
+function Pictures({
+  urls,
+  onApprove,
+  onChange,
+  busy,
+}: {
+  urls: { label: string; url: string }[];
+  onApprove: () => void;
+  onChange: () => void;
+  busy: boolean;
+}) {
   return (
     <div className="pictures">
       <div className="pictures-row">
-        {urls.map((u) => {
-          const src = u.replace(/^\/v1\//, "/api/");
+        {urls.map((p, i) => {
+          const src = p.url.replace(/^\/v1\//, "/api/");
+          const caption = i === 0 ? "reference" : p.label.replace(/^orthographic /, "");
           return (
-            <a key={u} href={src} target="_blank" rel="noreferrer">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={src} alt="reference picture" />
-            </a>
+            <figure key={p.url}>
+              <a href={src} target="_blank" rel="noreferrer">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={src} alt={p.label} title={p.label} />
+              </a>
+              <figcaption className="dim">{caption}</figcaption>
+            </figure>
           );
         })}
       </div>

@@ -40,7 +40,7 @@ export type TurnData = {
   last_job: string | null;
   balance: number;
   providers: Providers | null;
-  pictures: string[];             // reference pictures drawn this turn ("/v1/jobs/<id>/files/ref_0.png"), for approval
+  pictures: { label: string; url: string }[];   // reference pictures drawn this turn, every angle the build will use
   reference_job: string | null;   // the approved reference job the next build will seed from
   chat_cost_usd: number;
   tools: { name: string; args: unknown; result: string }[];

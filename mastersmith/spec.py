@@ -66,7 +66,9 @@ class Spec:
             # second tail on both helicopters of the 2026-09-17 batch.
             # vehicles, aircraft and helicopters get strictly orthographic front / left / back views edited from the
             # primary picture, each checked, and fall back to one picture when any check fails (issue #8, 2026-09-18)
-            self.multiview = self.category in ("weapon", "vehicle", "aircraft", "helicopter")
+            # every category: the customer approves the angles before the mesh is bought, and Tripo multiview measured
+            # a win on the realism lab's rifle (2026-09-16); props/characters/environments get their skill's second view
+            self.multiview = True
         self.multiview = bool(self.multiview)
         if self.glass is None:
             self.glass = self.category in ("vehicle", "aircraft", "helicopter", "weapon", "environment")
