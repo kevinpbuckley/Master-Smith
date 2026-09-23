@@ -104,3 +104,25 @@ def test_sessions_are_absent_until_a_chat_turn(client):
     H = {"Authorization": "Bearer " + KEY}
     assert client.get("/v1/sessions/none", headers=H).status_code == 404
     assert client.delete("/v1/sessions/none", headers=H).json() == {"dropped": False}
+
+
+def test_models_list_prices_and_the_env_default_first(client):
+    from mastersmith import config, providers
+    H = {"Authorization": "Bearer " + KEY}
+    fake = {config.DIRECTOR_MODEL: {"name": "d", "context": 1, "in_per_m": 0.75, "out_per_m": 3.75, "tools": True, "vision": True},
+            "deepseek/deepseek-v4.1-flash": {"name": "ds", "context": 1, "in_per_m": 0.1, "out_per_m": 0.5, "tools": True, "vision": True},
+            "vendor/tool-only": {"name": "t", "context": 1, "in_per_m": 1, "out_per_m": 2, "tools": True, "vision": False},
+            "vendor/vision-tools": {"name": "v", "context": 1, "in_per_m": 3, "out_per_m": 4, "tools": True, "vision": True}}
+    providers._models_cache.update(at=9e12, data=fake)
+    try:
+        m = client.get("/v1/models", headers=H).json()
+        ids = [d["id"] for d in m["director_models"]]
+        assert ids[0] == config.DIRECTOR_MODEL and "(default)" in m["director_models"][0]["label"]
+        assert "$0.75 in / $3.75 out per 1M" in m["director_models"][0]["label"]
+        assert "deepseek/deepseek-v4.1-flash" in ids and "vendor/vision-tools" not in ids and not m["all_models"]
+        m2 = client.get("/v1/models?all=1", headers=H).json()
+        ids2 = [d["id"] for d in m2["director_models"]]
+        assert ids2[0] == config.DIRECTOR_MODEL and "vendor/vision-tools" in ids2 and "vendor/tool-only" not in ids2 and m2["all_models"]
+        assert [v["key"] for v in m["seed_vendors"]][0] == "tripo" and m["seed_vendors"][0]["usd"] == 0.6
+    finally:
+        providers._models_cache.update(at=0.0, data=None)

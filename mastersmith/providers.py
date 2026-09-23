@@ -73,6 +73,39 @@ def short(data=None):
     return ", ".join(bits)
 
 
+OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
+_models_cache = {"at": 0.0, "data": None}
+MODELS_TTL = 3600.0
+
+
+def openrouter_models(force=False):
+    """{id: {"name", "in_per_m", "out_per_m", "context", "tools", "vision"}} for every model OpenRouter serves,
+    from its public list (no key needed), cached an hour. Prices are USD per million tokens."""
+    with _lock:
+        if not force and _models_cache["data"] is not None and time.time() - _models_cache["at"] < MODELS_TTL:
+            return _models_cache["data"]
+        out = {}
+        try:
+            r = requests.get(OPENROUTER_MODELS, timeout=TIMEOUT)
+            r.raise_for_status()
+            for m in r.json().get("data") or []:
+                p = m.get("pricing") or {}
+                a = m.get("architecture") or {}
+                sp = m.get("supported_parameters") or []
+                try:
+                    out[m["id"]] = {"name": m.get("name") or m["id"], "context": m.get("context_length"),
+                                    "in_per_m": round(float(p.get("prompt") or 0) * 1e6, 4),
+                                    "out_per_m": round(float(p.get("completion") or 0) * 1e6, 4),
+                                    "tools": "tools" in sp, "vision": "image" in (a.get("input_modalities") or [])}
+                except (TypeError, ValueError, KeyError):
+                    continue
+        except Exception:  # noqa: BLE001 - no prices is not an outage
+            if _models_cache["data"] is not None:
+                return _models_cache["data"]
+        _models_cache.update(at=time.time(), data=out)
+        return out
+
+
 class ProviderBalanceLow(Exception):
     def __init__(self, needed_usd, data):
         self.needed_usd, self.data = needed_usd, data

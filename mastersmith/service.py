@@ -274,14 +274,29 @@ def _session_settings(session_id, user):
         return _sessions["%s:%s" % (user, session_id)]["settings"]
 
 
-def model_options():
-    """What the UI may choose from and what is in force now."""
-    director = []
-    for mid, label in ((config.DIRECTOR_MODEL, "default"), (config.PREMIUM_MODEL, "premium")):
-        if mid and mid not in [m["id"] for m in director]:
-            director.append({"id": mid, "label": "%s (%s)" % (mid, label)})
+def _director_entry(mid, prices, tag=None):
+    p = prices.get(mid) or {}
+    money = (" · $%.2f in / $%.2f out per 1M" % (p["in_per_m"], p["out_per_m"])) if p else ""
+    return {"id": mid, "label": "%s%s%s" % (mid, (" (%s)" % tag) if tag else "", money),
+            "in_per_m": p.get("in_per_m"), "out_per_m": p.get("out_per_m"), "tools": p.get("tools"), "vision": p.get("vision"),
+            "context": p.get("context")}
+
+
+def model_options(all_models=False):
+    """What the UI may choose from and what is in force now. The director list is the configured set (the .env
+    default first) with OpenRouter's prices; all_models adds every tool-and-vision-capable model OpenRouter serves."""
+    prices = providers.openrouter_models()
+    director, seen = [], set()
+    for mid, tag in [(config.DIRECTOR_MODEL, "default")] + [(m, None) for m in config.DIRECTOR_MODELS] + [(config.PREMIUM_MODEL, "premium")]:
+        if mid and mid not in seen:
+            seen.add(mid)
+            director.append(_director_entry(mid, prices, tag))
+    if all_models:
+        extra = [mid for mid, p in prices.items() if p["tools"] and p["vision"] and mid not in seen
+                 and not mid.startswith("~") and ":" not in mid.split("/")[-1]]
+        director += [_director_entry(mid, prices) for mid in sorted(extra)]
     return {"seed_vendors": pricing.vendor_catalogue(),
-            "director_models": director,
+            "director_models": director, "all_models": all_models,
             "pictures": {"concept": config.CONCEPT_MODEL, "concept_hard_surface": config.CONCEPT_MODEL_HARD,
                          "concept_premium": config.CONCEPT_MODEL_PREMIUM, "edit": config.EDIT_MODEL, "vision": config.VISION_MODEL},
             "defaults": {"seed_vendor": pricing.seed_vendor(Spec(name="X", description="x"))["key"], "director_model": config.DIRECTOR_MODEL}}
@@ -344,9 +359,10 @@ async def upload(file: UploadFile = File(...), who=Depends(auth)):
 
 
 @app.get("/v1/models")
-def get_models(who=Depends(auth)):
-    """Mesh vendors (with worst-case seed price), director models and the picture models in force."""
-    return model_options()
+def get_models(all: bool = False, who=Depends(auth)):
+    """Mesh vendors (with worst-case seed price), director models with OpenRouter's prices, and the picture models in
+    force. ?all=1 lists every tool-and-vision-capable model OpenRouter serves."""
+    return model_options(all_models=all)
 
 
 @app.post("/v1/chat")

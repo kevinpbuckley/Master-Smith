@@ -16,21 +16,30 @@ function loadSettings(): Settings {
   }
 }
 
+const ALL_MODELS = "__all__";
+
 function ModelPicker({
   options,
   settings,
   onChange,
+  onLoadAll,
   busy,
 }: {
   options: ModelOptions | null;
   settings: Settings;
   onChange: (s: Settings) => void;
+  onLoadAll: () => void;
   busy: boolean;
 }) {
   if (!options) return null;
   const vendor = settings.seed_vendor || options.defaults.seed_vendor;
   const director = settings.director_model || options.defaults.director_model;
   const v = options.seed_vendors.find((x) => x.key === vendor);
+  const known = options.director_models.some((m) => m.id === director);
+  const d = options.director_models.find((m) => m.id === director);
+  const directorTitle = d && d.in_per_m !== null && d.out_per_m !== null
+    ? `$${d.in_per_m.toFixed(2)} in / $${d.out_per_m.toFixed(2)} out per 1M tokens · pictures: ${options.pictures.concept}, vision: ${options.pictures.vision}`
+    : `Pictures: ${options.pictures.concept} (hard surfaces: ${options.pictures.concept_hard_surface}); vision: ${options.pictures.vision}`;
   return (
     <span className="models">
       <label title={v ? `${v.note}${v.usd !== null ? ` · about $${v.usd.toFixed(2)} a mesh` : ""}` : "mesh vendor"}>
@@ -44,14 +53,23 @@ function ModelPicker({
           ))}
         </select>
       </label>
-      <label title={`Pictures: ${options.pictures.concept} (hard surfaces: ${options.pictures.concept_hard_surface}); vision: ${options.pictures.vision}`}>
+      <label title={directorTitle}>
         Director
-        <select value={director} disabled={busy} onChange={(e) => onChange({ ...settings, director_model: e.target.value })}>
+        <select
+          value={known ? director : director}
+          disabled={busy}
+          onChange={(e) => {
+            if (e.target.value === ALL_MODELS) onLoadAll();
+            else onChange({ ...settings, director_model: e.target.value });
+          }}
+        >
+          {!known && <option value={director}>{director}</option>}
           {options.director_models.map((m) => (
             <option key={m.id} value={m.id}>
               {m.label}
             </option>
           ))}
+          {!options.all_models && <option value={ALL_MODELS}>All vision models with prices…</option>}
         </select>
       </label>
     </span>
@@ -104,6 +122,13 @@ export default function Chat() {
       .then((o: ModelOptions | null) => setOptions(o))
       .catch(() => setOptions(null));
   }, []);
+
+  function loadAllModels() {
+    fetch("/api/models?all=1", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((o: ModelOptions | null) => o && setOptions(o))
+      .catch(() => undefined);
+  }
 
   function changeSettings(s: Settings) {
     setSettings(s);
@@ -199,7 +224,7 @@ export default function Chat() {
           <p className="dim">Prompt in, game-ready 3D model out. Describe an asset, or attach a model to finish it.</p>
         </div>
         <div className="me">
-          <ModelPicker options={options} settings={settings} onChange={changeSettings} busy={busy} />
+          <ModelPicker options={options} settings={settings} onChange={changeSettings} onLoadAll={loadAllModels} busy={busy} />
           {me?.error ? (
             <span className="error-inline">API offline: {me.error}</span>
           ) : me ? (

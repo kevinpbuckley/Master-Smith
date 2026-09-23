@@ -37,7 +37,8 @@ export type Providers = {
 
 export type ModelOptions = {
   seed_vendors: { key: string; label: string; model: string; multiview: boolean; note: string; usd: number | null }[];
-  director_models: { id: string; label: string }[];
+  director_models: { id: string; label: string; in_per_m: number | null; out_per_m: number | null; context?: number | null }[];
+  all_models?: boolean;
   pictures: Record<string, string>;
   defaults: { seed_vendor: string; director_model: string };
 };

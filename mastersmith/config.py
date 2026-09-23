@@ -41,6 +41,12 @@ API_USER = os.environ.get("MASTERSMITH_API_USER", "agent").strip() or "agent"
 DIRECTOR_MODEL = os.environ.get("MASTERSMITH_DIRECTOR_MODEL", "google/gemini-3.8-flash")
 VISION_MODEL = os.environ.get("MASTERSMITH_VISION_MODEL", "google/gemini-3.8-flash")
 PREMIUM_MODEL = os.environ.get("MASTERSMITH_PREMIUM_MODEL", "anthropic/claude-sonnet-5")
+# The director models the chat offers (OpenRouter ids; every one must support tools). DIRECTOR_MODEL is the default
+# and always listed first; the UI can also show every tool-and-vision-capable model OpenRouter serves.
+DIRECTOR_MODELS = [m.strip() for m in os.environ.get(
+    "MASTERSMITH_DIRECTOR_MODELS",
+    "deepseek/deepseek-v4.1-flash,openai/gpt-6-luna,z-ai/glm-5.3-flash,openai/gpt-6-sol,anthropic/claude-sonnet-5,anthropic/claude-opus-5.5"
+).split(",") if m.strip()]
 
 # --- fal endpoints by role. One vendor per role; the 2026-09-16 bake-off picked these.
 # --- pictures: OpenRouter's image API (POST /api/v1/images) since 2026-09-19 (ported from the openrouter-only branch):

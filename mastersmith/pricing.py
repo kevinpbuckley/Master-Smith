@@ -18,7 +18,9 @@ FAL_PRICES = {
     "tripo3d/h3.1/image-to-3d": 0.30,         # standard; +0.10 HD textures, +0.20 detailed geometry, +0.05 quad
     "tripo3d/h3.1/multiview-to-3d": 0.30,
     "fal-ai/hyper3d/rodin/v2": 0.40,
-    "fal-ai/meshy/v5/retexture": 0.30,
+    "fal-ai/meshy/v5/retexture": 1.20,           # UNVERIFIED: fal's page shows no price sentence for this endpoint; the Meshy
+                                                 # retexture line fal does publish reads "$0.8 per untextured model / $1.2 per
+                                                 # textured model" (2026-09-23), so the worst case is held at $1.20 until measured
     "fal-ai/meshy/v5/remesh": 0.20,
     "fal-ai/sam-3/image": 0.005,                 # text-prompted segmentation masks (glass, wheels)
     "fal-ai/hunyuan-3d/v3.1/part": 0.45,         # split a fused mesh (FBX, <=30k faces) into parts
