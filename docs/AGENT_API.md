@@ -73,6 +73,15 @@ Re-finish an earlier job's mesh with a changed brief (no new mesh is bought):
 curl -s -H "$H" -H "Content-Type: application/json" $MS/v1/jobs/refinish -d "{\"source_job\": \"$JOB\", \"overrides\": {\"tri_budget\": 80000, \"rig\": true}}"
 ```
 
+Delete a part the vendor grew, in Blender, and re-finish (cents: masks, a facing check, the review):
+
+```bash
+curl -s -H "$H" -H "Content-Type: application/json" $MS/v1/jobs/refinish -d "{\"source_job\": \"$JOB\", \"overrides\": {\"remove_parts\": [\"the extra cylinder attached to the magazine\"]}}"
+```
+
+The `debug` answer of the new job lists `removed_parts` with the face counts; a phrase whose mask found nothing, or
+covered more than 30% of the object, deletes nothing and says so in the log.
+
 ## Watch and debug
 
 ```bash

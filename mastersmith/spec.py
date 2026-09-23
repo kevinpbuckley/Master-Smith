@@ -40,6 +40,8 @@ class Spec:
                                       # "hitem3d3" (Hi3D v3, crisper textures, single view), "meshy7", "hitem3d"
     reference_job: str = None         # the directory of a finished reference job whose approved pictures this build
                                       # seeds from; the picture stage is skipped
+    remove_parts: list = None         # a repair on the existing mesh: parts to delete in Blender, as descriptive phrases
+                                      # ("the extra cylinder attached to the magazine"); re-applied on every re-finish
 
     def __post_init__(self):
         # Asset name rule: letters, digits, underscores, hyphens, starting with a letter. Anything
@@ -88,6 +90,12 @@ class Spec:
         self.reference_images = refs[:4]
         self.reference_image = refs[0] if refs else ""
         self.search_query = " ".join(str(self.search_query or "").split())[:120]
+        parts = []
+        for p in self.remove_parts or []:
+            phrase = (p.get("phrase") if isinstance(p, dict) else str(p or "")).strip()
+            if phrase and phrase not in parts:
+                parts.append(phrase)
+        self.remove_parts = parts[:4]
 
         if self.research is None:
             self.research = bool(self.search_query) and not refs

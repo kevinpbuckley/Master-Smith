@@ -336,6 +336,48 @@ def smooth_face_selection(me, sel, rounds=1):
 
 
 regions = decision.get("regions", {})
+
+# Repair before anything else is measured: parts the customer wants gone (an extra cylinder the vendor grew on the
+# magazine, a stand, a sling fused to the stock) are deleted under their masks and the hole is closed. Blender does
+# this for nothing; the alternative was buying a new mesh and hoping. Face arrays computed below see the final mesh.
+if args.get("remove_parts"):
+    kill_all = None
+    n_all = len(ob.data.polygons)
+    for k in sorted(k for k in regions if k.startswith("remove")):
+        idx = int(k[6:])
+        phrase = args["remove_parts"][idx] if idx < len(args["remove_parts"]) else k
+        f, _ = faces_under_masks(regions[k], min_votes=2 if len(regions[k]) >= 3 else 1)
+        if f.sum() < 20:
+            log("remove %s: no faces found under its masks; nothing deleted" % phrase)
+            continue
+        if f.mean() > 0.3:
+            log("remove %s: the mask covers %.0f%% of the object - a spill, nothing deleted" % (phrase, f.mean() * 100))
+            continue
+        sel = smooth_face_selection(ob.data, f, rounds=1)          # shave stray spill, fill notches
+        log("remove %s: %d faces under the masks, %d after smoothing" % (phrase, int(f.sum()), int(sel.sum())))
+        kill_all = sel if kill_all is None else (kill_all | sel)
+        report.setdefault("removed_parts", []).append({"phrase": phrase, "faces": int(sel.sum())})
+    if kill_all is not None and kill_all.any():
+        bm = bmesh.new()
+        bm.from_mesh(ob.data)
+        bm.faces.ensure_lookup_table()
+        bmesh.ops.delete(bm, geom=[bm.faces[i] for i in np.nonzero(kill_all)[0]], context="FACES")
+        bm.verts.ensure_lookup_table()
+        loose = [v for v in bm.verts if not v.link_faces]
+        if loose:
+            bmesh.ops.delete(bm, geom=loose, context="VERTS")
+        boundary = [e for e in bm.edges if e.is_boundary]
+        if boundary:
+            try:
+                bmesh.ops.holes_fill(bm, edges=boundary, sides=0)          # close the opening the part left
+            except Exception as exc:  # noqa: BLE001 - an open hole beats a crash
+                log("remove: hole fill failed (%s); the opening stays" % str(exc)[:120])
+        bm.to_mesh(ob.data)
+        bm.free()
+        ob.data.update()
+        bpy.context.view_layer.update()
+        log("removed %d faces of unwanted part(s); mesh now %d faces" % (int(kill_all.sum()), len(ob.data.polygons)))
+
 glass_faces, panes = None, []
 if regions.get("glass"):
     glass_faces, panes = faces_under_masks(regions["glass"], allow_panes=True)

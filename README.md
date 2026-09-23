@@ -57,6 +57,13 @@ with the files to download. Output also lands in `out/<Name>_<job>/delivery/`.
 Aircraft and helicopters get a glass canopy slot by default. The second "cockpit tub" model fitted under the canopy
 is opt-in (`cockpit: true` in the brief); it is a gamble on the tub's fit.
 
+### Fixing a build without buying another mesh
+
+Cheapest remedy first. "Remove the extra cylinder on the magazine" deletes that part in Blender under its mask and
+re-finishes (cents). "Make it 2 m" or "rig it" re-finishes the same mesh. "Matte black frame" repaints it. Only a
+change of shape edits the reference picture, shows it for approval, and buys a new mesh. When the reviewer says
+rebuild, the director names the remedy for each issue and asks before spending.
+
 ### Bring your own model
 
 Attach a `.glb`, `.gltf`, `.fbx`, `.obj` or a delivered `.blend` in the chat and say what it is. It is finished

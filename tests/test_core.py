@@ -342,3 +342,12 @@ def test_build_reuses_approved_reference_or_fails_loudly(tmp_path):
     pic.unlink()
     with pytest.raises(FileNotFoundError):
         load_reference(str(tmp_path))
+
+
+def test_remove_parts_are_normalised_phrases():
+    s = Spec(name="R", description="rifle", category="weapon",
+             remove_parts=["the extra cylinder attached to the magazine", {"phrase": " the sling fused to the stock "}, "", None,
+                           "the extra cylinder attached to the magazine"])
+    assert s.remove_parts == ["the extra cylinder attached to the magazine", "the sling fused to the stock"]
+    assert Spec(name="R", description="rifle").remove_parts == []
+    assert Spec.from_dict({**s.to_dict(), "remove_parts": None}).remove_parts == []

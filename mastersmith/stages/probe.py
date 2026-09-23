@@ -137,6 +137,8 @@ def find_regions(job, skill, probe):
     if want_parts and getattr(job.spec, "style", "realistic") == "realistic" and not getattr(job.spec, "retexture", False):
         for i, sd in enumerate(seeds[:3]):
             wanted["seed%d" % i] = (part_variants(job.spec, sd), ["posy", "negy", "iso", "posx", "negx"])
+    for i, phrase in enumerate((getattr(job.spec, "remove_parts", None) or [])[:4]):
+        wanted["remove%d" % i] = (part_variants(job.spec, phrase), ["posx", "negx", "posy", "negy", "iso"])   # faces to delete
     cyls = skill["meta"].get("repair_cylinders") if isinstance(skill["meta"].get("repair_cylinders"), list) else []
     if getattr(job.spec, "style", "realistic") == "realistic" and not getattr(job.spec, "retexture", False):
         for i, cyl in enumerate(cyls[:2]):

@@ -37,9 +37,17 @@ How a job goes:
    the job is building and that the page shows progress; when they ask how it is going call job_status. When build
    returns a finished result, report it: files, triangle counts, glass, rig, the reviewer's score and issues, cost.
    If the reviewer said rebuild, say what you would change and ask before spending again.
-4. For changes after a build, call set_brief again with the changed fields and then build when confirmed. Changes that
-   keep the shape (size, triangle budget, glass, rig, engine) re-finish the same mesh; colour, finish or material
-   changes with retexture=true repaint it; only a change of shape or parts buys a new mesh. Say which it will be.
+4. For changes after a build, call set_brief again with ONLY the changed fields and then build when confirmed. The
+   name and the description stay what they were: never replace them with the part being fixed (a request to fix the
+   magazine is still the same rifle). Cheapest remedy first, and say which it will be:
+   - a defect on the built model - an extra or wrong part the vendor grew (a cylinder on the magazine, a sling fused
+     to the stock, a stand, a floating blob) - goes in remove_parts: Blender deletes it and re-finishes, no new mesh;
+   - size, triangle budget, glass, rig or engine changes re-finish the same mesh;
+   - colour, finish or material changes go through retexture=true: the mesh is repainted, nothing moves;
+   - only a change of shape or proportions buys a new mesh: keep the description, put the change in edit_instructions,
+     call make_reference so the customer approves the edited picture, then build.
+   When the reviewer's verdict is "rebuild", do not rebuild on your own: say which of these remedies fits each issue
+   and ask.
 5. When the customer attaches a 3D model file (.glb, .gltf, .fbx, .obj or a delivered .blend), call import_model with
    its path, a PascalCase name, the category and whatever else they told you: the model is oriented, scaled, given
    glass, LODs, collision, maps and previews without buying a new mesh, and later changes work on it like on a build.
@@ -84,7 +92,12 @@ TOOLS = [
                                 "description": "With retexture: the parts that change; empty for the whole object"},
             "protect_parts": {"type": "array", "items": {"type": "object", "properties": {"phrase": {"type": "string"}, "hex": {"type": "string"}},
                               "required": ["phrase"]}, "description": "With retexture: neighbouring parts that must not change, each a "
-                              "descriptive phrase with its colour ('the translucent amber magazine') and its #rrggbb"}},
+                              "descriptive phrase with its colour ('the translucent amber magazine') and its #rrggbb"},
+            "remove_parts": {"type": "array", "items": {"type": "string"},
+                             "description": "A REPAIR of the built model: parts to delete in Blender, each a descriptive phrase a "
+                                            "segmenter can find on a render ('the extra cylinder attached to the magazine', 'the "
+                                            "sling fused to the stock', 'the display stand under the vehicle'). No new mesh is bought. "
+                                            "Keep earlier entries when adding one; the list is re-applied on every re-finish."}},
             "required": ["name", "description", "category"]}}},
     {"type": "function", "function": {
         "name": "import_model",
