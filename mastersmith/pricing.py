@@ -56,7 +56,35 @@ def image_price(model):
     return IMAGE_PRICES[model]
 
 
+PICTURE_NAMES = {           # what OpenRouter calls them; the ids are what the API takes
+    "google/gemini-3.1-flash-image": "Nano Banana 2", "google/gemini-3.1-flash-image-preview": "Nano Banana 2 (preview)",
+    "google/gemini-3.1-flash-lite-image": "Nano Banana 2 Lite", "google/gemini-2.5-flash-image": "Nano Banana",
+    "google/gemini-3-pro-image": "Nano Banana Pro", "google/gemini-3-pro-image-preview": "Nano Banana Pro (preview)",
+    "openai/gpt-5.4-image-2": "GPT-5.4 Image 2", "openai/gpt-5-image": "GPT-5 Image", "openai/gpt-5-image-mini": "GPT-5 Image Mini",
+}
+
+
+def picture_catalogue():
+    """The picture models a build may pick (Spec.picture_model), with the worst-case price of one picture."""
+    out = []
+    for mid, usd in IMAGE_PRICES.items():
+        if mid.endswith("-preview"):
+            continue                                   # the preview ids are aliases of the released ones
+        out.append({"id": mid, "label": "%s (%s) · $%.2f a picture" % (PICTURE_NAMES.get(mid, mid), mid, usd),
+                    "name": PICTURE_NAMES.get(mid, mid), "usd": usd, "default": mid == config.CONCEPT_MODEL})
+    return sorted(out, key=lambda r: (not r["default"], r["usd"]))
+
+
+def edit_model(spec=None):
+    """The picture model for edits and extra views: the build's choice, else the configured editor."""
+    chosen = getattr(spec, "picture_model", None) if spec is not None else None
+    return chosen if chosen in IMAGE_PRICES else config.EDIT_MODEL
+
+
 def concept_model(spec):
+    chosen = getattr(spec, "picture_model", None)
+    if chosen in IMAGE_PRICES:
+        return chosen                                   # the customer's pick wins over the category rules
     model = config.CONCEPT_MODEL_PREMIUM if spec.premium else config.CONCEPT_MODEL
     if spec.category in config.HARD_SURFACE_CATEGORIES and config.CONCEPT_MODEL_HARD:
         model = config.CONCEPT_MODEL_HARD
@@ -127,16 +155,16 @@ def estimate(spec):
     if quad:
         seed_payload["quad"] = True
     if spec.reference_images:
-        steps.append(("clean up your reference picture(s)", image_price(config.EDIT_MODEL)))
+        steps.append(("clean up your reference picture(s)", image_price(edit_model(spec))))
     elif spec.research and spec.search_query:
-        steps.append(("find a photo of %s on the web and clean it up" % spec.search_query[:40], image_price(config.EDIT_MODEL) + LLM_CALL_ALLOWANCE_USD))
+        steps.append(("find a photo of %s on the web and clean it up" % spec.search_query[:40], image_price(edit_model(spec)) + LLM_CALL_ALLOWANCE_USD))
     else:
         steps.append(("concept picture", image_price(concept_model(spec))))
     steps.append(("check the picture (vision)", LLM_CALL_ALLOWANCE_USD))
-    steps.append(("second picture attempt if the first fails", image_price(config.EDIT_MODEL) + LLM_CALL_ALLOWANCE_USD))
+    steps.append(("second picture attempt if the first fails", image_price(edit_model(spec)) + LLM_CALL_ALLOWANCE_USD))
     vendor = seed_vendor(spec)
     if spec.multiview:
-        steps.append(("extra views for multiview seeding", 3 * (image_price(config.EDIT_MODEL) + LLM_CALL_ALLOWANCE_USD)))
+        steps.append(("extra views for multiview seeding", 3 * (image_price(edit_model(spec)) + LLM_CALL_ALLOWANCE_USD)))
     if vendor["key"] == "tripo":
         steps.append(("3D seed (Tripo H3.1%s, detailed)" % (" multiview" if spec.multiview else ""),
                       price(config.SEED_MULTIVIEW_MODEL if spec.multiview else config.SEED_MODEL, seed_payload)))
@@ -151,14 +179,14 @@ def estimate(spec):
     if hybrid_wanted(spec) and not getattr(spec, "retexture", False):
         if repaint_mode(spec) == "pictures":
             steps.append(("hybrid repaint of the seed (its renders repainted by the picture model, baked in Blender)",
-                          REPAINT_PICTURES * image_price(config.EDIT_MODEL) + LLM_CALL_ALLOWANCE_USD))
+                          REPAINT_PICTURES * image_price(edit_model(spec)) + LLM_CALL_ALLOWANCE_USD))
         else:
             steps.append(("hybrid repaint of the seed (Meshy retexture, original UVs)", price(config.RETEXTURE_MODEL)))
     if spec.category in config.HARD_SURFACE_CATEGORIES and (spec.premium or spec.tri_budget >= 150000):
-        steps.append(("separately seeded parts (up to 2: picture + seed each)", 2 * (image_price(config.EDIT_MODEL) + LLM_CALL_ALLOWANCE_USD
+        steps.append(("separately seeded parts (up to 2: picture + seed each)", 2 * (image_price(edit_model(spec)) + LLM_CALL_ALLOWANCE_USD
                       + price(config.SEED_MODEL, {"geometry_quality": "detailed", "texture_quality": "detailed"}))))
     if getattr(spec, "cockpit", False):
-        steps.append(("cockpit as a second model: picture + seed", 2 * image_price(config.CONCEPT_MODEL) + LLM_CALL_ALLOWANCE_USD
+        steps.append(("cockpit as a second model: picture + seed", 2 * image_price(concept_model(spec)) + LLM_CALL_ALLOWANCE_USD
                       + price(config.SEED_MODEL, {"geometry_quality": "detailed", "texture_quality": "detailed"})))
     if spec.glass:
         steps.append(("glass masks, 5 views (SAM 3)", 5 * price("fal-ai/sam-3/image")))

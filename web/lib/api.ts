@@ -39,11 +39,12 @@ export type ModelOptions = {
   seed_vendors: { key: string; label: string; model: string; multiview: boolean; note: string; usd: number | null }[];
   director_models: { id: string; label: string; in_per_m: number | null; out_per_m: number | null; context?: number | null }[];
   all_models?: boolean;
+  picture_models: { id: string; label: string; name: string; usd: number; default: boolean }[];
   pictures: Record<string, string>;
-  defaults: { seed_vendor: string; director_model: string };
+  defaults: { seed_vendor: string; director_model: string; picture_model: string };
 };
 
-export type Settings = { seed_vendor?: string; director_model?: string };
+export type Settings = { seed_vendor?: string; director_model?: string; picture_model?: string };
 
 export type TurnData = {
   settings: Settings | null;      // what the turn ran with
@@ -79,5 +80,6 @@ export type JobView = {
   };
   files: string[];
   previews: string[];
+  pictures: string[];           // reference views, cockpit/part pictures, removal previews the job drew (downloadable)
   glb: string | null;
 };

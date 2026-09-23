@@ -52,7 +52,12 @@ button. The mesh is bought only after you approve the picture; say what to chang
 then seeds from the approved picture and draws nothing new. Say "skip the preview" to do it in one go.
 
 The dashboard above the chat follows the build: the log, the probe renders, then the finished model in a viewer
-with the files to download. Output also lands in `out/<Name>_<job>/delivery/`.
+with the files to download. Every picture a job drew (reference angles, cockpit and part pictures, removal
+previews) is listed there too, and each picture shown in the chat has a save link. Output also lands in
+`out/<Name>_<job>/delivery/`.
+
+The header's three selectors choose, per session, the mesh vendor, the picture model (OpenRouter's image models,
+Nano Banana 2 by default) and the director model; every label carries the price.
 
 Aircraft and helicopters get a glass canopy slot by default. The second "cockpit tub" model fitted under the canopy
 is opt-in (`cockpit: true` in the brief); it is a gamble on the tub's fit.

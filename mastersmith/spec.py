@@ -42,6 +42,7 @@ class Spec:
                                       # seeds from; the picture stage is skipped
     remove_parts: list = None         # a repair on the existing mesh: parts to delete in Blender, as descriptive phrases
                                       # ("the extra cylinder attached to the magazine"); re-applied on every re-finish
+    picture_model: str = None         # OpenRouter image model for this build's pictures (concept, edits, views); None -> config
 
     def __post_init__(self):
         # Asset name rule: letters, digits, underscores, hyphens, starting with a letter. Anything

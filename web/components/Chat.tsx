@@ -53,6 +53,21 @@ function ModelPicker({
           ))}
         </select>
       </label>
+      <label title="The model that draws the reference picture, the extra angles, cockpit and part pictures for this session">
+        Pictures
+        <select
+          value={settings.picture_model || options.defaults.picture_model}
+          disabled={busy}
+          onChange={(e) => onChange({ ...settings, picture_model: e.target.value })}
+        >
+          {options.picture_models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name} · ${m.usd.toFixed(2)}
+              {m.default ? " (default)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
       <label title={directorTitle}>
         Director
         <select
@@ -401,7 +416,12 @@ function Pictures({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={src} alt={p.label} title={p.label} />
               </a>
-              <figcaption className="dim">{caption}</figcaption>
+              <figcaption className="dim">
+                {caption}{" "}
+                <a href={src} download={src.split("/").pop()} title="save this picture">
+                  ⤓
+                </a>
+              </figcaption>
             </figure>
           );
         })}

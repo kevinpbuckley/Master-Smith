@@ -241,6 +241,7 @@ def job_view(row, user):
                         "bill": {k: v for k, v in (r.get("bill") or {}).items() if k not in ("fal_calls", "llm_calls", "image_calls")}},
             "files": ["/v1/jobs/%s/files/%s" % (row["id"], f) for f in files],
             "previews": ["/v1/jobs/%s/files/%s" % (row["id"], f) for f in files if f.startswith(("preview_", "ref_"))],
+            "pictures": job_pictures(row),
             "glb": next(("/v1/jobs/%s/files/%s" % (row["id"], f) for f in files if f.lower().endswith(".glb") and f.startswith("SM_")), None)}
 
 
@@ -257,7 +258,9 @@ def _director(session_id, user):
             def with_settings(spec_dict):
                 """The session's model choices ride on every spec the director sends, unless the brief names one."""
                 sv = sess["settings"].get("seed_vendor")
-                return {**spec_dict, "seed_vendor": spec_dict.get("seed_vendor") or (sv if sv and sv != "tripo" else None)}
+                pm = sess["settings"].get("picture_model")
+                return {**spec_dict, "seed_vendor": spec_dict.get("seed_vendor") or (sv if sv and sv != "tripo" else None),
+                        "picture_model": spec_dict.get("picture_model") or (pm if pm and pm != config.CONCEPT_MODEL else None)}
 
             d.submit = lambda spec_dict, confirm_removal=False: submit_build(
                 user, with_settings(spec_dict), seed=last_seed(user, d.last_job_id), confirm_removal=confirm_removal)
@@ -296,10 +299,12 @@ def model_options(all_models=False):
                  and not mid.startswith("~") and ":" not in mid.split("/")[-1]]
         director += [_director_entry(mid, prices) for mid in sorted(extra)]
     return {"seed_vendors": pricing.vendor_catalogue(),
+            "picture_models": pricing.picture_catalogue(),
             "director_models": director, "all_models": all_models,
             "pictures": {"concept": config.CONCEPT_MODEL, "concept_hard_surface": config.CONCEPT_MODEL_HARD,
                          "concept_premium": config.CONCEPT_MODEL_PREMIUM, "edit": config.EDIT_MODEL, "vision": config.VISION_MODEL},
-            "defaults": {"seed_vendor": pricing.seed_vendor(Spec(name="X", description="x"))["key"], "director_model": config.DIRECTOR_MODEL}}
+            "defaults": {"seed_vendor": pricing.seed_vendor(Spec(name="X", description="x"))["key"], "director_model": config.DIRECTOR_MODEL,
+                         "picture_model": config.CONCEPT_MODEL}}
 
 
 def _attachment_note(attachments):
@@ -377,6 +382,9 @@ def chat(body: ChatIn, who=Depends(auth)):
         if dm:
             settings["director_model"] = dm
             d.model = dm
+        pm = str(body.settings.get("picture_model") or "").strip()
+        if pm in pricing.IMAGE_PRICES:
+            settings["picture_model"] = pm
     text = body.message + _attachment_note(body.attachments)
     try:
         reply = d.turn(text)
@@ -387,7 +395,7 @@ def chat(body: ChatIn, who=Depends(auth)):
             "pictures": list(d.last_pictures), "pictures_kind": d.last_pictures_kind,
             "reference_job": (d.reference or {}).get("job_dir"),
             "settings": {"seed_vendor": settings.get("seed_vendor") or model_options()["defaults"]["seed_vendor"],
-                         "director_model": d.model},
+                         "director_model": d.model, "picture_model": settings.get("picture_model") or config.CONCEPT_MODEL},
             "tools": [{"name": t["name"], "args": t.get("args"), "result": t.get("result")} for t in d.last_tools]}
 
 
@@ -459,9 +467,35 @@ def get_file(job_id: str, name: str, who=Depends(auth)):
     if not d or "/" in name or "\\" in name or ".." in name:
         raise HTTPException(404, "no such file")
     path = os.path.join(d, name)
+    if not os.path.isfile(path) and r.get("dir") and name.startswith(PICTURE_PREFIXES) and name.lower().endswith(".png"):
+        path = os.path.join(r["dir"], name)          # the pictures a build drew live beside the delivery, not in it
+    if not os.path.isfile(path):
+        # a build from approved pictures recorded views that live in the reference job's folder
+        path = next((v for v in _recorded_views(r) if os.path.basename(v) == name), path)
     if not os.path.isfile(path):
         raise HTTPException(404, "no such file")
     return FileResponse(path, media_type=mimetypes.guess_type(name)[0] or "application/octet-stream", filename=name)
+
+
+PICTURE_PREFIXES = ("ref_", "cockpit_ref_", "remove_preview_", "part_", "customer_ref_")
+
+
+def _recorded_views(result):
+    return [v for v in ((result.get("reference") or {}).get("views") or []) if isinstance(v, str) and os.path.isfile(v)]
+
+
+def job_pictures(row):
+    """The pictures a job drew or was given (reference views, cockpit and part pictures, removal previews), as URLs.
+    A build from approved pictures lists the views it recorded, which live in the reference job's folder."""
+    r = row.get("result") or {}
+    d = r.get("dir")
+    names = []
+    if d and os.path.isdir(d):
+        names = sorted(f for f in os.listdir(d) if f.startswith(PICTURE_PREFIXES) and f.lower().endswith(".png"))
+    for v in _recorded_views(r):
+        if os.path.basename(v) not in names:
+            names.append(os.path.basename(v))
+    return ["/v1/jobs/%s/files/%s" % (row["id"], f) for f in names]
 
 
 @app.get("/v1/wallet")

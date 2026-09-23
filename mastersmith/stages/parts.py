@@ -5,7 +5,7 @@ finish pass fits the seed into the bounding box of the part's faces on the body 
 old faces underneath. Gated to premium / hero builds by the caller."""
 import os
 
-from .. import config
+from .. import config, pricing
 from ..fal import first_url
 from ..llm import extract_json
 
@@ -23,7 +23,7 @@ def make_part_seed(job, spec, part, reference_path):
                   "materials, same markings), isolated on a plain pure white background, nothing else in frame, sharp, "
                   "product photograph. %s" % (phrase, fixes)).strip()
         path = os.path.join(job.dir, "part_%s_ref_%d.png" % (part.get("name", "Part"), attempt))
-        job.images.generate(prompt, path, model=config.EDIT_MODEL, references=[reference_path], aspect_ratio="4:3")
+        job.images.generate(prompt, path, model=pricing.edit_model(spec), references=[reference_path], aspect_ratio="4:3")
         j = extract_json(job.llm.vision(CHECK.format(part=phrase), [path])) or {}
         job.log("  part %s picture: score %s" % (part.get("name"), j.get("score")))
         if j.get("ok") and int(j.get("score", 0) or 0) >= 6:

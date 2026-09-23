@@ -102,7 +102,7 @@ def _make_view(job, skill, view, fixes, index):
     made = False
     if sources:
         try:
-            images.generate(edit_prompt(spec, skill, view, fixes), path, model=config.EDIT_MODEL, references=sources[:4], aspect_ratio="4:3")
+            images.generate(edit_prompt(spec, skill, view, fixes), path, model=pricing.edit_model(spec), references=sources[:4], aspect_ratio="4:3")
             made = True
         except ImageRefused as exc:
             job.edit_refused = True
@@ -167,7 +167,7 @@ def _orthographic_views(job, skill, primary):
             try:
                 job.images.generate(("Show this exact same vehicle from %s. Same vehicle, same colours, markings and materials, same "
                                      "lighting, plain pure white background, sharp focus, nothing else in frame. %s" % (text, fixes)).strip(),
-                                    path, model=config.EDIT_MODEL, references=[primary], aspect_ratio="1:1")
+                                    path, model=pricing.edit_model(spec), references=[primary], aspect_ratio="1:1")
             except ImageRefused:
                 job.log("  the picture editor refused the %s view; seeding from one picture" % key)
                 return None
@@ -233,7 +233,7 @@ def make_reference(job, skill):
             try:
                 job.images.generate("Show this exact same object %s. Same object, same colours and materials, same lighting, plain "
                                     "pure white background, sharp focus." % skill["meta"]["second_view"],
-                                    second, model=config.EDIT_MODEL, references=[primary], aspect_ratio="1:1")
+                                    second, model=pricing.edit_model(spec), references=[primary], aspect_ratio="1:1")
                 ok2, j2 = _check(job, second, skill["meta"]["second_view"])
                 checks.append(j2)
             except ImageRefused:

@@ -4,7 +4,7 @@ picture of the cockpit tub (seat, instrument panel, consoles), seeded like any a
 pass fits it under the canopy glass and joins it in."""
 import os
 
-from .. import config
+from .. import config, pricing
 from ..fal import first_url
 from ..llm import extract_json
 
@@ -53,13 +53,13 @@ def make_cockpit(job, spec, reference=None):
                                      "with the canopy glass and its frame completely removed: %s, the instrument panels, consoles and "
                                      "controls exactly as this aircraft has them, in its colours. One open-topped tub, no roof, no "
                                      "windscreen, no airframe around it, isolated on a plain pure white background, sharp. %s" % (seats, fixes)).strip(),
-                                    path, model=config.EDIT_MODEL, references=[reference], aspect_ratio="4:3")
+                                    path, model=pricing.edit_model(spec), references=[reference], aspect_ratio="4:3")
                 edited = True
             except Exception as exc:  # noqa: BLE001 - the text prompt is the fallback
                 job.log("  cockpit picture from the reference failed (%s); drawing it from the text" % str(exc)[:120])
         if not edited:
             prompt = COCKPIT_PROMPT.get(spec.category, COCKPIT_PROMPT["aircraft"]).format(subject=subject) + " (%s) " % seats + fixes
-            job.images.generate(prompt, path, model=config.CONCEPT_MODEL, aspect_ratio="4:3")
+            job.images.generate(prompt, path, model=pricing.concept_model(spec), aspect_ratio="4:3")
         j = extract_json(job.llm.vision(CHECK, [path])) or {}
         job.log("  cockpit picture: score %s" % j.get("score"))
         if j.get("ok") and int(j.get("score", 0) or 0) >= 6:

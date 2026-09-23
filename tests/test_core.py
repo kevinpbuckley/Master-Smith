@@ -377,3 +377,16 @@ def test_removal_overlay_tints_the_mask_and_reports_coverage(tmp_path):
     assert abs(cov - 0.25) < 1e-6
     px = Image.open(out).convert("RGB")
     assert px.getpixel((2, 10))[0] > 180 and px.getpixel((30, 10)) == (100, 100, 100)
+
+
+def test_picture_model_choice_drives_the_estimate_and_the_catalogue():
+    cat = pricing.picture_catalogue()
+    assert cat[0]["id"] == config.CONCEPT_MODEL and cat[0]["default"] and "Nano Banana 2" in cat[0]["label"]
+    assert not any(c["id"].endswith("-preview") for c in cat)
+    crate = Spec(name="Crate", description="oak crate", category="prop")
+    lite = Spec(name="Crate", description="oak crate", category="prop", picture_model="google/gemini-3.1-flash-lite-image")
+    assert pricing.concept_model(lite) == "google/gemini-3.1-flash-lite-image" == pricing.edit_model(lite)
+    assert pricing.edit_model(crate) == config.EDIT_MODEL
+    assert pricing.estimate(lite)["usd"] < pricing.estimate(crate)["usd"]
+    bogus = Spec(name="Crate", description="oak crate", category="prop", picture_model="nobody/unknown")
+    assert pricing.concept_model(bogus) == pricing.concept_model(crate)     # an unknown id falls back to the config

@@ -14,7 +14,7 @@ import subprocess
 import numpy as np
 from PIL import Image
 
-from .. import config
+from .. import config, pricing
 from ..images import ImageError
 from ..llm import extract_json
 
@@ -157,7 +157,7 @@ def make_repaint(job, seed_glb, reference):
             extra = ". Leave out all lettering, stencils and text: the markings are added separately"
         pic = os.path.join(work, "repaint_%s.png" % key)
         try:
-            job.images.generate(PROMPT.format(view=WORDS[key], extra=extra), pic, model=config.EDIT_MODEL,
+            job.images.generate(PROMPT.format(view=WORDS[key], extra=extra), pic, model=pricing.edit_model(job.spec),
                                 references=[reference, rec["file"]], aspect_ratio="1:1")
         except ImageError as exc:
             job.log("  repaint %s not made (%s)" % (key, str(exc)[:80]))

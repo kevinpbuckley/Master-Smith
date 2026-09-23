@@ -133,6 +133,16 @@ export default function JobPanel({ jobId }: { jobId: string | null }) {
                 ))}
               </div>
             )}
+            {(job.pictures ?? []).length > 0 && (
+              <div className="files">
+                <div className="dim">pictures</div>
+                {job.pictures.map((p) => (
+                  <a key={p} href={fileUrl(p)} download>
+                    {p.split("/").pop()}
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="dash-log">
