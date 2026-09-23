@@ -347,7 +347,7 @@ export default function Chat() {
                 ref={fileInput}
                 type="file"
                 multiple
-                accept=".png,.jpg,.jpeg,.webp,.glb,.gltf,.fbx,.obj,.blend"
+                accept="image/*,.png,.jpg,.jpeg,.jfif,.webp,.bmp,.gif,.tif,.tiff,.avif,.heic,.glb,.gltf,.fbx,.obj,.blend"
                 onChange={(e) => upload(e.target.files)}
                 hidden
                 id="file"

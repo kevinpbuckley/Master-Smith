@@ -31,7 +31,8 @@ wallet = Wallet()
 _lock = threading.Lock()
 _sessions = {}          # session_id -> {"director": Director, "user": str, "touched": float}
 SESSION_TTL = 6 * 3600
-IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".jfif", ".jpe", ".bmp", ".gif", ".tif", ".tiff", ".avif", ".heic")
+NATIVE_IMAGE = (".png", ".jpg", ".jpeg")      # anything else is re-saved as PNG so every stage and vendor reads it
 LOCAL_USER = {"user": "local", "role": "admin"}
 
 
@@ -360,7 +361,20 @@ async def upload(file: UploadFile = File(...), who=Depends(auth)):
                 break
             size += len(chunk)
             f.write(chunk)
-    return {"path": path, "name": name, "kind": "mesh" if ext in MESH_EXTENSIONS else "image", "bytes": size}
+    kind = "mesh" if ext in MESH_EXTENSIONS else "image"
+    if kind == "image" and ext not in NATIVE_IMAGE:
+        # a .jfif is a JPEG, a .webp or .heic is not something every vendor reads: re-save as PNG
+        from PIL import Image
+        try:
+            with Image.open(path) as im:
+                png = os.path.splitext(path)[0] + ".png"
+                im.convert("RGB").save(png)
+            os.remove(path)
+            path, name, size = png, os.path.basename(png), os.path.getsize(png)
+        except Exception as exc:  # noqa: BLE001
+            os.remove(path)
+            raise HTTPException(415, "could not read that picture (%s)" % str(exc)[:120])
+    return {"path": path, "name": name, "kind": kind, "bytes": size}
 
 
 @app.get("/v1/models")

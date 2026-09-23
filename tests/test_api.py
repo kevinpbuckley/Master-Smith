@@ -126,3 +126,19 @@ def test_models_list_prices_and_the_env_default_first(client):
         assert [v["key"] for v in m["seed_vendors"]][0] == "tripo" and m["seed_vendors"][0]["usd"] == 0.6
     finally:
         providers._models_cache.update(at=0.0, data=None)
+
+
+def test_jfif_and_webp_uploads_become_png(client):
+    import io
+    from PIL import Image
+    H = {"Authorization": "Bearer " + KEY}
+    for ext, fmt, mime in ((".jfif", "JPEG", "image/jpeg"), (".webp", "WEBP", "image/webp")):
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), (200, 30, 30)).save(buf, fmt)
+        r = client.post("/v1/uploads", headers=H, files={"file": ("photo" + ext, buf.getvalue(), mime)})
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert j["kind"] == "image" and j["name"] == "photo.png" and j["path"].endswith(".png") and os.path.isfile(j["path"])
+        assert Image.open(j["path"]).size == (8, 8)
+    bad = client.post("/v1/uploads", headers=H, files={"file": ("broken.jfif", b"not a picture", "image/jpeg")})
+    assert bad.status_code == 415
