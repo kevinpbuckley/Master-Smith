@@ -66,24 +66,91 @@ body {
   font-size: 13px;
 }
 
-.cols {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+.stack {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
 }
+
+/* the build dashboard: a strip above the chat with a fixed height budget and its own scrolling */
+.dash {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.dash-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+}
+.dash-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dash-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-body {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 14px;
+  padding: 0 16px 12px;
+  height: 260px;
+  font-size: 13px;
+}
+.dash-visual .viewer,
+.dash-visual .viewer.placeholder,
+.dash-visual .hero {
+  height: 248px !important;
+  width: 100%;
+  object-fit: contain;
+  background: var(--panel-2);
+  border-radius: 10px;
+}
+.dash-info {
+  overflow-y: auto;
+  min-height: 0;
+}
+.dash-log {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.dash-log pre.log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin-top: 4px;
+}
 @media (max-width: 900px) {
-  .cols {
+  .dash-body {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) auto;
+    height: auto;
+    max-height: 45vh;
+    overflow-y: auto;
+  }
+  .dash-log pre.log {
+    max-height: 140px;
   }
 }
 
 .chat {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-height: 0;
-  border-right: 1px solid var(--line);
 }
 .chat .log {
   flex: 1;

@@ -144,7 +144,8 @@ export default function Chat() {
         </div>
       </header>
 
-      <main className="cols">
+      <main className="stack">
+        <JobPanel jobId={jobId} />
         <section className="chat">
           <div className="log">
             {messages.length === 0 && (
@@ -248,8 +249,6 @@ export default function Chat() {
             </div>
           </form>
         </section>
-
-        <JobPanel jobId={jobId} />
       </main>
     </div>
   );
