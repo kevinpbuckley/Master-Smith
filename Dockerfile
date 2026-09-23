@@ -16,7 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgl1 libegl1 libgomp1 libsm6 libice6 && \
     rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://download.blender.org/release/Blender5.2/blender-${BLENDER_VERSION}-linux-x64.tar.xz" -o /tmp/blender.tar.xz && \
+# download.blender.org answers 403 to plain curl; the nluug mirror carries the same release files.
+ARG BLENDER_URL=https://ftp.nluug.nl/pub/graphics/blender/release/Blender5.2/blender-${BLENDER_VERSION}-linux-x64.tar.xz
+RUN curl -fsSL -A "mastersmith/0.1 (+https://github.com/kevinpbuckley/Master-Smith)" "${BLENDER_URL}" -o /tmp/blender.tar.xz && \
     mkdir -p /opt/blender && tar -xJf /tmp/blender.tar.xz -C /opt/blender --strip-components=1 && rm /tmp/blender.tar.xz && \
     /opt/blender/blender --version
 
