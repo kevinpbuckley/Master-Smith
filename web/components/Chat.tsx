@@ -17,7 +17,8 @@ function newSessionId(): string {
 export default function Chat() {
   const [sessionId, setSessionId] = useState<string>(() => newSessionId());
   const [text, setText] = useState("");
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachments, setAttachments] = useState<(Attachment & { preview?: string })[]>([]);
+  const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [me, setMe] = useState<Me | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
@@ -70,7 +71,8 @@ export default function Chat() {
           alert(j.detail || j.error || `upload failed (${r.status})`);
           continue;
         }
-        setAttachments((a) => [...a, { path: j.path, name: j.name, kind: j.kind, bytes: j.bytes }]);
+        const preview = f.type.startsWith("image/") ? URL.createObjectURL(f) : undefined;
+        setAttachments((a) => [...a, { path: j.path, name: j.name, kind: j.kind, bytes: j.bytes, preview }]);
       }
     } finally {
       setUploading(false);
@@ -84,7 +86,7 @@ export default function Chat() {
     const msg = t || (attachments.some((a) => a.kind === "mesh") ? "Import this model." : "Use these pictures.");
     const label = attachments.length ? `${msg}\n\n📎 ${attachments.map((a) => a.name).join(", ")}` : msg;
     setText("");
-    const sent = attachments;
+    const sent = attachments.map(({ path, name, kind }) => ({ path, name, kind }));
     setAttachments([]);
     await sendMessage({ text: label }, { body: { attachments: sent } });
   }
@@ -144,17 +146,33 @@ export default function Chat() {
           </div>
 
           <form
-            className="composer"
+            className={`composer${dragging ? " dragging" : ""}`}
             onSubmit={(e) => {
               e.preventDefault();
               send();
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              upload(e.dataTransfer.files);
             }}
           >
             {attachments.length > 0 && (
               <div className="chips">
                 {attachments.map((a) => (
                   <span key={a.path} className="chip">
-                    {a.kind === "mesh" ? "🧊" : "🖼"} {a.name}
+                    {a.preview ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={a.preview} alt="" />
+                    ) : (
+                      "🧊"
+                    )}{" "}
+                    {a.name}
                     <button type="button" onClick={() => setAttachments((x) => x.filter((y) => y.path !== a.path))}>
                       ×
                     </button>
@@ -184,7 +202,19 @@ export default function Chat() {
                     send();
                   }
                 }}
-                placeholder="a weathered oak ammunition crate with rope handles and black stencils, 1.2 m, Unreal"
+                onPaste={(e) => {
+                  const files = Array.from(e.clipboardData.items)
+                    .filter((it) => it.kind === "file")
+                    .map((it) => it.getAsFile())
+                    .filter((f): f is File => !!f);
+                  if (files.length) {
+                    e.preventDefault();
+                    const dt = new DataTransfer();
+                    files.forEach((f) => dt.items.add(f));
+                    upload(dt.files);
+                  }
+                }}
+                placeholder="a weathered oak ammunition crate with rope handles and black stencils, 1.2 m, Unreal — or drop / paste pictures and model files here"
                 rows={2}
               />
               <button type="submit" disabled={busy || uploading}>
