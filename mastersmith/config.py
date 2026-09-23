@@ -45,7 +45,7 @@ PREMIUM_MODEL = os.environ.get("MASTERSMITH_PREMIUM_MODEL", "anthropic/claude-so
 # and always listed first; the UI can also show every tool-and-vision-capable model OpenRouter serves.
 DIRECTOR_MODELS = [m.strip() for m in os.environ.get(
     "MASTERSMITH_DIRECTOR_MODELS",
-    "deepseek/deepseek-v4.1-flash,openai/gpt-6-luna,z-ai/glm-5.3-flash,openai/gpt-6-sol,anthropic/claude-sonnet-5,anthropic/claude-opus-5.5"
+    "deepseek/deepseek-v4.1-flash,openai/gpt-6-luna,z-ai/glm-5.3-flash,openai/gpt-6-sol,meta/muse-spark-1.3-contributor,meta/muse-spark-1.3,anthropic/claude-sonnet-5,anthropic/claude-opus-5.5"
 ).split(",") if m.strip()]
 
 # --- fal endpoints by role. One vendor per role; the 2026-09-16 bake-off picked these.
