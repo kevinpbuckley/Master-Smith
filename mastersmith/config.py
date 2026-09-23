@@ -31,6 +31,12 @@ DB_PATH = DATA_DIR / "mastersmith.db"
 
 BLENDER_BIN = os.environ.get("BLENDER_BIN", r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe")
 
+# A fixed API key for scripts and agents, straight from .env: any string you make up. It is accepted as an admin key
+# for the user named in MASTERSMITH_API_USER, beside the keys created with `keys create`. With no key configured at
+# all (this and the database), every request is the local admin user.
+API_KEY = os.environ.get("MASTERSMITH_API_KEY", "").strip()
+API_USER = os.environ.get("MASTERSMITH_API_USER", "agent").strip() or "agent"
+
 # --- LLMs (OpenRouter ids). The director runs the chat and decides; it is cheap on purpose.
 DIRECTOR_MODEL = os.environ.get("MASTERSMITH_DIRECTOR_MODEL", "google/gemini-3.8-flash")
 VISION_MODEL = os.environ.get("MASTERSMITH_VISION_MODEL", "google/gemini-3.8-flash")

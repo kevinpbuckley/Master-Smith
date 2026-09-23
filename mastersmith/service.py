@@ -43,13 +43,15 @@ def _start():
 
 
 # ------------------------------------------------------------------ auth
-def auth(authorization: str = Header(default="")):
-    key = authorization[7:] if authorization.lower().startswith("bearer ") else ""
-    if not store.has_keys():
-        return dict(LOCAL_USER)             # nobody created a key: this is one person's machine
+def auth(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+    key = authorization[7:] if authorization.lower().startswith("bearer ") else (x_api_key or "")
+    if config.API_KEY and key == config.API_KEY:
+        return {"user": config.API_USER, "role": "admin"}      # the fixed key from .env (scripts, agents, the web app)
+    if not config.API_KEY and not store.has_keys():
+        return dict(LOCAL_USER)             # no key configured anywhere: this is one person's machine
     who = store.user_for_key(key)
     if not who:
-        raise HTTPException(401, "missing or unknown API key")
+        raise HTTPException(401, "missing or unknown API key (Authorization: Bearer <key> or X-API-Key)")
     return who
 
 
@@ -219,10 +221,14 @@ def index():
             "<code>/healthz</code>; the OpenAPI schema is at <a href='/docs'>/docs</a>.</p></body>")
 
 
+def local_mode():
+    return not config.API_KEY and not store.has_keys()
+
+
 @app.get("/v1/me")
 def me(who=Depends(auth)):
     return {"user": who["user"], "role": who["role"], "balance": wallet.balance(who["user"]),
-            "local_mode": not store.has_keys(), "providers": providers.balances(), "jobs": store.jobs_for(who["user"])}
+            "local_mode": local_mode(), "providers": providers.balances(), "jobs": store.jobs_for(who["user"])}
 
 
 @app.get("/v1/providers")
@@ -266,7 +272,14 @@ def chat(body: ChatIn, who=Depends(auth)):
 
 
 @app.post("/v1/jobs")
-def create_job(body: JobIn, who=Depends(auth)):
+def create_job(body: JobIn, dry_run: bool = False, who=Depends(auth)):
+    """Queue a build from a spec. With ?dry_run=1 nothing is queued: the resolved brief, the worst-case estimate and
+    the provider balances come back, so a script can check what a request would do before spending."""
+    if dry_run:
+        spec = Spec.from_dict(body.spec)
+        est = pricing.estimate(spec)
+        return {"dry_run": True, "brief": spec.to_dict(), "estimate_usd": est["usd"], "estimate_credits": est["credits"],
+                "steps": [{"step": s, "usd": round(u, 4)} for s, u in est["steps"]], "providers": providers.balances()}
     out = submit_build(who["user"], body.spec)
     if "error" in out:
         raise HTTPException(402, out)
@@ -336,4 +349,99 @@ def estimate(request: Request, who=Depends(auth)):
 
 @app.get("/healthz")
 def healthz():
-    return JSONResponse({"ok": True, "blender": os.path.exists(config.BLENDER_BIN), "local_mode": not store.has_keys()})
+    return JSONResponse({"ok": True, "blender": os.path.exists(config.BLENDER_BIN), "local_mode": local_mode(),
+                         "worker": os.environ.get("MASTERSMITH_NO_WORKER") != "1"})
+
+
+# ------------------------------------------------------------------ debugging and testing from scripts and agents
+SAFE_CONFIG = ("DIRECTOR_MODEL", "VISION_MODEL", "PREMIUM_MODEL", "CONCEPT_MODEL", "CONCEPT_MODEL_PREMIUM", "CONCEPT_MODEL_HARD",
+               "EDIT_MODEL", "IMAGE_RESOLUTION", "SEED_MODEL", "SEED_MULTIVIEW_MODEL", "RETEXTURE_MODEL", "REPAINT_DEFAULT",
+               "HYBRID_SEED", "SEED_QUAD", "HARD_SURFACE_CATEGORIES", "MARKUP", "ENFORCE_CREDITS", "BLENDER_BIN", "API_USER")
+
+
+@app.get("/v1/config")
+def get_config(who=Depends(auth)):
+    """Effective configuration without secrets: models, vendors, paths, flags, and whether the keys are set."""
+    return {**{k: getattr(config, k) for k in SAFE_CONFIG},
+            "DATA_DIR": str(config.DATA_DIR), "OUT_DIR": str(config.OUT_DIR), "UPLOADS_DIR": str(config.UPLOADS_DIR),
+            "blender_present": os.path.exists(config.BLENDER_BIN), "local_mode": local_mode(),
+            "keys_set": {"FAL_KEY": bool(os.environ.get("FAL_KEY")), "OPENROUTER_API_KEY": bool(os.environ.get("OPENROUTER_API_KEY")),
+                         "MASTERSMITH_API_KEY": bool(config.API_KEY)},
+            "categories": list(__import__("mastersmith.spec", fromlist=["CATEGORIES"]).CATEGORIES)}
+
+
+@app.get("/v1/jobs/{job_id}/log")
+def job_log(job_id: str, tail: int = 200, who=Depends(auth)):
+    """The whole build log (or its last `tail` lines) as plain text."""
+    row = store.job(job_id, who["user"])
+    if not row:
+        raise HTTPException(404, "unknown job")
+    lines = row["log"].splitlines()
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("\n".join(lines[-tail:] if tail > 0 else lines))
+
+
+@app.get("/v1/jobs/{job_id}/debug")
+def job_debug(job_id: str, who=Depends(auth)):
+    """Everything a debugger wants in one call: the full result (job.json), the work directory listing, the tails
+    of the Blender logs, the bill by stage and the delivered files."""
+    row = store.job(job_id, who["user"])
+    if not row:
+        raise HTTPException(404, "unknown job")
+    r = row.get("result") or {}
+    job_dir = r.get("dir")
+    work = os.path.join(job_dir, "work") if job_dir else None
+    blender_logs = {}
+    work_files = []
+    if work and os.path.isdir(work):
+        work_files = sorted(os.listdir(work))
+        for name in work_files:
+            if name.endswith(".log"):
+                try:
+                    with open(os.path.join(work, name), encoding="utf-8", errors="replace") as f:
+                        text = f.read()
+                    blender_logs[name] = text[-4000:]
+                except OSError:
+                    pass
+    return {"id": row["id"], "status": row["status"], "kind": row["kind"], "error": row["error"], "spec": row["spec"],
+            "created": row["created"], "started": row["started"], "finished": row["finished"],
+            "result": {k: v for k, v in r.items() if k not in ("bill",)}, "bill": r.get("bill"),
+            "job_dir": job_dir, "work_files": work_files, "blender_logs": blender_logs,
+            "work_urls": ["/v1/jobs/%s/work/%s" % (row["id"], f) for f in work_files],
+            "files": ["/v1/jobs/%s/files/%s" % (row["id"], f) for f in
+                      (sorted(os.listdir(r["delivery_dir"])) if r.get("delivery_dir") and os.path.isdir(r["delivery_dir"]) else [])],
+            "log_tail": row["log"].splitlines()[-60:]}
+
+
+@app.get("/v1/jobs/{job_id}/work/{name}")
+def get_work_file(job_id: str, name: str, who=Depends(auth)):
+    """A file from the job's work directory: probe renders, Blender args and logs, masks, intermediate GLBs."""
+    row = store.job(job_id, who["user"])
+    d = ((row or {}).get("result") or {}).get("dir")
+    if not d or "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(404, "no such file")
+    path = os.path.join(d, "work", name)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "no such file")
+    return FileResponse(path, media_type=mimetypes.guess_type(name)[0] or "application/octet-stream", filename=name)
+
+
+@app.get("/v1/sessions/{session_id}")
+def get_session(session_id: str, who=Depends(auth)):
+    """The director's transcript for a chat session (system prompt omitted), its brief and the last tool calls."""
+    key = "%s:%s" % (who["user"], session_id)
+    with _lock:
+        s = _sessions.get(key)
+    if not s:
+        raise HTTPException(404, "no such session (sessions live in memory and expire after %d h)" % (SESSION_TTL // 3600))
+    d = s["director"]
+    return {"session_id": session_id, "user": who["user"], "brief": d.spec.to_dict() if d.spec else None,
+            "last_job": d.last_job_id, "chat_cost_usd": round(d.chat_cost_usd(), 5),
+            "messages": [m for m in d.messages if m.get("role") != "system"], "last_tools": d.last_tools}
+
+
+@app.delete("/v1/sessions/{session_id}")
+def drop_session(session_id: str, who=Depends(auth)):
+    with _lock:
+        gone = _sessions.pop("%s:%s" % (who["user"], session_id), None) is not None
+    return {"dropped": gone}

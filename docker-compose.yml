@@ -23,7 +23,7 @@ services:
     build: ./web
     environment:
       MASTERSMITH_API_URL: http://api:8080
-      # MASTERSMITH_API_KEY: ms_...   # only when keys were created on the API
+      MASTERSMITH_API_KEY: ${MASTERSMITH_API_KEY:-}   # the fixed key from .env, if you set one
     ports:
       - "3000:3000"
     depends_on:

@@ -110,7 +110,10 @@ API keys (`keys create <user>`); one credit is one cent and `MASTERSMITH_MARKUP`
 
 ## API
 
-With no keys created, every request is the local admin user. Otherwise `Authorization: Bearer ms_...`.
+Put any made-up string in `.env` as `MASTERSMITH_API_KEY` and send it as `Authorization: Bearer <key>` (or
+`X-API-Key`); it acts as an admin user for scripts and agents. With no key configured anywhere, every request is the
+local admin user. [docs/AGENT_API.md](docs/AGENT_API.md) has `curl` recipes for driving and debugging it: dry-run
+estimates, queueing, polling, full logs, the debug bundle with Blender log tails, work files, and chat sessions.
 
 | Method | Path | What |
 | --- | --- | --- |
