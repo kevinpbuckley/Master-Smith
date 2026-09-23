@@ -1,0 +1,222 @@
+"use client";
+
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport, type UIMessage } from "ai";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Attachment, TurnData } from "@/lib/api";
+import JobPanel from "./JobPanel";
+
+type SmithMessage = UIMessage<unknown, { turn: TurnData }>;
+
+type Me = { user: string; balance: number; local_mode: boolean; error?: string };
+
+function newSessionId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now());
+}
+
+export default function Chat() {
+  const [sessionId, setSessionId] = useState<string>(() => newSessionId());
+  const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [me, setMe] = useState<Me | null>(null);
+  const bottom = useRef<HTMLDivElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const transport = useMemo(() => new DefaultChatTransport<SmithMessage>({ api: "/api/chat" }), []);
+  const { messages, sendMessage, status, error, setMessages } = useChat<SmithMessage>({ id: sessionId, transport });
+  const busy = status === "submitted" || status === "streaming";
+
+  useEffect(() => {
+    fetch("/api/me", { cache: "no-store" })
+      .then((r) => r.json())
+      .then(setMe)
+      .catch((e) => setMe({ user: "?", balance: 0, local_mode: true, error: String(e) }));
+  }, []);
+
+  // the newest turn that queued a job is the one the panel follows; its balance is fresher than /api/me's
+  const latest = useMemo(() => {
+    let job: string | null = null;
+    let balance: number | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const turn = messages[i].parts.find((p) => p.type === "data-turn");
+      if (turn && turn.type === "data-turn") {
+        if (balance === null) balance = turn.data.balance;
+        if (turn.data.last_job) {
+          job = turn.data.last_job;
+          break;
+        }
+      }
+    }
+    return { job, balance };
+  }, [messages]);
+  const jobId = latest.job;
+  const balance = latest.balance ?? me?.balance ?? 0;
+
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function upload(files: FileList | null) {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      for (const f of Array.from(files)) {
+        const fd = new FormData();
+        fd.append("file", f, f.name);
+        const r = await fetch("/api/upload", { method: "POST", body: fd });
+        const j = (await r.json()) as Attachment & { detail?: string; error?: string };
+        if (!r.ok) {
+          alert(j.detail || j.error || `upload failed (${r.status})`);
+          continue;
+        }
+        setAttachments((a) => [...a, { path: j.path, name: j.name, kind: j.kind, bytes: j.bytes }]);
+      }
+    } finally {
+      setUploading(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  }
+
+  async function send() {
+    const t = text.trim();
+    if ((!t && attachments.length === 0) || busy) return;
+    const msg = t || (attachments.some((a) => a.kind === "mesh") ? "Import this model." : "Use these pictures.");
+    const label = attachments.length ? `${msg}\n\n📎 ${attachments.map((a) => a.name).join(", ")}` : msg;
+    setText("");
+    const sent = attachments;
+    setAttachments([]);
+    await sendMessage({ text: label }, { body: { attachments: sent } });
+  }
+
+  function reset() {
+    setMessages([]);
+    setAttachments([]);
+    setSessionId(newSessionId());
+  }
+
+  return (
+    <div className="shell">
+      <header className="top">
+        <div>
+          <h1>Master Smith</h1>
+          <p className="dim">Prompt in, game-ready 3D model out. Describe an asset, or attach a model to finish it.</p>
+        </div>
+        <div className="me">
+          {me?.error ? (
+            <span className="error-inline">API offline: {me.error}</span>
+          ) : me ? (
+            <span className="dim">
+              {me.user}
+              {me.local_mode ? " (local)" : ""} · spent ${(-balance / 100).toFixed(2)}
+            </span>
+          ) : null}
+          <button className="ghost" onClick={reset} disabled={busy}>
+            New chat
+          </button>
+        </div>
+      </header>
+
+      <main className="cols">
+        <section className="chat">
+          <div className="log">
+            {messages.length === 0 && (
+              <div className="msg assistant">
+                <p>
+                  Tell me what to build: what it is, its materials and colours, how big it is, and which engine. I will
+                  write the brief, quote the worst-case cost, and start when you say go. Attach a <code>.glb</code>,{" "}
+                  <code>.fbx</code>, <code>.obj</code> or <code>.blend</code> to finish a model you already have.
+                </p>
+              </div>
+            )}
+            {messages.map((m) => (
+              <div key={m.id} className={`msg ${m.role}`}>
+                {m.parts.map((p, i) => {
+                  if (p.type === "text") return <p key={i}>{p.text}</p>;
+                  if (p.type === "data-turn") return <TurnCard key={i} turn={p.data} />;
+                  return null;
+                })}
+              </div>
+            ))}
+            {busy && <div className="msg assistant dim">thinking…</div>}
+            {error && <div className="msg error">{error.message}</div>}
+            <div ref={bottom} />
+          </div>
+
+          <form
+            className="composer"
+            onSubmit={(e) => {
+              e.preventDefault();
+              send();
+            }}
+          >
+            {attachments.length > 0 && (
+              <div className="chips">
+                {attachments.map((a) => (
+                  <span key={a.path} className="chip">
+                    {a.kind === "mesh" ? "🧊" : "🖼"} {a.name}
+                    <button type="button" onClick={() => setAttachments((x) => x.filter((y) => y.path !== a.path))}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="row">
+              <input
+                ref={fileInput}
+                type="file"
+                multiple
+                accept=".png,.jpg,.jpeg,.webp,.glb,.gltf,.fbx,.obj,.blend"
+                onChange={(e) => upload(e.target.files)}
+                hidden
+                id="file"
+              />
+              <button type="button" className="ghost" onClick={() => fileInput.current?.click()} disabled={uploading || busy}>
+                {uploading ? "uploading…" : "Attach"}
+              </button>
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                placeholder="a weathered oak ammunition crate with rope handles and black stencils, 1.2 m, Unreal"
+                rows={2}
+              />
+              <button type="submit" disabled={busy || uploading}>
+                Send
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <JobPanel jobId={jobId} />
+      </main>
+    </div>
+  );
+}
+
+function TurnCard({ turn }: { turn: TurnData }) {
+  const b = turn.brief;
+  const tools = turn.tools.filter((t) => t.name !== "balance");
+  if (!b && tools.length === 0) return null;
+  return (
+    <details className="turn">
+      <summary>
+        {b ? `Brief: ${String(b.name)} · ${String(b.category)} · ${String(b.style)} · ${Number(b.tri_budget).toLocaleString()} tris · ${Number(b.size_m) > 0 ? `${b.size_m} m` : "source size"}` : "tools"}
+        {turn.last_job ? ` · job ${turn.last_job}` : ""}
+        {` · chat $${turn.chat_cost_usd.toFixed(4)}`}
+      </summary>
+      {tools.map((t, i) => (
+        <div key={i} className="tool">
+          <code>{t.name}</code> <span className="dim">{JSON.stringify(t.args).slice(0, 240)}</span>
+          <div className="dim mono">{t.result}</div>
+        </div>
+      ))}
+    </details>
+  );
+}

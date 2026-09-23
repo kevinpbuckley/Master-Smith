@@ -1,0 +1,21 @@
+.env
+.venv/
+out/
+data/
+uploads/
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+*.pyc
+.pytest_cache/
+out_*.log
+ab-test/
+
+# web (Next.js)
+web/node_modules/
+web/.next/
+web/out/
+web/.env*.local
+web/next-env.d.ts
+web/*.tsbuildinfo
