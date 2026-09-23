@@ -87,9 +87,17 @@ docker compose up --build       # API on :8080 (with Blender inside), chat on :3
 Builds, uploads and the spend ledger persist in the `mastersmith-data` volume. Blender's Cycles renders and
 decimation are CPU-bound: give the API container cores and 8 GB.
 
-The containers restart on their own whenever Docker starts. After a reboot, or when Docker Desktop is not running,
-`.\scripts\start.ps1` (Windows) or `./scripts/start.sh` starts Docker if needed, brings both containers up, waits
-for the API and opens the chat; `-Build` / `--build` rebuilds first, `-Down` / `--down` stops everything.
+Start and stop:
+
+```powershell
+.\scripts\start.ps1            # starts Docker Desktop if needed, brings both containers up, opens the chat
+.\scripts\start.ps1 -Build     # rebuild the images first (after pulling code changes)
+.\scripts\stop.ps1             # tear the containers down when you are not using it (the data volume stays)
+.\scripts\stop.ps1 -Wipe       # ...and delete the volume too
+```
+
+Linux/macOS: `./scripts/start.sh [--build]` and `./scripts/stop.sh [--wipe]`. Running containers come back on their
+own when Docker restarts after a reboot; stopped ones stay stopped until you start them.
 
 ## How a build goes
 
