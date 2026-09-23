@@ -3,26 +3,29 @@
 #   .\scripts\start.ps1 -Build     # rebuild the images first (after pulling code changes)
 #   .\scripts\start.ps1 -Down      # stop everything
 param([switch]$Build, [switch]$Down)
-$ErrorActionPreference = "Stop"
+# No $ErrorActionPreference = "Stop": docker writes progress and warnings to stderr, which PowerShell 5.1 would turn
+# into terminating errors. Exit codes are checked instead.
 Set-Location (Split-Path -Parent $PSScriptRoot)
+
+function DockerUp { cmd /c "docker info >nul 2>&1"; return ($LASTEXITCODE -eq 0) }
 
 if ($Down) { docker compose down; exit }
 
 if (-not (Test-Path ".env")) { Write-Host "No .env yet: copy .env.example to .env and put your keys in it."; exit 1 }
 
 # Docker Desktop: start it when the daemon does not answer, then wait for it.
-docker info *> $null
-if ($LASTEXITCODE -ne 0) {
+if (-not (DockerUp)) {
   $exe = @("$env:LOCALAPPDATA\Programs\DockerDesktop\Docker Desktop.exe", "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
   if (-not $exe) { Write-Host "Docker Desktop is not installed where expected; start it by hand and rerun."; exit 1 }
   Write-Host "Starting Docker Desktop..."
   Start-Process $exe
   $deadline = (Get-Date).AddMinutes(3)
-  do { Start-Sleep 3; docker info *> $null } while ($LASTEXITCODE -ne 0 -and (Get-Date) -lt $deadline)
-  if ($LASTEXITCODE -ne 0) { Write-Host "Docker did not come up in 3 minutes."; exit 1 }
+  do { Start-Sleep 3 } while (-not (DockerUp) -and (Get-Date) -lt $deadline)
+  if (-not (DockerUp)) { Write-Host "Docker did not come up in 3 minutes."; exit 1 }
 }
 
 if ($Build) { docker compose up -d --build } else { docker compose up -d }
+if ($LASTEXITCODE -ne 0) { Write-Host "docker compose failed (exit $LASTEXITCODE)."; exit 1 }
 
 # Wait for the API, then open the chat.
 $deadline = (Get-Date).AddMinutes(2)
