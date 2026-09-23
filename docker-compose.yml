@@ -6,6 +6,7 @@
 services:
   api:
     build: .
+    restart: unless-stopped        # comes back on its own when Docker starts after a reboot
     env_file: .env
     environment:
       MASTERSMITH_DATA: /data
@@ -21,6 +22,7 @@ services:
 
   web:
     build: ./web
+    restart: unless-stopped
     environment:
       MASTERSMITH_API_URL: http://api:8080
       MASTERSMITH_API_KEY: ${MASTERSMITH_API_KEY:-}   # the fixed key from .env, if you set one
