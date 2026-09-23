@@ -26,8 +26,8 @@ How a job goes:
    edit_instructions; the previous picture is edited so the rest of the design stays as it was. When only colours,
    finishes or materials change ("the stock should be gunmetal, not cream"), set retexture=true and name the parts in
    retexture_parts: the mesh is repainted, nothing moves, and it costs about half a rebuild.
-2. set_brief returns a credit estimate and the balance. Tell the customer the plan in two or three lines and the
-   credits it will hold, then wait for them to say go (or change something).
+2. set_brief returns the worst-case estimate. Tell the customer the plan in two or three lines and what it will
+   cost, then wait for them to say go (or change something).
 3. When they confirm call build. If it returns a queued job_id, tell the customer the job is building and that the
    page shows progress; when they ask how it is going call job_status. When build returns a finished result, report
    it: files, triangle counts, glass, rig, the reviewer's score and issues, credits charged. If the reviewer said
@@ -104,14 +104,23 @@ TOOLS = [
         "name": "read_skill", "description": "Read the guidance for an asset category.",
         "parameters": {"type": "object", "properties": {"category": {"type": "string"}}, "required": ["category"]}}},
     {"type": "function", "function": {
-        "name": "balance", "description": "The customer's credit balance.", "parameters": {"type": "object", "properties": {}}}},
+        "name": "balance", "description": "What the customer has spent so far (or, when credits are enforced, their balance).",
+        "parameters": {"type": "object", "properties": {}}}},
 ]
 
 MAX_TOOL_ROUNDS = 4
 
+PRICING_NOTE_OWN_KEYS = ("Money: the customer runs this on their own fal.ai and OpenRouter keys. Quote the worst case as US dollars "
+                         "(estimate_usd, e.g. 'about $1.20 worst case'). There is no balance, no hold and no top-up: never say a "
+                         "build is unaffordable or ask them to add credits.")
+PRICING_NOTE_ENFORCED = ("Credits: 1 credit = 1 cent. set_brief returns the balance and whether the build is affordable; "
+                         "quote the credits it will hold and, when it is not affordable, say how many more are needed.")
+
 
 class Director:
-    def __init__(self, user, wallet, log=print, model=None, pricing_note="Credits: 1 credit = 1 cent of provider cost on the customer's own fal and OpenRouter keys; the estimate is a worst case."):
+    def __init__(self, user, wallet, log=print, model=None, pricing_note=None):
+        if pricing_note is None:
+            pricing_note = (PRICING_NOTE_ENFORCED if config.ENFORCE_CREDITS else PRICING_NOTE_OWN_KEYS)
         self.user, self.wallet, self.log = user, wallet, log
         self.last_tools = []
         self.model = model or config.DIRECTOR_MODEL
@@ -135,10 +144,17 @@ class Director:
         base["category"] = fix_category(base.get("category"), base.get("description"), base.get("name"), base.get("search_query"))
         self.spec = Spec.from_dict(base)
         est = pricing.estimate(self.spec)
+        out = {"brief": self.spec.to_dict(), "estimate_credits": est["credits"], "estimate_usd": est["usd"],
+               "steps": [s for s, _ in est["steps"]]}
+        return {**out, **self._money(est["credits"])}
+
+    def _money(self, needed=0):
+        """What the director may say about money. With credits enforced: the balance and whether the build is
+        affordable. Otherwise the ledger only keeps score of the customer's own spend, and no balance is quoted."""
         bal = self.wallet.balance(self.user)
-        return {"brief": self.spec.to_dict(), "estimate_credits": est["credits"], "estimate_usd": est["usd"],
-                "steps": [s for s, _ in est["steps"]], "balance": bal,
-                "affordable": bal >= est["credits"]}
+        if config.ENFORCE_CREDITS:
+            return {"balance": bal, "affordable": bal >= needed}
+        return {"spent_so_far_usd": round(-bal / 100, 2), "credits_enforced": False}
 
     def _build(self, _a):
         if not self.spec:
@@ -207,7 +223,7 @@ class Director:
         return {"category": s["category"], "guidance": s["body"][:2500]}
 
     def _balance(self, _a):
-        return {"balance": self.wallet.balance(self.user)}
+        return self._money()
 
     # ------------------------------------------------------------ chat
     def turn(self, text):
