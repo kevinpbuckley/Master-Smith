@@ -16,6 +16,11 @@ and are carried across, so a pull request here can end up in production. Thank y
   than Unreal today.
 - **The chat.** `web/` is a Next.js app on the Vercel AI SDK; the director itself is Python (`mastersmith/agent.py`).
 
+## Branches
+
+`master` is what people run; `dev` is where work lands. Open pull requests against `dev`. When `dev` is verified
+end to end (a real build through the containers), it is merged into `master`.
+
 ## Running the tests
 
 ```bash
