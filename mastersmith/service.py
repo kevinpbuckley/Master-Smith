@@ -409,12 +409,17 @@ def import_job(body: ImportIn, who=Depends(auth)):
 
 
 @app.post("/v1/jobs/refinish")
-def refinish_job(body: RefinishIn, who=Depends(auth)):
+def refinish_job(body: RefinishIn, confirm_removal: bool = False, who=Depends(auth)):
+    """Re-finish an earlier job's seed with a changed brief. New remove_parts answer a removal preview (red on the
+    renders) until the call is repeated with ?confirm_removal=1."""
     src = store.job(body.source_job, who["user"])
     if not src or not (src.get("result") or {}).get("dir"):
         raise HTTPException(404, "source job not found or has no output")
-    spec = {**src["spec"], **body.overrides}
-    return _enqueue(who["user"], Spec.from_dict(spec), "refinish", src["result"]["dir"])
+    spec = Spec.from_dict({**src["spec"], **body.overrides})
+    new_removals = [p for p in spec.remove_parts if p not in (src["spec"].get("remove_parts") or [])]
+    if new_removals and not confirm_removal:
+        return run_removal_preview(who["user"], src["result"]["dir"], spec)
+    return _enqueue(who["user"], spec, "refinish", src["result"]["dir"])
 
 
 @app.get("/v1/jobs")

@@ -79,8 +79,11 @@ Delete a part the vendor grew, in Blender, and re-finish (cents: masks, a facing
 curl -s -H "$H" -H "Content-Type: application/json" $MS/v1/jobs/refinish -d "{\"source_job\": \"$JOB\", \"overrides\": {\"remove_parts\": [\"the extra cylinder attached to the magazine\"]}}"
 ```
 
-The `debug` answer of the new job lists `removed_parts` with the face counts; a phrase whose mask found nothing, or
-covered more than 30% of the object, deletes nothing and says so in the log.
+The first call answers a **preview**, not a job: `{"status": "preview_removal", "pictures": [{label, url, coverage}]}`
+with the source job's renders and the faces that would go tinted red. Look at them. Repeat the call with
+`?confirm_removal=1` to queue the re-finish, or reword the phrase and preview again. The `debug` answer of the
+finished job lists `removed_parts` with the face counts; a phrase whose mask found nothing, or covered more than 30%
+of the object, deletes nothing and says so in the log.
 
 ## Watch and debug
 
