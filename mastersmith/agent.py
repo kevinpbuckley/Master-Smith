@@ -41,7 +41,10 @@ How a job goes:
    name and the description stay what they were: never replace them with the part being fixed (a request to fix the
    magazine is still the same rifle). Cheapest remedy first, and say which it will be:
    - a defect on the built model - an extra or wrong part the vendor grew (a cylinder on the magazine, a sling fused
-     to the stock, a stand, a floating blob) - goes in remove_parts: Blender deletes it and re-finishes, no new mesh;
+     to the stock, a stand, a floating blob) - goes in remove_parts: Blender deletes it and re-finishes, no new mesh.
+     build first shows the customer what would go, in red on the renders; ask them to confirm, and only then call
+     build with confirm_removal=true. If the red covers more than the defect (the whole magazine instead of the
+     cylinder on it), reword the phrase or use another remedy instead;
    - size, triangle budget, glass, rig or engine changes re-finish the same mesh;
    - colour, finish or material changes go through retexture=true: the mesh is repainted, nothing moves;
    - only a change of shape or proportions buys a new mesh: keep the description, put the change in edit_instructions,
@@ -120,8 +123,11 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "build", "description": "Run the build for the current brief. Only after the customer confirmed (and, unless "
-                                        "they asked to skip the preview, approved the reference picture).",
-        "parameters": {"type": "object", "properties": {}}}},
+                                        "they asked to skip the preview, approved the reference picture). With new remove_parts "
+                                        "it first answers a preview (red on the renders); call again with confirm_removal=true "
+                                        "once the customer has confirmed the red is right.",
+        "parameters": {"type": "object", "properties": {
+            "confirm_removal": {"type": "boolean", "description": "true only after the customer confirmed the red removal preview"}}}}},
     {"type": "function", "function": {
         "name": "job_status", "description": "Status, log tail and results of a queued or finished build.",
         "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}, "required": ["job_id"]}}},
@@ -160,7 +166,8 @@ class Director:
         self.import_model = None    # service hook: (path, spec dict) -> {"job_id", ...}
         self.make_reference = None  # service hook: spec dict -> {"job_id", "dir", "views", "pictures" (URLs), ...}
         self.reference = None       # the approved pictures: {"job_dir", "views", "for": design snapshot}
-        self.last_pictures = []     # picture URLs/paths produced this turn, for the chat to show
+        self.last_pictures = []     # pictures produced this turn, for the chat to show: [{"label", "url"}]
+        self.last_pictures_kind = None   # "reference" (approve to build) or "removal" (confirm to delete the red faces)
         self.messages = [{"role": "system", "content": SYSTEM.format(
             categories=", ".join(skills.all_categories()), cats=", ".join(CATEGORIES),
             styles=", ".join(STYLES), engines=", ".join(ENGINES), pricing=pricing_note)}]
@@ -215,18 +222,23 @@ class Director:
         if out.get("status") == "done" and out.get("dir"):
             self.reference = {"job_dir": out["dir"], "views": out.get("views") or [], "for": self._design()}
             self.last_pictures = list(out.get("pictures") or [])
+            self.last_pictures_kind = "reference"
             return {**out, "next": "The pictures are shown to the customer. Ask them to approve (then call build) or say what to change."}
         return out
 
-    def _build(self, _a):
+    def _build(self, a):
         if not self.spec:
             return {"error": "no brief yet; call set_brief first"}
         spec_dict = self.spec.to_dict()
         if self.reference and self.reference.get("for") == self._design():
             spec_dict["reference_job"] = self.reference["job_dir"]       # seed from the approved pictures
         if self.submit:
-            out = self.submit(spec_dict)
-            if out.get("job_id"):
+            out = self.submit(spec_dict, bool((a or {}).get("confirm_removal")))
+            if out.get("status") == "preview_removal":
+                self.last_pictures = list(out.get("pictures") or [])   # the red-on-render preview; the customer confirms
+                self.last_pictures_kind = "removal"
+                return out
+            if out.get("job_id") and out.get("status") == "queued":
                 self.last_job_id = out["job_id"]
             return out
         try:
@@ -296,6 +308,7 @@ class Director:
         self.messages.append({"role": "user", "content": text})
         self.last_tools = []
         self.last_pictures = []
+        self.last_pictures_kind = None
         for _ in range(MAX_TOOL_ROUNDS):
             msg = self.llm.chat(self.messages, model=self.model, tools=TOOLS)
             self.messages.append({"role": "assistant", "content": msg.get("content") or "",

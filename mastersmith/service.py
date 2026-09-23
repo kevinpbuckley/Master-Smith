@@ -140,12 +140,41 @@ def _enqueue(user, spec, kind, source=None):
     return {"job_id": job_id, "status": "queued", "kind": kind, "estimate_credits": credits, "balance": bal}
 
 
-def submit_build(user, spec_dict, seed=None):
+def run_removal_preview(user, source_dir, spec):
+    """Red-on-render pictures of what remove_parts would delete, registered as a finished job so they are served."""
+    from .pipeline import preview_removal_job
+    from .providers import ProviderBalanceLow
+    from .wallet import InsufficientCredits
+    job_id = new_job_id()
+    store.enqueue(job_id, user, "removal_preview", spec.to_dict(), source_job=source_dir)
+    store.db.execute("UPDATE jobs SET status='running', started=? WHERE id=?", (time.time(), job_id))
+    store.db.commit()
+    try:
+        r = preview_removal_job(source_dir, spec, user, wallet, log=lambda m: store.append_log(job_id, m), job_id=job_id)
+    except (InsufficientCredits, ProviderBalanceLow) as exc:
+        store.finish(job_id, "refused", error=str(exc))
+        return {"job_id": job_id, "status": "refused", "error": str(exc)}
+    store.finish(job_id, r["status"], result=r, error=r.get("error"))
+    pics = [{"label": p["label"], "url": "/v1/jobs/%s/files/%s" % (job_id, os.path.basename(p["path"])), "coverage": p.get("coverage")}
+            for p in (r.get("pictures") or [])]
+    return {"job_id": job_id, "status": "preview_removal" if r["status"] == "done" else r["status"], "error": r.get("error"),
+            "pictures": pics, "usd_cost": (r.get("bill") or {}).get("usd_cost"),
+            "next": ("The red areas are what will be deleted. Ask the customer to confirm, then call build with "
+                     "confirm_removal=true; if the red covers the wrong thing, reword remove_parts (or drop it) and try again.")}
+
+
+def submit_build(user, spec_dict, seed=None, confirm_removal=False):
     """Queue a build. With `seed` (the session's current model): a repaint keeps the mesh, a change that keeps the
-    shape re-finishes it, and a change of shape edits the previous picture rather than redrawing from the text."""
+    shape re-finishes it, and a change of shape edits the previous picture rather than redrawing from the text.
+    New remove_parts are previewed (red on the renders) and queued only once confirmed."""
     spec = Spec.from_dict(spec_dict)
     if seed:
         same_shape = all(spec_dict.get(k) == seed["spec"].get(k) for k in ("description", "category", "style"))
+        new_removals = [p for p in spec.remove_parts if p not in (seed["spec"].get("remove_parts") or [])]
+        if new_removals and not confirm_removal:
+            source_dir = os.path.dirname(os.path.dirname(seed["glb"])) if os.path.basename(os.path.dirname(seed["glb"])) == "work" \
+                else os.path.dirname(seed["glb"])
+            return run_removal_preview(user, source_dir, spec)
         if spec.retexture:
             return _enqueue(user, spec, "rework", {"seed": seed["glb"], "ref": seed["ref"], "mode": "retexture"})
         if same_shape:
@@ -230,7 +259,8 @@ def _director(session_id, user):
                 sv = sess["settings"].get("seed_vendor")
                 return {**spec_dict, "seed_vendor": spec_dict.get("seed_vendor") or (sv if sv and sv != "tripo" else None)}
 
-            d.submit = lambda spec_dict: submit_build(user, with_settings(spec_dict), seed=last_seed(user, d.last_job_id))
+            d.submit = lambda spec_dict, confirm_removal=False: submit_build(
+                user, with_settings(spec_dict), seed=last_seed(user, d.last_job_id), confirm_removal=confirm_removal)
             d.import_model = lambda path, spec_dict: submit_import(user, path, spec_dict)
             d.make_reference = lambda spec_dict: run_reference(user, with_settings(spec_dict))
             d.job_status = lambda job_id: (lambda row: job_view(row, user) if row else {"error": "unknown job"})(store.job(job_id, user))
@@ -338,7 +368,8 @@ def chat(body: ChatIn, who=Depends(auth)):
         raise HTTPException(502, "director error: %s" % str(exc)[:300])
     return {"reply": reply, "brief": d.spec.to_dict() if d.spec else None, "balance": wallet.balance(who["user"]),
             "providers": providers.balances(), "last_job": d.last_job_id, "chat_cost_usd": round(d.chat_cost_usd(), 5),
-            "pictures": list(d.last_pictures), "reference_job": (d.reference or {}).get("job_dir"),
+            "pictures": list(d.last_pictures), "pictures_kind": d.last_pictures_kind,
+            "reference_job": (d.reference or {}).get("job_dir"),
             "settings": {"seed_vendor": settings.get("seed_vendor") or model_options()["defaults"]["seed_vendor"],
                          "director_model": d.model},
             "tools": [{"name": t["name"], "args": t.get("args"), "result": t.get("result")} for t in d.last_tools]}

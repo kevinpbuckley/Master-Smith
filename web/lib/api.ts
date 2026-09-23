@@ -50,7 +50,8 @@ export type TurnData = {
   last_job: string | null;
   balance: number;
   providers: Providers | null;
-  pictures: { label: string; url: string }[];   // reference pictures drawn this turn, every angle the build will use
+  pictures: { label: string; url: string }[];   // pictures shown this turn: reference angles, or a removal preview
+  pictures_kind: "reference" | "removal" | null;
   reference_job: string | null;   // the approved reference job the next build will seed from
   chat_cost_usd: number;
   tools: { name: string; args: unknown; result: string }[];

@@ -46,6 +46,7 @@ export async function POST(req: Request) {
         balance: j.balance,
         providers: j.providers ?? null,
         pictures: j.pictures ?? [],
+        pictures_kind: j.pictures_kind ?? null,
         reference_job: j.reference_job ?? null,
         chat_cost_usd: j.chat_cost_usd,
         tools: j.tools ?? [],

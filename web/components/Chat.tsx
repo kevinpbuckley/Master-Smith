@@ -239,7 +239,18 @@ export default function Chat() {
                         {p.data.pictures?.length > 0 && (
                           <Pictures
                             urls={p.data.pictures}
-                            onApprove={() => sendMessage({ text: "Go: build from this picture." }, { body: { attachments: [], settings } })}
+                            kind={p.data.pictures_kind ?? "reference"}
+                            onApprove={() =>
+                              sendMessage(
+                                {
+                                  text:
+                                    p.data.pictures_kind === "removal"
+                                      ? "Confirmed: delete the red areas and re-finish."
+                                      : "Go: build from this picture.",
+                                },
+                                { body: { attachments: [], settings } },
+                              )
+                            }
                             onChange={() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus()}
                             busy={busy}
                           />
@@ -341,21 +352,24 @@ export default function Chat() {
 
 function Pictures({
   urls,
+  kind,
   onApprove,
   onChange,
   busy,
 }: {
   urls: { label: string; url: string }[];
+  kind: "reference" | "removal";
   onApprove: () => void;
   onChange: () => void;
   busy: boolean;
 }) {
+  const removal = kind === "removal";
   return (
     <div className="pictures">
       <div className="pictures-row">
         {urls.map((p, i) => {
           const src = p.url.replace(/^\/v1\//, "/api/");
-          const caption = i === 0 ? "reference" : p.label.replace(/^orthographic /, "");
+          const caption = removal ? p.label : i === 0 ? "reference" : p.label.replace(/^orthographic /, "");
           return (
             <figure key={p.url}>
               <a href={src} target="_blank" rel="noreferrer">
@@ -369,12 +383,14 @@ function Pictures({
       </div>
       <div className="pictures-actions">
         <button type="button" onClick={onApprove} disabled={busy}>
-          Build from this
+          {removal ? "Delete the red areas" : "Build from this"}
         </button>
         <button type="button" className="ghost" onClick={onChange} disabled={busy}>
-          Change something…
+          {removal ? "Not that, reword…" : "Change something…"}
         </button>
-        <span className="dim">The mesh is bought only after you approve the picture.</span>
+        <span className="dim">
+          {removal ? "Nothing is deleted until you confirm." : "The mesh is bought only after you approve the picture."}
+        </span>
       </div>
     </div>
   );

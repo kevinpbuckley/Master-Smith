@@ -361,3 +361,19 @@ def test_estimate_prices_the_chosen_mesh_vendor():
     assert any(n.startswith("3D seed (Tripo") for n, _ in default["steps"])
     assert any(n == "3D seed (Hitem3D v3 (2048))" for n, _ in dear["steps"]) and dear["usd"] > default["usd"]
     assert pricing.seed_vendor(Spec(name="R", description="r", seed_vendor="nonsense"))["key"] == "tripo"
+
+
+def test_removal_overlay_tints_the_mask_and_reports_coverage(tmp_path):
+    from PIL import Image
+    from mastersmith.stages.removal import overlay
+    probe = tmp_path / "probe_iso.png"
+    Image.new("RGB", (40, 20), (100, 100, 100)).save(probe)
+    m = Image.new("L", (40, 20), 0)
+    m.paste(255, (0, 0, 10, 20))                      # the left quarter
+    mask = tmp_path / "mask.png"
+    m.save(mask)
+    out = tmp_path / "preview.png"
+    cov = overlay(str(probe), [str(mask)], str(out))
+    assert abs(cov - 0.25) < 1e-6
+    px = Image.open(out).convert("RGB")
+    assert px.getpixel((2, 10))[0] > 180 and px.getpixel((30, 10)) == (100, 100, 100)

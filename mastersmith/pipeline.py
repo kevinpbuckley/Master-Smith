@@ -348,5 +348,36 @@ def seed_of(result):
     return None
 
 
-__all__ = ["build", "make_reference_only", "load_reference", "refinish", "rework", "seed_of", "Job", "InsufficientCredits",
-           "MESH_EXTENSIONS"]
+def preview_removal_job(source_dir, spec, user, wallet, log=print, job_id=None):
+    """What a remove_parts repair would delete, drawn in red on the source job's probe renders, for the customer to
+    confirm before any face goes. A few SAM calls; no Blender, no mesh."""
+    from .stages.removal import preview_removal
+    phrases = list(spec.remove_parts or [])
+    est_usd = 0.005 * 3 * len(phrases) * 2 + 0.01                    # masks (two wordings a view at worst) + a box fallback
+    providers.check_affordable(est_usd)
+    hold = wallet.reserve(user, config.credits_for_usd(est_usd), "removal preview %s" % spec.name)
+    job = Job(spec, user, wallet, log, job_id=job_id)
+    result = {"job_id": job.id, "dir": job.dir, "spec": spec.to_dict(), "status": "failed", "kind": "removal_preview",
+              "source": source_dir}
+    log("job %s: preview of removing %s from %s" % (job.id, ", ".join(phrases), os.path.basename(source_dir)))
+    try:
+        job.stage("probe")
+        pics = preview_removal(job, source_dir, phrases)
+        result["pictures"] = pics
+        result["delivery_dir"] = job.dir
+        result["status"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        result["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:600])
+        log("FAILED: %s" % result["error"])
+    finally:
+        usd = job.spent_usd()
+        bill = wallet.settle(hold, usd, "removal preview %s %s" % (job.id, result["status"]))
+        result["bill"] = {"usd_cost": usd, "credits_charged": bill["charged"], "credits_refunded": bill["refunded"],
+                          "balance": bill["balance"], **job.bill_calls()}
+        with open(os.path.join(job.dir, "job.json"), "w") as f:
+            json.dump(result, f, indent=1, default=str)
+    return result
+
+
+__all__ = ["build", "make_reference_only", "load_reference", "preview_removal_job", "refinish", "rework", "seed_of", "Job",
+           "InsufficientCredits", "MESH_EXTENSIONS"]
