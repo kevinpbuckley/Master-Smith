@@ -119,12 +119,11 @@ def last_seed(user, job_id):
 
 
 def _enqueue(user, spec, kind, source=None):
-    est = pricing.estimate(spec)
-    credits = est["credits"]
-    if kind in ("refinish", "rework"):     # the seed is reused; only the small calls are held
+    if kind in ("refinish", "rework"):     # the seed is reused; only the finishing calls are held
         mode = (source or {}).get("mode") if isinstance(source, dict) else "refinish"
-        credits = config.credits_for_usd(sum(u for name, u in est["steps"]
-                                             if "seed" not in name and (mode == "retexture" or "picture" not in name)))
+        credits = pricing.estimate_rework(spec, mode)["credits"]
+    else:
+        credits = pricing.estimate(spec)["credits"]
     bal = wallet.balance(user)
     if config.ENFORCE_CREDITS and bal < credits:
         return {"error": "insufficient credits", "needed": credits, "balance": bal}

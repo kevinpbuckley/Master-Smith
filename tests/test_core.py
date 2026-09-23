@@ -76,7 +76,23 @@ def test_wallet_keeps_score_without_refusing_by_default(monkeypatch):
         assert w.balance("kev") == -200
         bill = w.settle(hold, 0.5, "done")
         assert bill["charged"] == 50 and w.balance("kev") == -50
+        hold2 = w.reserve("kev", 12, "import")
+        bill2 = w.settle(hold2, 0.76, "an imported jet that bought a cockpit")   # past the hold: the true cost is kept
+        assert bill2["charged"] == 76 and bill2["refunded"] == -64 and w.balance("kev") == -126
         w.close()      # Windows cannot remove the temp dir while sqlite holds the file
+
+
+def test_rework_estimate_drops_the_seed_but_keeps_the_cockpit():
+    jet = Spec(name="Jet", description="grey attack jet", category="aircraft", size_m=-1)
+    full = pricing.estimate(jet)
+    re = pricing.estimate_rework(jet, "refinish")
+    names = [n for n, _ in re["steps"]]
+    assert not any(n.startswith("3D seed") for n in names)
+    assert not any(n.startswith(pricing.PICTURE_STEPS) for n in names)
+    assert any(n.startswith("cockpit") for n in names)
+    assert 0 < re["usd"] < full["usd"]
+    rt = pricing.estimate_rework(Spec(name="R", description="rifle", category="weapon", retexture=True), "retexture")
+    assert any("repaint of the existing mesh" in n for n, _ in rt["steps"])
 
 
 def test_wallet_reserve_settle_refund_and_refusal(monkeypatch):

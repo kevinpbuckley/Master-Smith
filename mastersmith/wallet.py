@@ -75,8 +75,10 @@ class Wallet:
         if not row or row[2]:
             raise ValueError("hold %s unknown or already settled" % hold_id)
         user, held = row[0], -row[1]
-        charge = min(config.credits_for_usd(usd_cost), held)
-        refund = held - charge
+        charge = config.credits_for_usd(usd_cost)
+        if config.ENFORCE_CREDITS:
+            charge = min(charge, held)          # a user is never charged past what was held from their balance
+        refund = held - charge                  # negative when the job cost more than the hold (spend-only mode)
         if refund:
             self.db.execute("UPDATE users SET balance = balance + ? WHERE name=?", (refund, user))
         self.db.execute("UPDATE ledger SET kind='charge', credits=?, usd_cost=?, note=?, settled=1 WHERE id=?",

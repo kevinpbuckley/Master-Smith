@@ -134,3 +134,19 @@ def estimate(spec):
     steps.append(("director chat overhead", 2 * LLM_CALL_ALLOWANCE_USD))
     total = round(sum(u for _, u in steps), 4)
     return {"steps": steps, "usd": total, "credits": config.credits_for_usd(total)}
+
+
+SEED_STEPS = ("3D seed", "extra views for multiview seeding", "hybrid repaint of the seed")
+PICTURE_STEPS = ("concept picture", "clean up your reference picture", "find a photo of", "check the picture",
+                 "second picture attempt")
+
+
+def estimate_rework(spec, mode="refinish"):
+    """Worst case of finishing an EXISTING mesh: no main seed and no reference pictures (a retexture keeps the picture
+    steps for its guide picture). The cockpit and part seeds the finish may still buy stay in (an imported A-10 cost
+    $0.76 of cockpit against a 12-credit hold, 2026-09-23)."""
+    est = estimate(spec)
+    steps = [(name, usd) for name, usd in est["steps"]
+             if not name.startswith(SEED_STEPS) and (mode == "retexture" or not name.startswith(PICTURE_STEPS))]
+    usd = sum(u for _, u in steps)
+    return {"steps": steps, "usd": round(usd, 4), "credits": config.credits_for_usd(usd)}

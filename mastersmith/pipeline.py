@@ -200,9 +200,7 @@ def rework(seed_path, spec, user, wallet, ref_view=None, mode="refinish", log=pr
                         colour, else by the retexture vendor guided by a picture edited from `ref_view` (or by the
                         text alone when there is no picture) - then finished.
     Pays for the probe, repaint, rig and review calls only."""
-    est = pricing.estimate(spec)
-    small = [u for name, u in est["steps"] if "seed" not in name and (mode == "retexture" or "picture" not in name)]
-    credits = config.credits_for_usd(sum(small))
+    credits = pricing.estimate_rework(spec, mode)["credits"]
     hold = wallet.reserve(user, credits, "%s %s" % (mode, spec.name))
     job = Job(spec, user, wallet, log, job_id=job_id)
     skill = skills.load(spec.category)
