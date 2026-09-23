@@ -1,36 +1,19 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Master Smith chat
 
-## Getting Started
-
-First, run the development server:
+The chat interface: a Next.js app on the Vercel AI SDK. It talks to the Python API in the repository root through
+its own route handlers (`app/api/*`), so an API key, if you created one, never reaches the browser.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm ci
+cp .env.example .env.local      # MASTERSMITH_API_URL, default http://127.0.0.1:8080
+npm run dev                     # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- `components/Chat.tsx` – `useChat` over `DefaultChatTransport`; uploads go to `/api/upload` first and are sent as
+  `attachments` in the request body.
+- `app/api/chat/route.ts` – forwards the newest user message to `POST /v1/chat` and answers with a UI message
+  stream: the reply text, then a `data-turn` part (brief, queued job id, spend, tool calls).
+- `components/JobPanel.tsx` – polls `/api/jobs/<id>` while a build runs; previews, facts, files, and the finished
+  GLB in Google's `<model-viewer>`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`npm run build` uses `output: "standalone"` for `Dockerfile`; use `npm run dev` locally.
