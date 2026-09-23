@@ -28,10 +28,14 @@ How a job goes:
    retexture_parts: the mesh is repainted, nothing moves, and it costs about half a rebuild.
 2. set_brief returns the worst-case estimate. Tell the customer the plan in two or three lines and what it will
    cost, then wait for them to say go (or change something).
-3. When they confirm call build. If it returns a queued job_id, tell the customer the job is building and that the
-   page shows progress; when they ask how it is going call job_status. When build returns a finished result, report
-   it: files, triangle counts, glass, rig, the reviewer's score and issues, credits charged. If the reviewer said
-   rebuild, say what you would change and ask before spending again.
+3. When they confirm, call make_reference FIRST (unless they say to skip the preview). It draws the reference
+   picture(s) the mesh will be built from, for cents, and shows them to the customer in the chat. Tell them to look at
+   the picture and say go, or say what to change. If they want changes, call set_brief with the changed description
+   (or edit_instructions for a small change to the same design) and make_reference again. When they approve, call
+   build: it seeds from the approved picture and draws nothing new. If build returns a queued job_id, tell the customer
+   the job is building and that the page shows progress; when they ask how it is going call job_status. When build
+   returns a finished result, report it: files, triangle counts, glass, rig, the reviewer's score and issues, cost.
+   If the reviewer said rebuild, say what you would change and ask before spending again.
 4. For changes after a build, call set_brief again with the changed fields and then build when confirmed. Changes that
    keep the shape (size, triangle budget, glass, rig, engine) re-finish the same mesh; colour, finish or material
    changes with retexture=true repaint it; only a change of shape or parts buys a new mesh. Say which it will be.
@@ -95,7 +99,13 @@ TOOLS = [
             "glass": {"type": "boolean"}, "rig": {"type": "boolean"}, "notes": {"type": "string"}},
             "required": ["path", "name", "category"]}}},
     {"type": "function", "function": {
-        "name": "build", "description": "Run the build for the current brief. Only after the customer confirmed.",
+        "name": "make_reference",
+        "description": "Draw the reference picture(s) for the current brief and show them to the customer, without buying a "
+                       "mesh. Call it when the customer confirms the brief; call build once they approve the picture.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "build", "description": "Run the build for the current brief. Only after the customer confirmed (and, unless "
+                                        "they asked to skip the preview, approved the reference picture).",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "job_status", "description": "Status, log tail and results of a queued or finished build.",
@@ -133,6 +143,9 @@ class Director:
         self.submit = None          # service hook: spec dict -> {"job_id", ...}; when set, build is queued not run
         self.job_status = None      # service hook: job_id -> status dict
         self.import_model = None    # service hook: (path, spec dict) -> {"job_id", ...}
+        self.make_reference = None  # service hook: spec dict -> {"job_id", "dir", "views", "pictures" (URLs), ...}
+        self.reference = None       # the approved pictures: {"job_dir", "views", "for": design snapshot}
+        self.last_pictures = []     # picture URLs/paths produced this turn, for the chat to show
         self.messages = [{"role": "system", "content": SYSTEM.format(
             categories=", ".join(skills.all_categories()), cats=", ".join(CATEGORIES),
             styles=", ".join(STYLES), engines=", ".join(ENGINES), pricing=pricing_note)}]
@@ -164,16 +177,43 @@ class Director:
             return {**money, "balance": bal, "affordable": bal >= needed}
         return {**money, "spent_so_far_usd": round(-bal / 100, 2), "credits_enforced": False}
 
+    DESIGN_FIELDS = ("description", "category", "style", "edit_instructions", "reference_images", "search_query", "multiview")
+
+    def _design(self):
+        d = self.spec.to_dict()
+        return {k: d.get(k) for k in self.DESIGN_FIELDS}
+
+    def _make_reference(self, _a):
+        if not self.spec:
+            return {"error": "no brief yet; call set_brief first"}
+        spec_dict = self.spec.to_dict()
+        if self.make_reference:
+            out = self.make_reference(spec_dict)
+        else:
+            from .pipeline import make_reference_only
+            r = make_reference_only(self.spec, self.user, self.wallet, log=self.log)
+            out = {"job_id": r["job_id"], "dir": r["dir"], "status": r["status"], "error": r.get("error"),
+                   "views": (r.get("reference") or {}).get("views") or [], "pictures": (r.get("reference") or {}).get("views") or [],
+                   "checks": (r.get("reference") or {}).get("checks"), "usd_cost": (r.get("bill") or {}).get("usd_cost")}
+        if out.get("status") == "done" and out.get("dir"):
+            self.reference = {"job_dir": out["dir"], "views": out.get("views") or [], "for": self._design()}
+            self.last_pictures = list(out.get("pictures") or [])
+            return {**out, "next": "The pictures are shown to the customer. Ask them to approve (then call build) or say what to change."}
+        return out
+
     def _build(self, _a):
         if not self.spec:
             return {"error": "no brief yet; call set_brief first"}
+        spec_dict = self.spec.to_dict()
+        if self.reference and self.reference.get("for") == self._design():
+            spec_dict["reference_job"] = self.reference["job_dir"]       # seed from the approved pictures
         if self.submit:
-            out = self.submit(self.spec.to_dict())
+            out = self.submit(spec_dict)
             if out.get("job_id"):
                 self.last_job_id = out["job_id"]
             return out
         try:
-            self.last_result = build(self.spec, self.user, self.wallet, log=self.log)
+            self.last_result = build(Spec.from_dict(spec_dict), self.user, self.wallet, log=self.log)
         except InsufficientCredits as exc:
             return {"error": "insufficient credits", "needed": exc.needed, "balance": exc.balance}
         return self._summary(self.last_result)
@@ -238,6 +278,7 @@ class Director:
         """One customer message in, the assistant's reply out (tools run in between)."""
         self.messages.append({"role": "user", "content": text})
         self.last_tools = []
+        self.last_pictures = []
         for _ in range(MAX_TOOL_ROUNDS):
             msg = self.llm.chat(self.messages, model=self.model, tools=TOOLS)
             self.messages.append({"role": "assistant", "content": msg.get("content") or "",
@@ -251,7 +292,8 @@ class Director:
                 except json.JSONDecodeError:
                     a = {}
                 fn = {"set_brief": self._set_brief, "build": self._build, "read_skill": self._read_skill,
-                      "balance": self._balance, "job_status": self._job_status, "import_model": self._import_model}.get(name)
+                      "balance": self._balance, "job_status": self._job_status, "import_model": self._import_model,
+                      "make_reference": self._make_reference}.get(name)
                 out = fn(a) if fn else {"error": "unknown tool %s" % name}
                 self.last_tools.append({"name": name, "args": a, "result": json.dumps(out, default=str)[:400]})
                 self.messages.append({"role": "tool", "tool_call_id": call["id"], "name": name,

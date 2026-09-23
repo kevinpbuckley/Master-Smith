@@ -116,9 +116,55 @@ def repaint_seed(job, seed_glb, reference):
     return seed_glb, maps, "meshy"
 
 
+def make_reference_only(spec, user, wallet, log=print, job_id=None):
+    """Stage 1 alone: the reference picture(s) for the customer to approve before a mesh is bought. Writes
+    reference.json and job.json in its own job directory; a build with spec.reference_job = that directory seeds
+    from these pictures and skips the picture stage."""
+    est = pricing.estimate_reference(spec)
+    providers.check_affordable(est["usd"])
+    hold = wallet.reserve(user, est["credits"], "reference %s" % spec.name)
+    job = Job(spec, user, wallet, log, job_id=job_id)
+    skill = skills.load(spec.category)
+    result = {"job_id": job.id, "dir": job.dir, "spec": spec.to_dict(), "estimate": est, "status": "failed", "kind": "reference"}
+    log("job %s: reference picture(s) for %s (%s) - reserved %d credits" % (job.id, spec.name, spec.category, est["credits"]))
+    try:
+        job.stage("reference")
+        ref = make_reference(job, skill)
+        result["reference"] = {"views": ref["views"], "checks": ref["checks"], "source": ref.get("source"),
+                               "pictures": ref.get("pictures")}
+        result["delivery_dir"] = job.dir          # the pictures are the delivery
+        result["status"] = "done"
+    except Exception as exc:  # noqa: BLE001
+        result["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:600])
+        log("FAILED: %s" % result["error"])
+    finally:
+        usd = job.spent_usd()
+        bill = wallet.settle(hold, usd, "reference %s %s" % (job.id, result["status"]))
+        result["bill"] = {"usd_cost": usd, "credits_charged": bill["charged"], "credits_refunded": bill["refunded"],
+                          "balance": bill["balance"], **job.bill_calls()}
+        log("bill: $%.3f provider cost" % usd)
+        with open(os.path.join(job.dir, "job.json"), "w") as f:
+            json.dump(result, f, indent=1, default=str)
+    return result
+
+
+def load_reference(job_dir):
+    """The reference.json of an earlier reference job, with its pictures checked to still exist."""
+    path = os.path.join(job_dir, "reference.json")
+    if not os.path.exists(path):
+        raise FileNotFoundError("no reference.json in %s" % job_dir)
+    ref = json.load(open(path))
+    missing = [v for v in ref.get("views") or [] if not os.path.exists(v)]
+    if missing or not ref.get("views"):
+        raise FileNotFoundError("reference pictures missing: %s" % (missing or "none recorded"))
+    return ref
+
+
 def build(spec, user, wallet, log=print, job_id=None):
-    """Run a full build for `user`. Raises InsufficientCredits or ProviderBalanceLow before spending anything."""
-    est = pricing.estimate(spec)
+    """Run a full build for `user`. Raises InsufficientCredits or ProviderBalanceLow before spending anything.
+    With spec.reference_job set, the approved pictures of that job are used and the picture stage is skipped."""
+    approved = load_reference(spec.reference_job) if spec.reference_job else None
+    est = pricing.estimate_after_reference(spec) if approved else pricing.estimate(spec)
     providers.check_affordable(est["usd"])
     hold = wallet.reserve(user, est["credits"], "build %s" % spec.name)   # raises when the balance is short
     job = Job(spec, user, wallet, log, job_id=job_id)
@@ -128,9 +174,16 @@ def build(spec, user, wallet, log=print, job_id=None):
         job.id, spec.name, spec.category, spec.style, format(spec.tri_budget, ","), spec.size_m, est["credits"]))
     try:
         job.stage("reference")
-        log("1/4 reference picture")
-        ref = make_reference(job, skill)
-        result["reference"] = {"views": ref["views"], "checks": ref["checks"]}
+        if approved:
+            log("1/4 approved reference picture(s) from %s" % os.path.basename(spec.reference_job))
+            ref = dict(approved)
+            ref["urls"] = [job.fal.upload(p) for p in ref["views"]]                       # fresh CDN copies, free
+            ref["seed_urls"] = [job.fal.upload(p) for p in ref["seed_views"]] if ref.get("seed_views") else None
+            result["reference"] = {"views": ref["views"], "checks": ref.get("checks"), "from": spec.reference_job}
+        else:
+            log("1/4 reference picture")
+            ref = make_reference(job, skill)
+            result["reference"] = {"views": ref["views"], "checks": ref["checks"]}
         job.stage("seed")
         log("2/4 3D seed")
         seed = make_seed(job, ref.get("seed_urls") or ref["urls"])
@@ -295,4 +348,5 @@ def seed_of(result):
     return None
 
 
-__all__ = ["build", "refinish", "rework", "seed_of", "Job", "InsufficientCredits", "MESH_EXTENSIONS"]
+__all__ = ["build", "make_reference_only", "load_reference", "refinish", "rework", "seed_of", "Job", "InsufficientCredits",
+           "MESH_EXTENSIONS"]

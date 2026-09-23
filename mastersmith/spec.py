@@ -38,6 +38,8 @@ class Spec:
     hybrid: object = None             # True -> Meshy v7 geometry + a retexture pass on our unwrap (clean albedo); None -> config default
     seed_vendor: str = None           # None -> Tripo H3.1; "meshy7mv" (Meshy v7 multi-image, ~$0.035, 3x slower),
                                       # "hitem3d3" (Hi3D v3, crisper textures, single view), "meshy7", "hitem3d"
+    reference_job: str = None         # the directory of a finished reference job whose approved pictures this build
+                                      # seeds from; the picture stage is skipped
 
     def __post_init__(self):
         # Asset name rule: letters, digits, underscores, hyphens, starting with a letter. Anything
@@ -73,8 +75,11 @@ class Spec:
             self.rig = self.category == "character"
         self.rig = bool(self.rig)
         if self.cockpit is None:
-            self.cockpit = self.category in ("aircraft", "helicopter") and self.glass
-        self.cockpit = bool(self.cockpit)
+            # off by default: the second "cockpit tub" model fitted under the canopy is a gamble (a Havoc gunship's
+            # tub came out 2.7x scaled with a fifth of it through the airframe, 2026-09-23). The seed's own interior
+            # and the glass slot ship; cockpit=true in the brief asks for the tub.
+            self.cockpit = False
+        self.cockpit = bool(self.cockpit) and self.category in ("aircraft", "helicopter") and bool(self.glass)
         refs = [r for r in (self.reference_images or []) if isinstance(r, str) and r.strip()]
         if self.reference_image:
             refs = [self.reference_image] + [r for r in refs if r != self.reference_image]   # the primary leads

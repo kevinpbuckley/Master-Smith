@@ -197,6 +197,30 @@ body {
   border-radius: 4px;
 }
 
+.pictures {
+  margin-top: 10px;
+  white-space: normal;
+}
+.pictures-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pictures-row img {
+  height: 220px;
+  max-width: 100%;
+  border-radius: 10px;
+  background: #fff;
+  object-fit: contain;
+}
+.pictures-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
 .turn {
   margin-top: 8px;
   font-size: 12px;

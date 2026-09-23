@@ -1,4 +1,5 @@
 """Pure tests: no network, no Blender. python -m pytest -q"""
+import json
 import os
 import sys
 import tempfile
@@ -83,7 +84,7 @@ def test_wallet_keeps_score_without_refusing_by_default(monkeypatch):
 
 
 def test_rework_estimate_drops_the_seed_but_keeps_the_cockpit():
-    jet = Spec(name="Jet", description="grey attack jet", category="aircraft", size_m=-1)
+    jet = Spec(name="Jet", description="grey attack jet", category="aircraft", size_m=-1, cockpit=True)
     full = pricing.estimate(jet)
     re = pricing.estimate_rework(jet, "refinish")
     names = [n for n, _ in re["steps"]]
@@ -312,3 +313,32 @@ def test_provider_balances_and_affordability(monkeypatch):
         providers.check_affordable(140.0, d)
     unknown = {"fal": None, "openrouter": None, "errors": {"fal": "down"}, "checked": 0}
     providers.check_affordable(1e6, unknown)       # an outage never blocks a build
+
+
+def test_cockpit_tub_is_opt_in():
+    jet = Spec(name="Jet", description="grey jet", category="aircraft")
+    assert jet.glass and not jet.cockpit
+    assert Spec(name="Jet", description="grey jet", category="aircraft", cockpit=True).cockpit
+    assert not Spec(name="Car", description="car", category="vehicle", cockpit=True).cockpit
+
+
+def test_reference_estimates_split_the_picture_stage():
+    jet = Spec(name="Jet", description="grey jet", category="aircraft")
+    full, pics, rest = pricing.estimate(jet), pricing.estimate_reference(jet), pricing.estimate_after_reference(jet)
+    assert 0 < pics["usd"] < full["usd"] and 0 < rest["usd"] < full["usd"]
+    assert any(n.startswith("extra views") for n, _ in pics["steps"]) and not any(n.startswith("3D seed") for n, _ in pics["steps"])
+    assert any(n.startswith("3D seed") for n, _ in rest["steps"]) and not any(n.startswith("concept picture") for n, _ in rest["steps"])
+    assert abs(pics["usd"] + rest["usd"] - full["usd"] - 2 * pricing.LLM_CALL_ALLOWANCE_USD) < 1e-6   # overhead counted in both
+
+
+def test_build_reuses_approved_reference_or_fails_loudly(tmp_path):
+    from mastersmith.pipeline import load_reference
+    with pytest.raises(FileNotFoundError):
+        load_reference(str(tmp_path))
+    pic = tmp_path / "ref_0.png"
+    pic.write_bytes(b"x")
+    (tmp_path / "reference.json").write_text(json.dumps({"views": [str(pic)], "urls": ["u"], "checks": []}))
+    assert load_reference(str(tmp_path))["views"] == [str(pic)]
+    pic.unlink()
+    with pytest.raises(FileNotFoundError):
+        load_reference(str(tmp_path))

@@ -141,6 +141,25 @@ PICTURE_STEPS = ("concept picture", "clean up your reference picture", "find a p
                  "second picture attempt")
 
 
+REFERENCE_STEPS = PICTURE_STEPS + ("extra views for multiview seeding",)
+
+
+def estimate_reference(spec):
+    """Worst case of the picture stage alone: the reference picture(s) the customer approves before a mesh is bought."""
+    est = estimate(spec)
+    steps = [(n, u) for n, u in est["steps"] if n.startswith(REFERENCE_STEPS) or n == "director chat overhead"]
+    usd = sum(u for _, u in steps)
+    return {"steps": steps, "usd": round(usd, 4), "credits": config.credits_for_usd(usd)}
+
+
+def estimate_after_reference(spec):
+    """Worst case of a build that reuses approved reference pictures: everything but the picture stage."""
+    est = estimate(spec)
+    steps = [(n, u) for n, u in est["steps"] if not n.startswith(REFERENCE_STEPS)]
+    usd = sum(u for _, u in steps)
+    return {"steps": steps, "usd": round(usd, 4), "credits": config.credits_for_usd(usd)}
+
+
 def estimate_rework(spec, mode="refinish"):
     """Worst case of finishing an EXISTING mesh: no main seed and no reference pictures (a retexture keeps the picture
     steps for its guide picture). The cockpit and part seeds the finish may still buy stay in (an imported A-10 cost

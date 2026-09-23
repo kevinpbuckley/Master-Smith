@@ -37,11 +37,25 @@ Returns the resolved brief (defaults filled in), the worst-case estimate with ea
 balances. Nothing is queued. `GET /v1/estimate?name=..&category=..&description=..` does the same from query
 parameters.
 
+## See the reference picture before buying a mesh
+
+```bash
+REF=$(curl -s -H "$H" -H "Content-Type: application/json" $MS/v1/reference -d '{"spec": {...}}')
+echo "$REF" | jq '.pictures, .checks, .usd_cost'       # "/v1/jobs/<id>/files/ref_0.png" ... fetch and look at them
+DIR=$(echo "$REF" | jq -r .dir)
+```
+
+This runs the picture stage only (tens of seconds, cents) and answers when the pictures are ready. Approve by
+building with `"reference_job": "<dir>"` in the spec: the build seeds from those pictures and draws nothing new.
+Change your mind by calling `/v1/reference` again with a changed description.
+
 ## Build
 
 ```bash
-JOB=$(curl -s -H "$H" -H "Content-Type: application/json" $MS/v1/jobs -d '{"spec": {...}}' | jq -r .job_id)
+JOB=$(curl -s -H "$H" -H "Content-Type: application/json" $MS/v1/jobs -d "{\"spec\": {..., \"reference_job\": \"$DIR\"}}" | jq -r .job_id)
 ```
+
+Leave `reference_job` out to draw the picture and build in one go.
 
 The answer is `{"job_id", "status": "queued", "kind", "estimate_credits"}`, or HTTP 402 with `error` when a provider
 balance (or, on a shared instance, the user's credits) cannot cover the worst case.

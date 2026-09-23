@@ -47,8 +47,15 @@ smith> Brief: SniperRifle, weapon, realistic, Unreal, 60k tris, 1.2 m. Plan: cle
 you>   go
 ```
 
-The right-hand panel follows the build: the log, the probe renders, then the finished model in a viewer with the
-files to download. Output also lands in `out/<Name>_<job>/delivery/`.
+On "go" the director first draws the reference picture (cents) and shows it in the chat with a **Build from this**
+button. The mesh is bought only after you approve the picture; say what to change and it draws again. The build
+then seeds from the approved picture and draws nothing new. Say "skip the preview" to do it in one go.
+
+The dashboard above the chat follows the build: the log, the probe renders, then the finished model in a viewer
+with the files to download. Output also lands in `out/<Name>_<job>/delivery/`.
+
+Aircraft and helicopters get a glass canopy slot by default. The second "cockpit tub" model fitted under the canopy
+is opt-in (`cockpit: true` in the brief); it is a gamble on the tub's fit.
 
 ### Bring your own model
 

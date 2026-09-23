@@ -157,6 +157,30 @@ def submit_build(user, spec_dict, seed=None):
     return _enqueue(user, spec, "build")
 
 
+def run_reference(user, spec_dict):
+    """Stage 1 now, in this request: the reference picture(s) for approval. Registered as a finished job of kind
+    "reference" so its pictures are served like any job's files. Tens of seconds; no Blender, no mesh."""
+    from .pipeline import make_reference_only
+    from .providers import ProviderBalanceLow
+    from .wallet import InsufficientCredits
+    spec = Spec.from_dict({**spec_dict, "reference_job": None})
+    job_id = new_job_id()
+    store.enqueue(job_id, user, "reference", spec.to_dict())
+    store.db.execute("UPDATE jobs SET status='running', started=? WHERE id=?", (time.time(), job_id))
+    store.db.commit()
+    try:
+        r = make_reference_only(spec, user, wallet, log=lambda m: store.append_log(job_id, m), job_id=job_id)
+    except (InsufficientCredits, ProviderBalanceLow) as exc:
+        store.finish(job_id, "refused", error=str(exc))
+        return {"job_id": job_id, "status": "refused", "error": str(exc)}
+    store.finish(job_id, r["status"], result=r, error=r.get("error"))
+    views = (r.get("reference") or {}).get("views") or []
+    return {"job_id": job_id, "dir": r["dir"], "status": r["status"], "error": r.get("error"), "views": views,
+            "pictures": ["/v1/jobs/%s/files/%s" % (job_id, os.path.basename(v)) for v in views],
+            "checks": (r.get("reference") or {}).get("checks"), "source": (r.get("reference") or {}).get("source"),
+            "usd_cost": (r.get("bill") or {}).get("usd_cost")}
+
+
 def submit_import(user, path, spec_dict):
     if not _upload_path_ok(path) or not path.lower().endswith(MESH_EXTENSIONS):
         return {"error": "not an uploaded model file: %s" % path}
@@ -182,7 +206,7 @@ def job_view(row, user):
                         "rig": {k: v for k, v in (r.get("rig") or {}).items() if k != "notes"},
                         "bill": {k: v for k, v in (r.get("bill") or {}).items() if k not in ("fal_calls", "llm_calls", "image_calls")}},
             "files": ["/v1/jobs/%s/files/%s" % (row["id"], f) for f in files],
-            "previews": ["/v1/jobs/%s/files/%s" % (row["id"], f) for f in files if f.startswith("preview_")],
+            "previews": ["/v1/jobs/%s/files/%s" % (row["id"], f) for f in files if f.startswith(("preview_", "ref_"))],
             "glb": next(("/v1/jobs/%s/files/%s" % (row["id"], f) for f in files if f.lower().endswith(".glb") and f.startswith("SM_")), None)}
 
 
@@ -196,6 +220,7 @@ def _director(session_id, user):
             d = Director(user, wallet, log=lambda m: None)
             d.submit = lambda spec_dict: submit_build(user, spec_dict, seed=last_seed(user, d.last_job_id))
             d.import_model = lambda path, spec_dict: submit_import(user, path, spec_dict)
+            d.make_reference = lambda spec_dict: run_reference(user, spec_dict)
             d.job_status = lambda job_id: (lambda row: job_view(row, user) if row else {"error": "unknown job"})(store.job(job_id, user))
             _sessions[key] = {"director": d, "user": user, "touched": now}
         _sessions[key]["touched"] = now
@@ -268,6 +293,7 @@ def chat(body: ChatIn, who=Depends(auth)):
         raise HTTPException(502, "director error: %s" % str(exc)[:300])
     return {"reply": reply, "brief": d.spec.to_dict() if d.spec else None, "balance": wallet.balance(who["user"]),
             "providers": providers.balances(), "last_job": d.last_job_id, "chat_cost_usd": round(d.chat_cost_usd(), 5),
+            "pictures": list(d.last_pictures), "reference_job": (d.reference or {}).get("job_dir"),
             "tools": [{"name": t["name"], "args": t.get("args"), "result": t.get("result")} for t in d.last_tools]}
 
 
@@ -283,6 +309,16 @@ def create_job(body: JobIn, dry_run: bool = False, who=Depends(auth)):
     out = submit_build(who["user"], body.spec)
     if "error" in out:
         raise HTTPException(402, out)
+    return out
+
+
+@app.post("/v1/reference")
+def make_reference_endpoint(body: JobIn, who=Depends(auth)):
+    """Draw the reference picture(s) for a spec now and return them (tens of seconds, cents). Build from them with
+    POST /v1/jobs and "reference_job": <dir> in the spec: the picture stage is then skipped."""
+    out = run_reference(who["user"], body.spec)
+    if out.get("status") != "done":
+        raise HTTPException(402 if out.get("status") == "refused" else 500, out)
     return out
 
 

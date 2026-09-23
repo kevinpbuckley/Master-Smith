@@ -161,7 +161,20 @@ export default function Chat() {
               <div key={m.id} className={`msg ${m.role}`}>
                 {m.parts.map((p, i) => {
                   if (p.type === "text") return <p key={i}>{p.text}</p>;
-                  if (p.type === "data-turn") return <TurnCard key={i} turn={p.data} />;
+                  if (p.type === "data-turn")
+                    return (
+                      <div key={i}>
+                        {p.data.pictures?.length > 0 && (
+                          <Pictures
+                            urls={p.data.pictures}
+                            onApprove={() => sendMessage({ text: "Go: build from this picture." })}
+                            onChange={() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus()}
+                            busy={busy}
+                          />
+                        )}
+                        <TurnCard turn={p.data} />
+                      </div>
+                    );
                   return null;
                 })}
               </div>
@@ -250,6 +263,33 @@ export default function Chat() {
           </form>
         </section>
       </main>
+    </div>
+  );
+}
+
+function Pictures({ urls, onApprove, onChange, busy }: { urls: string[]; onApprove: () => void; onChange: () => void; busy: boolean }) {
+  return (
+    <div className="pictures">
+      <div className="pictures-row">
+        {urls.map((u) => {
+          const src = u.replace(/^\/v1\//, "/api/");
+          return (
+            <a key={u} href={src} target="_blank" rel="noreferrer">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={src} alt="reference picture" />
+            </a>
+          );
+        })}
+      </div>
+      <div className="pictures-actions">
+        <button type="button" onClick={onApprove} disabled={busy}>
+          Build from this
+        </button>
+        <button type="button" className="ghost" onClick={onChange} disabled={busy}>
+          Change something…
+        </button>
+        <span className="dim">The mesh is bought only after you approve the picture.</span>
+      </div>
     </div>
   );
 }
