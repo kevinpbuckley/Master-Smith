@@ -58,7 +58,9 @@ export default function JobPanel({ jobId }: { jobId: string | null }) {
         <span className="dash-title">
           {name} <span className={`status ${status}`}>{status}</span>
         </span>
-        <span className="dash-line mono dim">{open ? job?.id ?? jobId : lastLine}</span>
+        <span className="dash-line mono dim">
+          {open ? `${job?.id ?? jobId} · mesh: ${String(job?.spec?.seed_vendor || "tripo")}` : lastLine}
+        </span>
         <span className="dash-toggle dim">{open ? "▾" : "▸"}</span>
       </div>
 

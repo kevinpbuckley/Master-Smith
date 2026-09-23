@@ -432,6 +432,28 @@ pre.error {
 .error-inline {
   color: var(--bad);
 }
+.models {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+.models label {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: var(--dim);
+  font-size: 12px;
+}
+.models select {
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+  max-width: 220px;
+}
 .accounts {
   color: var(--fg);
 }

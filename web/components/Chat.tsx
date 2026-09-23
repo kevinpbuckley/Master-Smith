@@ -3,8 +3,60 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Attachment, Providers, TurnData } from "@/lib/api";
+import type { Attachment, ModelOptions, Providers, Settings, TurnData } from "@/lib/api";
 import JobPanel from "./JobPanel";
+
+const SETTINGS_KEY = "mastersmith.settings";
+
+function loadSettings(): Settings {
+  try {
+    return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") as Settings;
+  } catch {
+    return {};
+  }
+}
+
+function ModelPicker({
+  options,
+  settings,
+  onChange,
+  busy,
+}: {
+  options: ModelOptions | null;
+  settings: Settings;
+  onChange: (s: Settings) => void;
+  busy: boolean;
+}) {
+  if (!options) return null;
+  const vendor = settings.seed_vendor || options.defaults.seed_vendor;
+  const director = settings.director_model || options.defaults.director_model;
+  const v = options.seed_vendors.find((x) => x.key === vendor);
+  return (
+    <span className="models">
+      <label title={v ? `${v.note}${v.usd !== null ? ` · about $${v.usd.toFixed(2)} a mesh` : ""}` : "mesh vendor"}>
+        Mesh
+        <select value={vendor} disabled={busy} onChange={(e) => onChange({ ...settings, seed_vendor: e.target.value })}>
+          {options.seed_vendors.map((x) => (
+            <option key={x.key} value={x.key}>
+              {x.label}
+              {x.usd !== null ? ` · $${x.usd.toFixed(2)}` : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label title={`Pictures: ${options.pictures.concept} (hard surfaces: ${options.pictures.concept_hard_surface}); vision: ${options.pictures.vision}`}>
+        Director
+        <select value={director} disabled={busy} onChange={(e) => onChange({ ...settings, director_model: e.target.value })}>
+          {options.director_models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </span>
+  );
+}
 
 type SmithMessage = UIMessage<unknown, { turn: TurnData }>;
 
@@ -41,7 +93,26 @@ export default function Chat() {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [me, setMe] = useState<Me | null>(null);
+  const [options, setOptions] = useState<ModelOptions | null>(null);
+  const [settings, setSettings] = useState<Settings>({});
   const bottom = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setSettings(loadSettings());
+    fetch("/api/models", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((o: ModelOptions | null) => setOptions(o))
+      .catch(() => setOptions(null));
+  }, []);
+
+  function changeSettings(s: Settings) {
+    setSettings(s);
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+    } catch {
+      /* private window */
+    }
+  }
   const fileInput = useRef<HTMLInputElement>(null);
 
   const transport = useMemo(() => new DefaultChatTransport<SmithMessage>({ api: "/api/chat" }), []);
@@ -111,7 +182,7 @@ export default function Chat() {
     setText("");
     const sent = attachments.map(({ path, name, kind }) => ({ path, name, kind }));
     setAttachments([]);
-    await sendMessage({ text: label }, { body: { attachments: sent } });
+    await sendMessage({ text: label }, { body: { attachments: sent, settings } });
   }
 
   function reset() {
@@ -128,6 +199,7 @@ export default function Chat() {
           <p className="dim">Prompt in, game-ready 3D model out. Describe an asset, or attach a model to finish it.</p>
         </div>
         <div className="me">
+          <ModelPicker options={options} settings={settings} onChange={changeSettings} busy={busy} />
           {me?.error ? (
             <span className="error-inline">API offline: {me.error}</span>
           ) : me ? (
@@ -167,7 +239,7 @@ export default function Chat() {
                         {p.data.pictures?.length > 0 && (
                           <Pictures
                             urls={p.data.pictures}
-                            onApprove={() => sendMessage({ text: "Go: build from this picture." })}
+                            onApprove={() => sendMessage({ text: "Go: build from this picture." }, { body: { attachments: [], settings } })}
                             onChange={() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus()}
                             busy={busy}
                           />

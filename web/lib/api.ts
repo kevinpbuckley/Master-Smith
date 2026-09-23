@@ -35,7 +35,17 @@ export type Providers = {
   checked: number;
 };
 
+export type ModelOptions = {
+  seed_vendors: { key: string; label: string; model: string; multiview: boolean; note: string; usd: number | null }[];
+  director_models: { id: string; label: string }[];
+  pictures: Record<string, string>;
+  defaults: { seed_vendor: string; director_model: string };
+};
+
+export type Settings = { seed_vendor?: string; director_model?: string };
+
 export type TurnData = {
+  settings: Settings | null;      // what the turn ran with
   brief: Record<string, unknown> | null;
   last_job: string | null;
   balance: number;

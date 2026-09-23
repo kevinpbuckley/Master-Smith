@@ -5,7 +5,12 @@ import { api, type Attachment, type TurnData } from "@/lib/api";
 // own transcript per session, so only the newest user message (plus any attachments) is forwarded. The reply comes
 // back as a UI message stream: the text, then a `data-turn` part with the brief, the queued job and the spend.
 export async function POST(req: Request) {
-  const body = (await req.json()) as { id?: string; messages: UIMessage[]; attachments?: Attachment[] };
+  const body = (await req.json()) as {
+    id?: string;
+    messages: UIMessage[];
+    attachments?: Attachment[];
+    settings?: { seed_vendor?: string; director_model?: string };
+  };
   const last = [...(body.messages ?? [])].reverse().find((m) => m.role === "user");
   const text = (last?.parts ?? [])
     .filter((p): p is { type: "text"; text: string } => p.type === "text")
@@ -21,7 +26,7 @@ export async function POST(req: Request) {
       const r = await api("/v1/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, session_id: sessionId, attachments }),
+        body: JSON.stringify({ message: text, session_id: sessionId, attachments, settings: body.settings ?? {} }),
       });
       if (!r.ok) {
         const detail = (await r.text()).slice(0, 400);
@@ -35,6 +40,7 @@ export async function POST(req: Request) {
       writer.write({ type: "text-delta", id, delta: j.reply || "(no reply)" });
       writer.write({ type: "text-end", id });
       const turn: TurnData = {
+        settings: j.settings ?? null,
         brief: j.brief ?? null,
         last_job: j.last_job ?? null,
         balance: j.balance,

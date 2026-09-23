@@ -1,6 +1,8 @@
 """What each paid call costs (USD, per fal's published prices as of 2026-09-16) and the job estimate
 shown to the user before anything is spent. THIS TABLE IS THE BILL: an endpoint missing here is refused,
 not guessed."""
+import os
+
 from . import config
 
 FAL_PRICES = {
@@ -83,6 +85,38 @@ def price(model, payload=None):
 LLM_CALL_ALLOWANCE_USD = 0.03
 
 
+# The mesh vendors a build can pick (Spec.seed_vendor; empty = the default). Shown in the chat's model selector.
+SEED_VENDORS = [
+    {"key": "tripo", "label": "Tripo H3.1", "model": "tripo3d/h3.1/image-to-3d", "multiview": True,
+     "note": "default: full PBR, thin parts survive, seeds from every approved angle"},
+    {"key": "meshy7mv", "label": "Meshy v7 multi-image", "model": "fal-ai/meshy/v7/multi-image-to-3d", "multiview": True,
+     "note": "sharper geometry from several angles, speckled albedo, about 3x slower"},
+    {"key": "meshy7", "label": "Meshy v7", "model": "fal-ai/meshy/v7/image-to-3d", "multiview": False,
+     "note": "sharper geometry from one picture, speckled albedo"},
+    {"key": "hitem3d", "label": "Hitem3D v2.1", "model": "fal-ai/hitem3d/image-to-3d", "multiview": False,
+     "note": "1536-voxel geometry from one picture"},
+    {"key": "hitem3d3", "label": "Hitem3D v3 (2048)", "model": "hitem3d/hi3d/v3.0/image-to-3d", "multiview": False,
+     "note": "crispest geometry, the best high-poly source for baking, one picture, dear"},
+]
+
+
+def seed_vendor(spec):
+    """The catalogue row a spec's seed will come from."""
+    key = (getattr(spec, "seed_vendor", None) or os.environ.get("MASTERSMITH_SEED_MODEL", "") or "tripo").strip().lower()
+    return next((v for v in SEED_VENDORS if v["key"] == key), SEED_VENDORS[0])
+
+
+def vendor_catalogue():
+    out = []
+    for v in SEED_VENDORS:
+        try:
+            usd = price(v["model"], {"texture_quality": "detailed", "geometry_quality": "detailed"})
+        except Unpriced:
+            usd = None
+        out.append({**v, "usd": usd})
+    return out
+
+
 def estimate(spec):
     """Worst-case USD for one build of `spec`, step by step. Reserved up front, settled to actual."""
     steps = []
@@ -98,11 +132,14 @@ def estimate(spec):
         steps.append(("concept picture", image_price(concept_model(spec))))
     steps.append(("check the picture (vision)", LLM_CALL_ALLOWANCE_USD))
     steps.append(("second picture attempt if the first fails", image_price(config.EDIT_MODEL) + LLM_CALL_ALLOWANCE_USD))
+    vendor = seed_vendor(spec)
     if spec.multiview:
         steps.append(("extra views for multiview seeding", 3 * (image_price(config.EDIT_MODEL) + LLM_CALL_ALLOWANCE_USD)))
-        steps.append(("3D seed (Tripo H3.1 multiview, detailed)", price(config.SEED_MULTIVIEW_MODEL, seed_payload)))
+    if vendor["key"] == "tripo":
+        steps.append(("3D seed (Tripo H3.1%s, detailed)" % (" multiview" if spec.multiview else ""),
+                      price(config.SEED_MULTIVIEW_MODEL if spec.multiview else config.SEED_MODEL, seed_payload)))
     else:
-        steps.append(("3D seed (Tripo H3.1, detailed)", price(config.SEED_MODEL, seed_payload)))
+        steps.append(("3D seed (%s)" % vendor["label"], price(vendor["model"], seed_payload)))
     steps.append(("which end is the front (vision)", LLM_CALL_ALLOWANCE_USD))
     if spec.category == "environment" and spec.style == "realistic":
         steps.append(("tiling PBR material set from the reference (Patina)", price("fal-ai/patina")))

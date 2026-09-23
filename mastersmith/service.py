@@ -72,6 +72,7 @@ class ChatIn(BaseModel):
     message: str
     session_id: str = "default"
     attachments: list[Attachment] = []
+    settings: dict = {}     # per-session choices from the UI: {"seed_vendor": "tripo"|"meshy7mv"|..., "director_model": "<openrouter id>"}
 
 
 class JobIn(BaseModel):
@@ -222,13 +223,38 @@ def _director(session_id, user):
         key = "%s:%s" % (user, session_id)
         if key not in _sessions:
             d = Director(user, wallet, log=lambda m: None)
-            d.submit = lambda spec_dict: submit_build(user, spec_dict, seed=last_seed(user, d.last_job_id))
+            sess = {"director": d, "user": user, "touched": now, "settings": {}}
+
+            def with_settings(spec_dict):
+                """The session's model choices ride on every spec the director sends, unless the brief names one."""
+                sv = sess["settings"].get("seed_vendor")
+                return {**spec_dict, "seed_vendor": spec_dict.get("seed_vendor") or (sv if sv and sv != "tripo" else None)}
+
+            d.submit = lambda spec_dict: submit_build(user, with_settings(spec_dict), seed=last_seed(user, d.last_job_id))
             d.import_model = lambda path, spec_dict: submit_import(user, path, spec_dict)
-            d.make_reference = lambda spec_dict: run_reference(user, spec_dict)
+            d.make_reference = lambda spec_dict: run_reference(user, with_settings(spec_dict))
             d.job_status = lambda job_id: (lambda row: job_view(row, user) if row else {"error": "unknown job"})(store.job(job_id, user))
-            _sessions[key] = {"director": d, "user": user, "touched": now}
+            _sessions[key] = sess
         _sessions[key]["touched"] = now
         return _sessions[key]["director"]
+
+
+def _session_settings(session_id, user):
+    with _lock:
+        return _sessions["%s:%s" % (user, session_id)]["settings"]
+
+
+def model_options():
+    """What the UI may choose from and what is in force now."""
+    director = []
+    for mid, label in ((config.DIRECTOR_MODEL, "default"), (config.PREMIUM_MODEL, "premium")):
+        if mid and mid not in [m["id"] for m in director]:
+            director.append({"id": mid, "label": "%s (%s)" % (mid, label)})
+    return {"seed_vendors": pricing.vendor_catalogue(),
+            "director_models": director,
+            "pictures": {"concept": config.CONCEPT_MODEL, "concept_hard_surface": config.CONCEPT_MODEL_HARD,
+                         "concept_premium": config.CONCEPT_MODEL_PREMIUM, "edit": config.EDIT_MODEL, "vision": config.VISION_MODEL},
+            "defaults": {"seed_vendor": pricing.seed_vendor(Spec(name="X", description="x"))["key"], "director_model": config.DIRECTOR_MODEL}}
 
 
 def _attachment_note(attachments):
@@ -287,9 +313,24 @@ async def upload(file: UploadFile = File(...), who=Depends(auth)):
     return {"path": path, "name": name, "kind": "mesh" if ext in MESH_EXTENSIONS else "image", "bytes": size}
 
 
+@app.get("/v1/models")
+def get_models(who=Depends(auth)):
+    """Mesh vendors (with worst-case seed price), director models and the picture models in force."""
+    return model_options()
+
+
 @app.post("/v1/chat")
 def chat(body: ChatIn, who=Depends(auth)):
     d = _director(body.session_id, who["user"])
+    settings = _session_settings(body.session_id, who["user"])
+    if body.settings:
+        sv = str(body.settings.get("seed_vendor") or "").strip().lower()
+        if sv in {v["key"] for v in pricing.SEED_VENDORS}:
+            settings["seed_vendor"] = sv
+        dm = str(body.settings.get("director_model") or "").strip()
+        if dm:
+            settings["director_model"] = dm
+            d.model = dm
     text = body.message + _attachment_note(body.attachments)
     try:
         reply = d.turn(text)
@@ -298,6 +339,8 @@ def chat(body: ChatIn, who=Depends(auth)):
     return {"reply": reply, "brief": d.spec.to_dict() if d.spec else None, "balance": wallet.balance(who["user"]),
             "providers": providers.balances(), "last_job": d.last_job_id, "chat_cost_usd": round(d.chat_cost_usd(), 5),
             "pictures": list(d.last_pictures), "reference_job": (d.reference or {}).get("job_dir"),
+            "settings": {"seed_vendor": settings.get("seed_vendor") or model_options()["defaults"]["seed_vendor"],
+                         "director_model": d.model},
             "tools": [{"name": t["name"], "args": t.get("args"), "result": t.get("result")} for t in d.last_tools]}
 
 

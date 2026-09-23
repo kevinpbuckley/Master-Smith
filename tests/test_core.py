@@ -351,3 +351,13 @@ def test_remove_parts_are_normalised_phrases():
     assert s.remove_parts == ["the extra cylinder attached to the magazine", "the sling fused to the stock"]
     assert Spec(name="R", description="rifle").remove_parts == []
     assert Spec.from_dict({**s.to_dict(), "remove_parts": None}).remove_parts == []
+
+
+def test_estimate_prices_the_chosen_mesh_vendor():
+    cat = {v["key"]: v for v in pricing.vendor_catalogue()}
+    assert cat["tripo"]["usd"] == 0.6 and cat["hitem3d3"]["usd"] == 2.1
+    default = pricing.estimate(Spec(name="R", description="rifle", category="weapon"))
+    dear = pricing.estimate(Spec(name="R", description="rifle", category="weapon", seed_vendor="hitem3d3"))
+    assert any(n.startswith("3D seed (Tripo") for n, _ in default["steps"])
+    assert any(n == "3D seed (Hitem3D v3 (2048))" for n, _ in dear["steps"]) and dear["usd"] > default["usd"]
+    assert pricing.seed_vendor(Spec(name="R", description="r", seed_vendor="nonsense"))["key"] == "tripo"
