@@ -2150,7 +2150,17 @@ def fit_part(obj, faces, glb, name):
 
 
 ADDED_GROUP = "ms_added"          # vertex group marking added parts: the LOD decimation spares them
-ADDED_PART_SHARE = 0.3            # of the triangle budget, at most, for one added part
+ADDED_PART_SHARE = 0.3            # of the triangle budget, at most, for ALL added parts together (four parts at 30%
+                                  # each starved the Havoc's body down to 646 faces, 2026-09-24)
+ADDED_MATERIALS = set()           # material names of the parts attached so far: not "body" for the next part's floor
+
+
+def part_budgets(parts, budget):
+    """Each part's slice of the added-parts share, by its longest dimension (a 2.3 m shell needs more triangles than a
+    0.45 m pedal set), never under 3,000."""
+    sizes = [max(float(p.get("size_m") or 0), 0.3) for p in parts]
+    total = sum(sizes) or 1.0
+    return [max(3000, int(budget * ADDED_PART_SHARE * s / total)) for s in sizes]
 
 
 def protect_added(mod, o):
@@ -2161,7 +2171,7 @@ def protect_added(mod, o):
         mod.vertex_group_factor = 10.0
 
 
-def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=None, offset=(0.0, 0.0, 0.0)):
+def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=None, offset=(0.0, 0.0, 0.0), part_budget=None):
     """Import a separately seeded part and put it where the brief said, relative to the anchor faces' box: inside
     (scaled to fit the box), on_top / below (resting on the box's top / hanging under its bottom), in_front /
     behind (butted against its +X / -X end). size_m sets the part's longest dimension; 0 fits it to the box.
@@ -2186,7 +2196,11 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=
     # no cavity: those faces would be the belly).
     floor_z, floor_note = None, None
     if place == "inside" and faces is not None and faces.sum() >= 3:
-        body_sel = (~faces) & (cen[:, 0] > lo_p[0] + 0.1 * ext_p[0]) & (cen[:, 0] < hi_p[0] - 0.1 * ext_p[0]) \
+        mat_idx = np.empty(n, np.int32)
+        me.polygons.foreach_get("material_index", mat_idx)
+        added_slots = [i for i, sl in enumerate(obj.material_slots) if sl.material and sl.material.name in ADDED_MATERIALS]
+        not_added = ~np.isin(mat_idx, added_slots) if added_slots else np.ones(n, bool)
+        body_sel = (~faces) & not_added & (cen[:, 0] > lo_p[0] + 0.1 * ext_p[0]) & (cen[:, 0] < hi_p[0] - 0.1 * ext_p[0]) \
             & (np.abs(cen[:, 1] - (lo_p[1] + hi_p[1]) * 0.5) < 0.4 * ext_p[1]) \
             & (cen[:, 2] < lo_p[2]) & (cen[:, 2] >= lo_p[2] - 1.0 * ext_p[2])
         if body_sel.sum() >= 30:
@@ -2268,11 +2282,12 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=
     for slot in p.material_slots:
         if slot.material:
             slot.material.name = "MI_%s_%s" % (NAME, name)
+            ADDED_MATERIALS.add(slot.material.name)
     p.name = name
     # the part's share of the triangle budget: a 155k-triangle cockpit interior joined to a 280k body and decimated to
     # 120k as one mesh lost its joystick, throttles and harness (the Havoc, 2026-09-24). It is reduced on its own to
     # at most ADDED_PART_SHARE of the budget, and its vertices are marked so the LOD passes decimate the body instead.
-    part_budget = max(int(int(args["tri_budget"]) * ADDED_PART_SHARE), 12000)
+    part_budget = int(part_budget or max(int(int(args["tri_budget"]) * ADDED_PART_SHARE), 3000))
     part_tris = blib.tri_count(p)
     if part_tris > part_budget:
         mod = p.modifiers.new("dec_part", "DECIMATE")
@@ -2309,7 +2324,8 @@ if cyl_faces_each and args.get("repair_cylinders"):
         except Exception as exc:  # noqa: BLE001
             log("cylinder repair failed: %s" % str(exc)[:200])
 
-for ap in (args.get("add_parts") or []):
+_part_budgets = part_budgets(args.get("add_parts") or [], int(args["tri_budget"]))
+for _pi, ap in enumerate(args.get("add_parts") or []):
     # the anchor: glass faces, the whole body, or the faces under the anchor phrase's masks
     if ap.get("anchor") == "glass":
         f = glass_faces
@@ -2328,7 +2344,8 @@ for ap in (args.get("add_parts") or []):
         continue
     try:
         res = attach_part(ob, f, ap["glb"], ap.get("name", "Part"), ap.get("place", "inside"), float(ap.get("size_m") or 0),
-                          yaw=int(ap.get("yaw") or 0), blend=ap.get("blend"), offset=ap.get("offset_m") or (0, 0, 0))
+                          yaw=int(ap.get("yaw") or 0), blend=ap.get("blend"), offset=ap.get("offset_m") or (0, 0, 0),
+                          part_budget=_part_budgets[_pi])
         report.setdefault("added_parts", []).append({"name": ap.get("name"), "phrase": ap.get("phrase"), **res})
         log("added %s: %s" % (ap.get("name"), json.dumps(res)))
         raw_tris = blib.tri_count(ob)
@@ -2400,7 +2417,8 @@ for _pass in range(3):
     mod = lod0.modifiers.new("dec2", "DECIMATE")
     mod.ratio = max(0.05, budget / float(have) * 0.98)
     mod.use_collapse_triangulate = True
-    protect_added(mod, lod0)
+    if _pass < 2:
+        protect_added(mod, lod0)          # the last pass shrinks everything: the budget is a promise
     blib.select_only([lod0])
     bpy.ops.object.modifier_apply(modifier="dec2")
     log("LOD0 decimated again: %d -> %d triangles for a budget of %d" % (have, blib.tri_count(lod0), budget))
