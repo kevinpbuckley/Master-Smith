@@ -479,3 +479,18 @@ def test_build_refuses_without_approved_reference_pictures():
         director._set_brief({"description": "a different gunship"})
         assert "no approved reference" in director._build({}).get("error", "")     # the design changed: approve again
         w.close()
+
+
+def test_single_picture_counts_only_when_the_customer_asked():
+    from mastersmith.agent import Director
+    from mastersmith.wallet import Wallet
+    with tempfile.TemporaryDirectory() as d:
+        w = Wallet(os.path.join(d, "w.db"))
+        director = Director("kev", w, log=lambda m: None)
+        director.messages.append({"role": "user", "content": "an Apache helicopter for Unreal"})
+        director._set_brief({"name": "Apache", "description": "AH-64D", "category": "helicopter", "single_picture": True})
+        assert director.spec.multiview is True                      # the model asked for one view; the customer did not
+        director.messages.append({"role": "user", "content": "just one picture is fine, keep it cheap"})
+        director._set_brief({"single_picture": True})
+        assert director.spec.multiview is False
+        w.close()

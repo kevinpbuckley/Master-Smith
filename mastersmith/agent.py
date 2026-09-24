@@ -203,7 +203,12 @@ class Director:
         base = self.spec.to_dict() if self.spec else {}
         a = dict(a)
         if "single_picture" in a:                       # the tool's narrow switch; multiview itself is never exposed
-            base["multiview"] = not bool(a.pop("single_picture"))
+            wants_single = bool(a.pop("single_picture"))
+            # the model reaches for this on its own (the Apache of 2026-09-24 was seeded from one picture); it counts
+            # only when the customer's own last words asked for one picture
+            last_user = next((m.get("content") or "" for m in reversed(self.messages) if m.get("role") == "user"), "")
+            asked = any(w in str(last_user).lower() for w in ("single picture", "one picture", "one view", "single view", "just one"))
+            base["multiview"] = not (wants_single and asked)
         a.pop("multiview", None)
         base.update({k: v for k, v in a.items() if v not in (None, "")})
         # the words in the brief decide the category (a helicopter filed as a prop loses its canopy and cockpit)
