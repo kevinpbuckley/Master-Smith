@@ -79,7 +79,8 @@ A missing attachment does not need a new body either. "Add the cockpit interior 
 "put a 4x scope on the top rail" goes on the brief as `add_parts`: each part names what it is, where it anchors
 (a phrase the segmenter finds on the body, `glass` for the canopy, or `body`), how it sits (`inside`, `on_top`,
 `in_front`, `behind`, `below`) and its longest dimension in metres. The part is pictured and seeded on its own
-(a small Tripo mesh, cents), then fitted in Blender against the anchor's box at that size, its materials named
+(a picture plus one Tripo mesh, about $0.80 a part: the vendor charges the same for a small mesh), then fitted in
+Blender against the anchor's box at that size, its materials named
 `MI_<Asset>_<Part>`, and joined; the body is neither reseeded nor shrunk. The job report lists `added_parts` with
 the scale and box used. A part whose anchor phrase is not found on the renders is placed against the whole body
 and the log says so.

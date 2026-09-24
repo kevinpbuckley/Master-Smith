@@ -85,7 +85,7 @@ with the source job's renders and the faces that would go tinted red. Look at th
 finished job lists `removed_parts` with the face counts; a phrase whose mask found nothing, or covered more than 30%
 of the object, deletes nothing and says so in the log.
 
-Model an attachment on its own and fit it onto the existing mesh (no new body; the part's picture + seed, cents):
+Model an attachment on its own and fit it onto the existing mesh (no new body; the part's picture + one seed, about $0.80):
 
 ```bash
 curl -s -H "$H" -H "Content-Type: application/json" $MS/v1/jobs/refinish -d "{\"source_job\": \"$JOB\", \"overrides\": {\"add_parts\": [{\"name\": \"CockpitInterior\", \"phrase\": \"the cockpit interior: pilot seat, instrument panel and side consoles\", \"anchor\": \"glass\", \"place\": \"inside\", \"size_m\": 2.2}]}}"
