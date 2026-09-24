@@ -437,3 +437,27 @@ def test_material_families_are_gated_by_the_brief_and_photos_are_not_reprojected
     assert not any("blade" in f["phrase"] for f in families_for(rifle, weapon))
     assert any("blade" in f["phrase"] for f in families_for(sword, weapon))
     assert families_for(rifle, {"meta": {}}) is None
+
+
+def test_diagnosis_names_remedies_from_logs_and_reviewer_words(tmp_path):
+    from mastersmith.diagnose import diagnose
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "finish.log").write_text(
+        "[finish] material family the black plastic pistol grip, buttstock and handguard of the rifle: no faces found\n"
+        "[finish] material family the forged iron or steel blade or axe head: 44291 faces -> metal roughness 0.72 (48% of the atlas)\n"
+        "[finish] reprojected the reference onto the mesh: {}\n"
+        "[finish] kill highlights: 1234 painted-specular texels (2.5% of the used atlas) replaced by their surround (ref lum 0.30)\n")
+    spec = Spec(name="M4A1", description="Colt M4A1 carbine", category="weapon")
+    result = {"seed": {"model": "tripo3d/h3.1/image-to-3d"}, "reference": {"views": ["/x/ref_1.png"]},
+              "review": {"score": 4, "issues": ["Severe baked-in lighting and painted-on specular", "Trigger guard fused"]}, "delivery": {}}
+    d = diagnose(result, str(work), spec, reference_source="research")
+    findings = " | ".join(f["finding"] for f in d)
+    assert "seeded from ONE picture" in findings and "matched nothing" in findings and "covered 48%" in findings
+    assert "projected onto the mesh" in findings and "kill_highlights replaced 1234" in findings
+    fixes = [f["fix"] for f in d if f["fix"]]
+    assert {"seed_vendor": "hitem3d3"} in fixes and any(f.get("texture_fixes") == ["kill_highlights", "delight"] for f in fixes)
+    assert d[0]["finding"].startswith("reviewer 4/10")
+    happy = diagnose({"review": {"score": 8, "issues": []}, "delivery": {}, "reference": {"views": ["a", "b"]}, "seed": {"model": "x"}},
+                     str(work), spec, "concept")
+    assert happy[0]["finding"].startswith("reviewer 8/10")

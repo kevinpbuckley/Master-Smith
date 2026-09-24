@@ -153,6 +153,8 @@ def submit_build(user, spec_dict, seed=None, confirm_removal=False):
     spec = Spec.from_dict(spec_dict)
     if seed:
         same_shape = all(spec_dict.get(k) == seed["spec"].get(k) for k in ("description", "category", "style"))
+        if (spec.seed_vendor or "tripo") != (seed["spec"].get("seed_vendor") or "tripo"):
+            same_shape = False                      # another mesh vendor is another mesh: seed again from the same pictures
         new_removals = [p for p in spec.remove_parts if p not in (seed["spec"].get("remove_parts") or [])]
         if new_removals and not confirm_removal:
             source_dir = os.path.dirname(os.path.dirname(seed["glb"])) if os.path.basename(os.path.dirname(seed["glb"])) == "work" \
@@ -219,6 +221,7 @@ def job_view(row, user):
             "summary": {"lods": delivery.get("lods"), "dimensions_m": delivery.get("dimensions_m"),
                         "glass": delivery.get("glass"), "materials": delivery.get("materials"),
                         "review": r.get("review"), "gate": r.get("gate"), "package": r.get("package"),
+                        "diagnosis": r.get("diagnosis"),
                         "rig": {k: v for k, v in (r.get("rig") or {}).items() if k != "notes"},
                         "bill": {k: v for k, v in (r.get("bill") or {}).items() if k not in ("fal_calls", "llm_calls", "image_calls")}},
             "files": ["/v1/jobs/%s/files/%s" % (row["id"], f) for f in files],

@@ -55,7 +55,10 @@ How a job goes:
    - only a change of shape or proportions buys a new mesh: keep the description, put the change in edit_instructions,
      call make_reference so the customer approves the edited picture, then build.
    When the reviewer's verdict is "rebuild", do not rebuild on your own: say which of these remedies fits each issue
-   and ask.
+   and ask. job_status carries a `diagnosis`: findings from the build's own logs (how many angles the seed had, which
+   material families matched, whether a photo was projected on, what the reviewer's words mean) each with a remedy
+   and, when there is one, the exact brief change (`fix`). Read it before proposing anything; quote the findings to
+   the customer in plain words and offer the fixes as numbered options.
 5. When the customer attaches a 3D model file (.glb, .gltf, .fbx, .obj or a delivered .blend), call import_model with
    its path, a PascalCase name, the category and whatever else they told you: the model is oriented, scaled, given
    glass, LODs, collision, maps and previews without buying a new mesh, and later changes work on it like on a build.
@@ -84,6 +87,10 @@ TOOLS = [
             "single_picture": {"type": "boolean", "description": "ONLY when the customer explicitly asks for a single picture / "
                                "one view. Leave it out otherwise: every build draws and seeds from several angles by default."},
             "premium": {"type": "boolean", "description": "Dearer picture model for hard briefs"},
+            "seed_vendor": {"type": "string", "enum": ["tripo", "hitem3d3", "meshy7mv", "meshy7", "hitem3d"],
+                            "description": "The mesh vendor. Leave unset for the default (Tripo). hitem3d3 = Hitem3D v3 at 2048 voxels, the "
+                                           "crispest hard-surface geometry (about $2.10 a seed): the answer to melted rails, fused trigger "
+                                           "guards and blobby detail. A change of vendor seeds again from the approved pictures."},
             "glass": {"type": "boolean", "description": "Give windows/lenses a glass material slot (default for vehicles, weapons, buildings)"},
             "rig": {"type": "boolean", "description": "Rig it: characters get a UE5-named humanoid skeleton with walk/run clips; vehicles get wheel bones; weapons get Muzzle/Grip/Sight socket bones"},
             "notes": {"type": "string"},

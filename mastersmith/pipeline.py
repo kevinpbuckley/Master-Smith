@@ -11,6 +11,7 @@ from . import config, pricing, providers, skills
 from .fal import Fal, FalError
 from .images import Images
 from .llm import LLM
+from .diagnose import diagnose
 from .stages.finish import run_finish
 from .stages.gate import check as gate_check
 from .stages.package import write_package
@@ -212,6 +213,9 @@ def build(spec, user, wallet, log=print, job_id=None):
         result["gate"] = gate_check(spec, report, result["review"], result["delivery_dir"])
         if result["gate"]["warnings"]:
             log("gate: " + "; ".join(result["gate"]["warnings"]))
+        result["diagnosis"] = diagnose(result, job.work_dir, spec, ref.get("source"))
+        for f in result["diagnosis"]:
+            log("diagnosis: %s -> %s" % (f["finding"], f["remedy"]))
         result["package"] = write_package(spec, report, result, result["delivery_dir"])
         result["status"] = "done"
     except Exception as exc:  # noqa: BLE001 - whatever failed, the hold must settle and the report be written
@@ -310,6 +314,9 @@ def rework(seed_path, spec, user, wallet, ref_view=None, mode="refinish", log=pr
         result["gate"] = gate_check(spec, report, result.get("review"), result["delivery_dir"])
         if result["gate"]["warnings"]:
             log("gate: " + "; ".join(result["gate"]["warnings"]))
+        result["diagnosis"] = diagnose(result, job.work_dir, spec)
+        for f in result["diagnosis"]:
+            log("diagnosis: %s -> %s" % (f["finding"], f["remedy"]))
         result["package"] = write_package(spec, report, result, result["delivery_dir"])
         result["status"] = "done"
     except Exception as exc:  # noqa: BLE001
