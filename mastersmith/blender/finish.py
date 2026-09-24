@@ -1427,6 +1427,55 @@ def blend_repaint(obj, faces, old_maps):
 FINISH_ROUGHNESS = {"matte": 0.78, "satin": 0.55, "glossy": 0.3}
 
 
+def clear_painted_reflections(obj, glass_faces, tint=(0.10, 0.11, 0.12)):
+    """The vendor paints the reference's glass highlights onto whatever it models under the canopy; seen through a
+    clear canopy that reads as white blobs (Havoc gunship, 2026-09-23). Inside the canopy's bounding box - the glass
+    faces and what lies behind them - bright, colourless texels are pulled toward a dark cockpit tint, the more the
+    brighter they are; coloured and dark texels (seat, panels, frame paint) stay. Returns stats or None."""
+    me = obj.data
+    n = len(me.polygons)
+    g = np.zeros(n, bool)
+    g[:min(n, len(glass_faces))] = glass_faces[:n]
+    if g.sum() < 20:
+        return None
+    cen = np.empty(n * 3, np.float32)
+    me.polygons.foreach_get("center", cen)
+    cen = cen.reshape(-1, 3)
+    lo, hi = cen[g].min(axis=0), cen[g].max(axis=0)
+    pad = 0.06 * float((hi - lo).max()) + 1e-3
+    inside = np.all((cen >= lo - pad) & (cen <= hi + pad), axis=1)
+    sel = inside | g
+    mask = bake_face_mask(obj, sel)
+    tint_v = np.array(tint, np.float32)
+    texels = 0
+    for slot in obj.material_slots:
+        m = slot.material
+        if not m or not m.node_tree or m.name.startswith("MI_%s_Glass" % NAME):
+            continue
+        bsdf = next((nd for nd in m.node_tree.nodes if nd.type == "BSDF_PRINCIPLED"), None)
+        if not bsdf:
+            continue
+        node, _ch = image_feeding(bsdf.inputs["Base Color"])
+        if node is None or not node.image:
+            continue
+        px = pixels(node.image)
+        h, w = px.shape[:2]
+        mk = resample_nearest(mask, h, w) if mask.shape != (h, w) else mask
+        rgb = px[:, :, :3]
+        L = 0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2]
+        S = rgb.max(axis=2) - rgb.min(axis=2)
+        hot = (mk > 0.5) & (L > 0.5) & (S < 0.25)
+        if not hot.any():
+            continue
+        strength = np.where(hot, np.clip((L - 0.5) / 0.3, 0.0, 1.0), 0.0).astype(np.float32)   # brighter -> darker
+        px[:, :, :3] = strength[..., None] * tint_v[None, None, :] + (1 - strength[..., None]) * rgb
+        node.image.pixels.foreach_set(px.ravel())
+        node.image.pack()
+        node.image.update()
+        texels += int(hot.sum())
+    return {"faces": int(sel.sum()), "glass_faces": int(g.sum()), "texels": texels}
+
+
 def recolor_part(obj, faces, part):
     """Inside the part's UV mask: base colour becomes the wanted flat colour modulated by the old luminance (the
     stippling, wear and panel lines stay), metallic and roughness become the wanted finish."""
@@ -1752,6 +1801,18 @@ for idx, faces in sorted(part_faces_each.items()):
                                                               " metal" if part.get("metal") else "", cover * 100))
     except Exception as exc:  # noqa: BLE001
         log("recolour of %s failed: %s" % (part["phrase"], str(exc)[:160]))
+
+# Painted glass highlights under a clear canopy (aircraft, helicopters, vehicles with a cabin).
+if glass_faces is not None and (args.get("spec") or {}).get("category") in ("aircraft", "helicopter", "vehicle") \
+        and os.environ.get("MASTERSMITH_CLEAR_GLASS_HIGHLIGHTS", "1") != "0":
+    try:
+        _cleared = clear_painted_reflections(ob, glass_faces)
+        if _cleared:
+            report["glass_reflections_cleared"] = _cleared
+            log("glass: %d painted-highlight texels under the canopy pulled toward the cockpit tint (%d faces in the canopy box)" % (
+                _cleared["texels"], _cleared["faces"]))
+    except Exception as exc:  # noqa: BLE001
+        log("glass highlight clean-up failed: %s" % str(exc)[:160])
 
 def fit_cylinder(points):
     """Axis (unit), centre, radius, length and the relative residual of a cylinder through `points`."""
