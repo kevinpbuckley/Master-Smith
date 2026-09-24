@@ -2180,6 +2180,18 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=
     ext_p = hi_p - lo_p
     if ext_p.max() < 1e-4:
         return {"skipped": "degenerate anchor box"}
+    # inside a canopy: the floor is the body's cavity floor under the glass footprint, not the glass's lower edge. The
+    # Havoc's interior stood on the sill line with the cabin hollow for 0.9 m beneath it (2026-09-24). The floor is the
+    # lowest body faces under the footprint, never deeper below the glass than the canopy is tall (a closed canopy has
+    # no cavity: those faces would be the belly).
+    floor_z, floor_note = None, None
+    if place == "inside" and faces is not None and faces.sum() >= 3:
+        body_sel = (~faces) & (cen[:, 0] > lo_p[0] + 0.1 * ext_p[0]) & (cen[:, 0] < hi_p[0] - 0.1 * ext_p[0]) \
+            & (np.abs(cen[:, 1] - (lo_p[1] + hi_p[1]) * 0.5) < 0.4 * ext_p[1]) \
+            & (cen[:, 2] < lo_p[2]) & (cen[:, 2] >= lo_p[2] - 1.0 * ext_p[2])
+        if body_sel.sum() >= 30:
+            floor_z = float(np.percentile(cen[body_sel][:, 2], 8))
+            floor_note = "cavity floor %.2f m under a glass edge at %.2f m (%d body faces)" % (floor_z, lo_p[2], int(body_sel.sum()))
     before = set(bpy.data.objects)
     prepared = bool(blend) and os.path.exists(blend)
     if prepared:
@@ -2231,7 +2243,8 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=
     cx, cy, cz = (lo_p + hi_p) * 0.5
     pcx, pcy, pcz = (plo.x + phi.x) * 0.5, (plo.y + phi.y) * 0.5, (plo.z + phi.z) * 0.5
     if place == "inside":
-        target = (cx, cy, lo_p[2] + (phi.z - plo.z) * 0.5)                 # floor of the box
+        base = floor_z + 0.02 * ext_p[2] if floor_z is not None else lo_p[2]
+        target = (cx, cy, base + (phi.z - plo.z) * 0.5)                    # standing on the cavity floor (else the glass edge)
     elif place == "on_top":
         target = (cx, cy, hi_p[2] + (phi.z - plo.z) * 0.5)
     elif place == "below":
@@ -2265,7 +2278,7 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.join()                     # p is gone after this; read nothing from it
     return {"place": place, "yaw": yaw, "scale": round(float(sc), 3), "size_m": [round(float(v), 3) for v in (phi - plo)],
-            "anchor_box_m": [round(float(v), 3) for v in ext_p], "faces_added": faces_added,
+            "anchor_box_m": [round(float(v), 3) for v in ext_p], "faces_added": faces_added, "floor": floor_note,
             "triangles": {"seed": int(part_tris), "kept": int(tris_kept), "share_of_budget": int(part_budget)}}
 
 
@@ -2337,7 +2350,8 @@ for ps in (args.get("part_seeds") or []):
         log("part seed %s failed: %s" % (ps.get("name"), str(exc)[:200]))
 
 # ---------------------------------------------------------------- LODs (material indices and face attributes survive decimation)
-def decimate_copy(src, ratio, name):
+def decimate_copy(src, ratio, name, protect=True):
+    """protect: spare the added parts (LOD0). The lower LODs shrink everything, or LOD2 cannot reach its count."""
     o = src.copy()
     o.data = src.data.copy()
     o.name = name
@@ -2347,7 +2361,8 @@ def decimate_copy(src, ratio, name):
         mod = o.modifiers.new("dec", "DECIMATE")
         mod.ratio = ratio
         mod.use_collapse_triangulate = True
-        protect_added(mod, o)
+        if protect:
+            protect_added(mod, o)
         blib.select_only([o])
         bpy.ops.object.modifier_apply(modifier="dec")
     return o
@@ -2620,8 +2635,8 @@ except Exception as exc:  # noqa: BLE001
     log("colour harmonisation skipped: %s" % str(exc)[:120])
 
 export_maps(lod0)
-lod1 = decimate_copy(lod0, 0.5, "SM_%s_LOD1" % NAME)
-lod2 = decimate_copy(lod1, 0.5, "SM_%s_LOD2" % NAME)
+lod1 = decimate_copy(lod0, 0.5, "SM_%s_LOD1" % NAME, protect=False)
+lod2 = decimate_copy(lod1, 0.5, "SM_%s_LOD2" % NAME, protect=False)
 bpy.data.objects.remove(ob, do_unlink=True)
 for i, o in enumerate((lod0, lod1, lod2)):
     for p in o.data.polygons:
