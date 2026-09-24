@@ -146,6 +146,33 @@ def run_removal_preview(user, source_dir, spec):
                      "confirm_removal=true; if the red covers the wrong thing, reword remove_parts (or drop it) and try again.")}
 
 
+def _reuse_part_seeds(user, spec):
+    """An added part whose mesh an earlier finished job of this user already bought (same name and phrase) keeps that
+    mesh: a re-finish changes the fit, the budget or the body, not the $0.65 seed (the Havoc interior, 2026-09-24)."""
+    open_parts = [p for p in (spec.add_parts or []) if not p.get("seed")]
+    if not open_parts:
+        return spec
+    for row in store.jobs_for(user, limit=60):
+        if row["status"] != "done":
+            continue
+        full = store.job(row["id"], user) or {}
+        d = ((full.get("result") or {}).get("dir")) or ""
+        prev = {(p.get("name"), p.get("phrase")): p for p in ((full.get("spec") or {}).get("add_parts") or [])}
+        for p in open_parts:
+            if p.get("seed") or (p["name"], p["phrase"]) not in prev:
+                continue
+            for ext in (".fbx", ".glb"):
+                path = os.path.join(d, "part_%s_seed%s" % (p["name"], ext))
+                if d and os.path.exists(path):
+                    p["seed"] = path
+                    pic = os.path.join(d, "part_%s_ref_0.png" % p["name"])
+                    p["picture"] = p.get("picture") or (pic if os.path.exists(pic) else None)
+                    break
+        if all(p.get("seed") for p in open_parts):
+            break
+    return spec
+
+
 def submit_build(user, spec_dict, seed=None, confirm_removal=False):
     """Queue a build. With `seed` (the session's current model): a repaint keeps the mesh, a change that keeps the
     shape re-finishes it, and a change of shape edits the previous picture rather than redrawing from the text.
@@ -160,6 +187,7 @@ def submit_build(user, spec_dict, seed=None, confirm_removal=False):
             source_dir = os.path.dirname(os.path.dirname(seed["glb"])) if os.path.basename(os.path.dirname(seed["glb"])) == "work" \
                 else os.path.dirname(seed["glb"])
             return run_removal_preview(user, source_dir, spec)
+        _reuse_part_seeds(user, spec)
         if spec.retexture:
             return _enqueue(user, spec, "rework", {"seed": seed["glb"], "ref": seed["ref"], "mode": "retexture"})
         if same_shape:
@@ -580,6 +608,7 @@ def refinish_job(body: RefinishIn, confirm_removal: bool = False, who=Depends(au
     new_removals = [p for p in spec.remove_parts if p not in (src["spec"].get("remove_parts") or [])]
     if new_removals and not confirm_removal:
         return run_removal_preview(who["user"], src["result"]["dir"], spec)
+    _reuse_part_seeds(who["user"], spec)
     return _enqueue(who["user"], spec, "refinish", src["result"]["dir"])
 
 

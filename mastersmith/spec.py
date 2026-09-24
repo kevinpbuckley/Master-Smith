@@ -64,7 +64,8 @@ class Spec:
     picture_model: str = None         # OpenRouter image model for this build's pictures (concept, edits, views); None -> config
     texture_fixes: list = None        # scripted texture repairs applied on a re-finish (see TEXTURE_FIXES): free, deterministic
     add_parts: list = None            # parts to model separately and fit onto the existing mesh on a re-finish (see PLACEMENTS):
-                                      # [{"name", "phrase", "anchor", "place", "size_m", "picture"}]; the body is not reseeded
+                                      # [{"name", "phrase", "anchor", "place", "size_m", "picture", "seed"}]; the body is not
+                                      # reseeded; "seed" is a part mesh an earlier job bought, reused as it is
 
     def __post_init__(self):
         # Asset name rule: letters, digits, underscores, hyphens, starting with a letter. Anything
@@ -140,7 +141,8 @@ class Spec:
                 size = 0.0
             added.append({"name": name[:40], "phrase": phrase[:200], "anchor": str(p.get("anchor") or "body").strip()[:200],
                           "place": place if place in PLACEMENTS else "inside", "size_m": max(0.0, size),
-                          "picture": str(p.get("picture") or "").strip() or None})
+                          "picture": str(p.get("picture") or "").strip() or None,
+                          "seed": str(p.get("seed") or "").strip() or None})     # a mesh already bought for this part
         self.add_parts = added[:4]
 
         if self.research is None:

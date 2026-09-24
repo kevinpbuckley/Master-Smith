@@ -104,6 +104,11 @@ def make_added_part(job, spec, part, reference_path):
     small mesh. -> {"glb", "picture", "name", "phrase"} or None. The body is not touched here; the finish fits it."""
     phrase, name = part["phrase"], part.get("name", "Part")
     picture, fixes = None, ""
+    if part.get("seed") and os.path.exists(part["seed"]):
+        # bought by an earlier job of this chat: the fit, not the mesh, is what a re-finish changes
+        job.log("  add %s: reusing the seed from %s" % (name, os.path.basename(os.path.dirname(part["seed"]))))
+        pic = part.get("picture") if part.get("picture") and os.path.exists(part["picture"]) else None
+        return {"glb": part["seed"], "picture": pic, "name": name, "phrase": phrase, "reused": True}
     if part.get("picture") and os.path.exists(part["picture"]):
         picture = part["picture"]
     else:

@@ -510,3 +510,12 @@ def test_add_parts_are_normalised_and_priced():
     assert any(n.startswith("added part Cockpitinterior") for n, _ in with_part["steps"]) and with_part["usd"] > pricing.estimate(plain)["usd"]
     rw = pricing.estimate_rework(s, "refinish")
     assert any(n.startswith("added part") for n, _ in rw["steps"])
+
+
+def test_add_parts_keep_a_bought_seed_and_price_it_as_a_fit():
+    s = Spec(name="Havoc", description="gunship", category="aircraft",
+             add_parts=[{"name": "CockpitInterior", "phrase": "the cockpit interior", "anchor": "glass", "seed": "/x/part_CockpitInterior_seed.fbx"}])
+    assert s.add_parts[0]["seed"] == "/x/part_CockpitInterior_seed.fbx"
+    steps = dict(pricing.estimate(s)["steps"])
+    fit = [k for k in steps if k.startswith("added part CockpitInterior")]
+    assert fit and "already bought" in fit[0] and steps[fit[0]] < 0.05

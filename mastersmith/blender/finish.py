@@ -2149,6 +2149,18 @@ def fit_part(obj, faces, glb, name):
     return {"scale": round(float(sc), 3), "box_m": [round(float(v), 3) for v in ext_p], "faces_replaced": int(faces.sum())}
 
 
+ADDED_GROUP = "ms_added"          # vertex group marking added parts: the LOD decimation spares them
+ADDED_PART_SHARE = 0.3            # of the triangle budget, at most, for one added part
+
+
+def protect_added(mod, o):
+    """The decimate modifier spends its collapses on the body, not on an added part (vertex group weight 1 -> cost x10)."""
+    if ADDED_GROUP in o.vertex_groups:
+        mod.vertex_group = ADDED_GROUP
+        mod.invert_vertex_group = True
+        mod.vertex_group_factor = 10.0
+
+
 def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=None):
     """Import a separately seeded part and put it where the brief said, relative to the anchor faces' box: inside
     (scaled to fit the box), on_top / below (resting on the box's top / hanging under its bottom), in_front /
@@ -2234,12 +2246,27 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=
         if slot.material:
             slot.material.name = "MI_%s_%s" % (NAME, name)
     p.name = name
+    # the part's share of the triangle budget: a 155k-triangle cockpit interior joined to a 280k body and decimated to
+    # 120k as one mesh lost its joystick, throttles and harness (the Havoc, 2026-09-24). It is reduced on its own to
+    # at most ADDED_PART_SHARE of the budget, and its vertices are marked so the LOD passes decimate the body instead.
+    part_budget = max(int(int(args["tri_budget"]) * ADDED_PART_SHARE), 12000)
+    part_tris = blib.tri_count(p)
+    if part_tris > part_budget:
+        mod = p.modifiers.new("dec_part", "DECIMATE")
+        mod.ratio = part_budget / float(part_tris)
+        mod.use_collapse_triangulate = True
+        blib.select_only([p])
+        bpy.ops.object.modifier_apply(modifier="dec_part")
+    vg = p.vertex_groups.new(name=ADDED_GROUP)
+    vg.add(list(range(len(p.data.vertices))), 1.0, "REPLACE")
     faces_added = int(len(p.data.polygons))
+    tris_kept = blib.tri_count(p)
     blib.select_only([obj, p])
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.join()                     # p is gone after this; read nothing from it
     return {"place": place, "yaw": yaw, "scale": round(float(sc), 3), "size_m": [round(float(v), 3) for v in (phi - plo)],
-            "anchor_box_m": [round(float(v), 3) for v in ext_p], "faces_added": faces_added}
+            "anchor_box_m": [round(float(v), 3) for v in ext_p], "faces_added": faces_added,
+            "triangles": {"seed": int(part_tris), "kept": int(tris_kept), "share_of_budget": int(part_budget)}}
 
 
 if cyl_faces_each and args.get("repair_cylinders"):
@@ -2320,6 +2347,7 @@ def decimate_copy(src, ratio, name):
         mod = o.modifiers.new("dec", "DECIMATE")
         mod.ratio = ratio
         mod.use_collapse_triangulate = True
+        protect_added(mod, o)
         blib.select_only([o])
         bpy.ops.object.modifier_apply(modifier="dec")
     return o
@@ -2346,6 +2374,7 @@ for _pass in range(3):
     mod = lod0.modifiers.new("dec2", "DECIMATE")
     mod.ratio = max(0.05, budget / float(have) * 0.98)
     mod.use_collapse_triangulate = True
+    protect_added(mod, lod0)
     blib.select_only([lod0])
     bpy.ops.object.modifier_apply(modifier="dec2")
     log("LOD0 decimated again: %d -> %d triangles for a budget of %d" % (have, blib.tri_count(lod0), budget))
