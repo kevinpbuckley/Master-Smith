@@ -1278,6 +1278,34 @@ def material_pass(found, mat, profile, reference_path):
             log("de-light: low-frequency shading std %.3f -> %.3f (radius %d px, strength %.1f)" % (before_std, float(low2[um].std()), rad, strength))
             if L is not None:
                 L = lum2
+    # ---- painted specular: bright, colourless speckles and streaks the vendor painted where its lights hit (rails,
+    # receiver, barrel of the M4A1, 2026-09-24). The low-frequency de-light cannot reach them. Each is replaced by the
+    # colour around it (a normalised blur that ignores the speckles), so the engine's lights make the highlights
+    # instead. Asked for with texture_fixes "kill_highlights".
+    if "BC" in found and "kill_highlights" in TEXTURE_FIXES:
+        node, _ch = found["BC"]
+        img_bc = node.image
+        px_bc = pixels(img_bc)
+        rgb = px_bc[:, :, :3]
+        lum = 0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2]
+        sat = rgb.max(axis=2) - rgb.min(axis=2)
+        used = lum > 0.03
+        ref = float(np.percentile(lum[used], 60)) if used.sum() > 1000 else 0.3
+        hot = used & (lum > max(0.45, ref * 1.8)) & (sat < 0.22)
+        if hot.sum() > 50:
+            keep = (used & ~hot).astype(np.float32)
+            rad = 6
+            fill = np.stack([gauss(rgb[:, :, c] * keep, rad) / np.maximum(gauss(keep, rad), 1e-3) for c in range(3)], axis=2)
+            rgb[hot] = np.clip(fill[hot] * 0.92, 0, 1)             # a touch darker than the surround: a highlight was there
+            px_bc[:, :, :3] = rgb
+            img_bc.pixels.foreach_set(px_bc.ravel())
+            img_bc.pack()
+            img_bc.update()
+            out["highlights_killed"] = int(hot.sum())
+            log("kill highlights: %d painted-specular texels (%.1f%% of the used atlas) replaced by their surround (ref lum %.2f)" % (
+                int(hot.sum()), hot.sum() / max(used.sum(), 1) * 100, ref))
+            if L is not None:
+                L = 0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2]
     # ---- roughness
     if "R" in found:
         node, channel = found["R"]

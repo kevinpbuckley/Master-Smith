@@ -11,6 +11,7 @@ TEXTURE_FIXES = {
     "delight": "remove baked-in lighting and painted shadows/highlights from the base colour (strong de-light)",
     "clear_glass_highlights": "darken the reflections the vendor painted on the cockpit interior under a clear canopy",
     "dark_canopy": "make the canopy/windows an opaque dark tint instead of clear glass (hides a hollow interior)",
+    "kill_highlights": "replace bright colourless speckles and streaks (painted specular on rails, receivers, barrels) with the surrounding colour",
 }
 
 DEFAULT_TRIS = {"weapon": 60000, "vehicle": 120000, "aircraft": 120000, "helicopter": 120000, "character": 80000, "prop": 30000, "environment": 80000}

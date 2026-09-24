@@ -396,7 +396,7 @@ def test_texture_fixes_are_a_known_catalogue():
     s = Spec(name="Jet", description="grey jet", category="aircraft", texture_fixes=["delight", " Dark_Canopy ", "nonsense", "delight"])
     assert s.texture_fixes == ["delight", "dark_canopy"]
     assert Spec(name="Jet", description="grey jet").texture_fixes == []
-    assert set(TEXTURE_FIXES) == {"delight", "clear_glass_highlights", "dark_canopy"}
+    assert set(TEXTURE_FIXES) == {"delight", "clear_glass_highlights", "dark_canopy", "kill_highlights"}
 
 
 def test_director_ask_records_the_question_and_options():
