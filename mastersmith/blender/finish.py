@@ -2201,6 +2201,9 @@ def line_cavity(obj, glass, floor_z):
     me = obj.data
     bm = bmesh.new()
     bm.from_mesh(me)
+    # the weight layer first: adding a layer reallocates every vertex and kills the references taken before it
+    # ("BMVert has been removed" on the Havoc, whose mesh had no vertex groups yet, 2026-09-24)
+    deform = bm.verts.layers.deform.verify()
     bm.faces.ensure_lookup_table()
     bm.verts.ensure_lookup_table()
     nf = len(bm.faces)
@@ -2230,7 +2233,6 @@ def line_cavity(obj, glass, floor_z):
     me.materials.append(mat)
     slot = len(me.materials) - 1
     vg = obj.vertex_groups.get(ADDED_GROUP) or obj.vertex_groups.new(name=ADDED_GROUP)
-    deform = bm.verts.layers.deform.verify()
     below = {}
     for vi, v in rim_verts.items():
         nx, ny = c + (np.array([v.co.x, v.co.y]) - c) * 0.97      # a hair inside the rim: the wall stays in the hull
@@ -2427,7 +2429,8 @@ for _pi, ap in enumerate(args.get("add_parts") or []):
             log("cabin lining: %s" % json.dumps(res))
             raw_tris = blib.tri_count(ob)
         except Exception as exc:  # noqa: BLE001 - the parts still go in
-            log("cabin lining failed: %s" % str(exc)[:200])
+            import traceback as _tb
+            log("cabin lining failed: %s | %s" % (str(exc)[:200], " / ".join(_tb.format_exc().strip().splitlines()[-4:])[:400]))
     # the anchor: glass faces, the whole body, or the faces under the anchor phrase's masks
     if ap.get("anchor") == "glass":
         f = glass_faces
@@ -2441,7 +2444,7 @@ for _pi, ap in enumerate(args.get("add_parts") or []):
             f = None
     if f is not None and len(f) != len(ob.data.polygons):
         f = np.concatenate([f, np.zeros(max(0, len(ob.data.polygons) - len(f)), bool)])[:len(ob.data.polygons)]
-    if not os.path.exists(ap.get("glb", "")):
+    if not os.path.exists(ap.get("glb") or "") and not os.path.exists(ap.get("blend") or ""):
         log("add %s: no seed mesh" % ap.get("name"))
         continue
     try:
