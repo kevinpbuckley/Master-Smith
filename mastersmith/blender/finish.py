@@ -2171,6 +2171,107 @@ def protect_added(mod, o):
         mod.vertex_group_factor = 10.0
 
 
+def cavity_floor(obj, faces, cen, lo_p, hi_p, ext_p):
+    """The floor under a glass anchor: the highest dense 0.2 m layer of body faces (not glass, not added parts) under
+    the footprint, never deeper below the glass than the canopy is tall. -> (z, note) or (None, None)."""
+    n = len(obj.data.polygons)
+    mat_idx = np.empty(n, np.int32)
+    obj.data.polygons.foreach_get("material_index", mat_idx)
+    added_slots = [i for i, sl in enumerate(obj.material_slots) if sl.material and sl.material.name in ADDED_MATERIALS]
+    not_added = ~np.isin(mat_idx, added_slots) if added_slots else np.ones(n, bool)
+    body_sel = (~faces) & not_added & (cen[:, 0] > lo_p[0] + 0.1 * ext_p[0]) & (cen[:, 0] < hi_p[0] - 0.1 * ext_p[0]) \
+        & (np.abs(cen[:, 1] - (lo_p[1] + hi_p[1]) * 0.5) < 0.4 * ext_p[1]) \
+        & (cen[:, 2] < lo_p[2]) & (cen[:, 2] >= lo_p[2] - 1.0 * ext_p[2])
+    if body_sel.sum() < 30:
+        return None, None
+    zs = cen[body_sel][:, 2]
+    step = max(0.2, 0.08 * ext_p[2])
+    edges = np.arange(zs.min(), lo_p[2] + step, step)
+    counts, _ = np.histogram(zs, bins=edges)
+    dense = [i for i, c in enumerate(counts) if c >= 0.15 * len(zs)]
+    top_band = max(dense) if dense else int(np.argmax(counts))
+    floor_z = max(float(edges[top_band + 1]), lo_p[2] - 0.6 * ext_p[2])
+    return floor_z, "cavity floor %.2f m under a glass edge at %.2f m (%d body faces, densest layer)" % (floor_z, lo_p[2], int(body_sel.sum()))
+
+
+def line_cavity(obj, glass, floor_z):
+    """Enclose the cabin: the hull is one skin, so through the glass one looked past the seat into the fuselage void
+    (the Havoc, 2026-09-24). Walls drop from the glass rim to the cavity floor and a floor caps them, all facing into
+    the cabin, in a dark matte material. Deterministic; no vendor."""
+    me = obj.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.faces.ensure_lookup_table()
+    bm.verts.ensure_lookup_table()
+    nf = len(bm.faces)
+    g = np.zeros(nf, bool)
+    g[:min(nf, len(glass))] = np.asarray(glass, bool)[:nf]
+    rim = []
+    for e in bm.edges:
+        fs = e.link_faces
+        if len(fs) == 2 and g[fs[0].index] != g[fs[1].index]:
+            rim.append(e)
+        elif len(fs) == 1 and g[fs[0].index]:
+            rim.append(e)
+    if len(rim) < 8:
+        bm.free()
+        return {"skipped": "no glass rim"}
+    rim_verts = {v.index: v for e in rim for v in e.verts}
+    xy = np.array([[v.co.x, v.co.y] for v in rim_verts.values()], np.float64)
+    c = xy.mean(axis=0)
+    zr = float(np.mean([v.co.z for v in rim_verts.values()]))
+    if floor_z is None or floor_z >= zr - 0.05:
+        floor_z = zr - 0.5
+    mat = bpy.data.materials.new("MI_%s_CabinLining" % NAME)
+    mat.use_nodes = True
+    b = next(nd for nd in mat.node_tree.nodes if nd.type == "BSDF_PRINCIPLED")
+    b.inputs["Base Color"].default_value = (0.05, 0.05, 0.055, 1.0)
+    b.inputs["Roughness"].default_value = 0.8
+    me.materials.append(mat)
+    slot = len(me.materials) - 1
+    vg = obj.vertex_groups.get(ADDED_GROUP) or obj.vertex_groups.new(name=ADDED_GROUP)
+    deform = bm.verts.layers.deform.verify()
+    below = {}
+    for vi, v in rim_verts.items():
+        nx, ny = c + (np.array([v.co.x, v.co.y]) - c) * 0.97      # a hair inside the rim: the wall stays in the hull
+        nv = bm.verts.new((float(nx), float(ny), float(floor_z)))
+        nv[deform][vg.index] = 1.0
+        below[vi] = nv
+    walls = []
+    for e in rim:
+        a, bb = e.verts
+        try:
+            walls.append(bm.faces.new((a, bb, below[bb.index], below[a.index])))
+        except ValueError:
+            pass
+    newset = set(below.values())
+    bottom = [e for e in bm.edges if e.verts[0] in newset and e.verts[1] in newset and len(e.link_faces) == 1]
+    floor = []
+    try:
+        floor = list(bmesh.ops.holes_fill(bm, edges=bottom, sides=0).get("faces", []))
+    except Exception:  # noqa: BLE001
+        floor = []
+    if not floor:
+        try:
+            floor = list(bmesh.ops.triangle_fill(bm, use_beauty=True, use_dissolve=False, edges=bottom).get("geom", []))
+            floor = [f for f in floor if isinstance(f, bmesh.types.BMFace)]
+        except Exception:  # noqa: BLE001
+            floor = []
+    bm.normal_update()
+    cc = Vector((float(c[0]), float(c[1]), (zr + floor_z) * 0.5))
+    for f in walls + floor:
+        f.material_index = slot
+        f.smooth = False
+        if (cc - f.calc_center_median()).dot(f.normal) < 0:
+            f.normal_flip()
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
+    ADDED_MATERIALS.add(mat.name)
+    return {"walls": len(walls), "floor_faces": len(floor), "rim_vertices": len(rim_verts), "rim_z_mean": round(zr, 3),
+            "floor_z": round(float(floor_z), 3)}
+
+
 def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=None, offset=(0.0, 0.0, 0.0), part_budget=None):
     """Import a separately seeded part and put it where the brief said, relative to the anchor faces' box: inside
     (scaled to fit the box), on_top / below (resting on the box's top / hanging under its bottom), in_front /
@@ -2196,25 +2297,7 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=
     # no cavity: those faces would be the belly).
     floor_z, floor_note = None, None
     if place == "inside" and faces is not None and faces.sum() >= 3:
-        mat_idx = np.empty(n, np.int32)
-        me.polygons.foreach_get("material_index", mat_idx)
-        added_slots = [i for i, sl in enumerate(obj.material_slots) if sl.material and sl.material.name in ADDED_MATERIALS]
-        not_added = ~np.isin(mat_idx, added_slots) if added_slots else np.ones(n, bool)
-        body_sel = (~faces) & not_added & (cen[:, 0] > lo_p[0] + 0.1 * ext_p[0]) & (cen[:, 0] < hi_p[0] - 0.1 * ext_p[0]) \
-            & (np.abs(cen[:, 1] - (lo_p[1] + hi_p[1]) * 0.5) < 0.4 * ext_p[1]) \
-            & (cen[:, 2] < lo_p[2]) & (cen[:, 2] >= lo_p[2] - 1.0 * ext_p[2])
-        if body_sel.sum() >= 30:
-            # the floor is the highest 0.2 m layer that holds a real share of those faces (the hull skin under the
-            # cockpit); a low percentile found the chin details and put the Havoc's interior at 0.28 m (2026-09-24)
-            zs = cen[body_sel][:, 2]
-            step = max(0.2, 0.08 * ext_p[2])
-            edges = np.arange(zs.min(), lo_p[2] + step, step)
-            counts, _ = np.histogram(zs, bins=edges)
-            dense = [i for i, c in enumerate(counts) if c >= 0.15 * len(zs)]
-            top_band = max(dense) if dense else int(np.argmax(counts))
-            floor_z = float(edges[top_band + 1])
-            floor_z = max(floor_z, lo_p[2] - 0.6 * ext_p[2])
-            floor_note = "cavity floor %.2f m under a glass edge at %.2f m (%d body faces, densest layer)" % (floor_z, lo_p[2], int(body_sel.sum()))
+        floor_z, floor_note = cavity_floor(obj, faces, cen, lo_p, hi_p, ext_p)
     before = set(bpy.data.objects)
     prepared = bool(blend) and os.path.exists(blend)
     if prepared:
@@ -2325,7 +2408,26 @@ if cyl_faces_each and args.get("repair_cylinders"):
             log("cylinder repair failed: %s" % str(exc)[:200])
 
 _part_budgets = part_budgets(args.get("add_parts") or [], int(args["tri_budget"]))
+_cabin_lined = False
 for _pi, ap in enumerate(args.get("add_parts") or []):
+    if ap.get("anchor") == "glass" and ap.get("place", "inside") == "inside" and glass_faces is not None \
+            and glass_faces.sum() >= 3 and not _cabin_lined:
+        _cabin_lined = True
+        try:
+            _n = len(ob.data.polygons)
+            _cen = np.empty(_n * 3, np.float32)
+            ob.data.polygons.foreach_get("center", _cen)
+            _cen = _cen.reshape(-1, 3)
+            _gf = np.concatenate([glass_faces, np.zeros(max(0, _n - len(glass_faces)), bool)])[:_n]
+            _pts = main_cluster(_cen[_gf], max(blib.dims(ob)[1].length * 0.02, 1e-3))
+            _lo, _hi = np.percentile(_pts, 2, axis=0), np.percentile(_pts, 98, axis=0)
+            _fz, _ = cavity_floor(ob, _gf, _cen, _lo, _hi, _hi - _lo)
+            res = line_cavity(ob, _gf, _fz)
+            report["cabin_lining"] = res
+            log("cabin lining: %s" % json.dumps(res))
+            raw_tris = blib.tri_count(ob)
+        except Exception as exc:  # noqa: BLE001 - the parts still go in
+            log("cabin lining failed: %s" % str(exc)[:200])
     # the anchor: glass faces, the whole body, or the faces under the anchor phrase's masks
     if ap.get("anchor") == "glass":
         f = glass_faces
