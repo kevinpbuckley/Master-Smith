@@ -103,3 +103,36 @@ def test_add_parts_fits_a_seed_onto_the_body():
         assert abs(max(added[0]["size_m"]) - 0.3) < 0.02                  # the spec's size wins
         assert rep["dimensions_m"][0] > 0.99                                # the body was not shrunk
         assert rep["dimensions_m"][2] > 0.08 + 0.03                         # taller: the rack sits on top
+
+
+def test_add_parts_from_a_prepared_part_with_a_yaw():
+    """The part goes through its own prepare pass (as the stage does), is appended from that .blend and turned by the
+    facing yaw; it still lands on top at the asked size."""
+    with tempfile.TemporaryDirectory() as d:
+        make = os.path.join(d, "make.py")
+        open(make, "w").write(MAKE_GLB)
+        glb = os.path.join(d, "seed.glb")
+        blender(make, glb)
+        work, out = os.path.join(d, "work"), os.path.join(d, "delivery")
+        common = {"name": "TestBox", "work_dir": work, "out_dir": out, "tri_budget": 4000, "size_m": 1.0,
+                  "engine": "unreal", "forward_axis": "long", "origin": "center", "glb": glb, "probe_size": 256, "render_size": 256}
+        a1 = os.path.join(d, "prepare.json")
+        json.dump(common, open(a1, "w"))
+        blender(str(config.ROOT / "mastersmith" / "blender" / "prepare.py"), a1)
+        part_dir = os.path.join(work, "part_Rack")
+        a_part = os.path.join(d, "part_prepare.json")
+        json.dump({"name": "Rack", "work_dir": part_dir, "glb": glb, "size_m": 0.3, "forward_axis": "long", "origin": "center",
+                   "probe_size": 128}, open(a_part, "w"))
+        blender(str(config.ROOT / "mastersmith" / "blender" / "prepare.py"), a_part)
+        assert os.path.exists(os.path.join(part_dir, "work.blend")) and os.path.exists(os.path.join(part_dir, "probe_negx.png"))
+        json.dump({"yaw": 0, "facing": {"reason": "test"}, "regions": {}}, open(os.path.join(work, "decision.json"), "w"))
+        a2 = os.path.join(d, "finish.json")
+        json.dump({**common, "add_parts": [{"index": 0, "name": "Rack", "phrase": "a roof rack", "anchor": "body", "place": "on_top",
+                                            "size_m": 0.3, "glb": glb, "blend": os.path.join(part_dir, "work.blend"), "yaw": 180}]},
+                  open(a2, "w"))
+        blender(str(config.ROOT / "mastersmith" / "blender" / "finish.py"), a2)
+        rep = json.load(open(os.path.join(out, "report.json")))
+        added = rep.get("added_parts") or []
+        assert added and added[0]["yaw"] == 180 and added[0]["faces_added"] > 0
+        assert abs(max(added[0]["size_m"]) - 0.3) < 0.02
+        assert rep["dimensions_m"][2] > 0.08 + 0.03

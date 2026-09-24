@@ -2149,7 +2149,7 @@ def fit_part(obj, faces, glb, name):
     return {"scale": round(float(sc), 3), "box_m": [round(float(v), 3) for v in ext_p], "faces_replaced": int(faces.sum())}
 
 
-def attach_part(obj, faces, glb, name, place="inside", size_m=0.0):
+def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=None):
     """Import a separately seeded part and put it where the brief said, relative to the anchor faces' box: inside
     (scaled to fit the box), on_top / below (resting on the box's top / hanging under its bottom), in_front /
     behind (butted against its +X / -X end). size_m sets the part's longest dimension; 0 fits it to the box.
@@ -2169,7 +2169,16 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0):
     if ext_p.max() < 1e-4:
         return {"skipped": "degenerate anchor box"}
     before = set(bpy.data.objects)
-    if glb.lower().endswith(".fbx"):
+    prepared = bool(blend) and os.path.exists(blend)
+    if prepared:
+        # the part's own prepare pass already put its long axis on X, scaled it and centred it; the facing check
+        # then said which end is the front (yaw). Appending keeps its materials and packed images.
+        with bpy.data.libraries.load(os.path.abspath(blend), link=False) as (src, dst):
+            dst.objects = list(src.objects)
+        for o in dst.objects:
+            if o is not None and o.type == "MESH":
+                bpy.context.scene.collection.objects.link(o)
+    elif glb.lower().endswith(".fbx"):
         bpy.ops.import_scene.fbx(filepath=os.path.abspath(glb))
     else:
         bpy.ops.import_scene.gltf(filepath=os.path.abspath(glb))
@@ -2191,11 +2200,13 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0):
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     plo, phi = blib.dims(p)
     pext = phi - plo
-    # the part's long axis follows the body's (+X), like every seed the prepare pass oriented
-    if pext.y > pext.x * 1.15:
-        blib.apply_yaw(p, 90)
-        plo, phi = blib.dims(p)
-        pext = phi - plo
+    # the part's long axis follows the body's (+X), the same turn the prepare pass makes; then the facing check's yaw
+    if not prepared and pext.y > pext.x * 1.15:
+        blib.apply_yaw(p, -90)
+    if yaw:
+        blib.apply_yaw(p, yaw)
+    plo, phi = blib.dims(p)
+    pext = phi - plo
     if size_m and size_m > 0:
         sc = float(size_m) / max(max(pext.x, pext.y, pext.z), 1e-6)
     elif place == "inside":
@@ -2227,7 +2238,7 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0):
     blib.select_only([obj, p])
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.join()                     # p is gone after this; read nothing from it
-    return {"place": place, "scale": round(float(sc), 3), "size_m": [round(float(v), 3) for v in (phi - plo)],
+    return {"place": place, "yaw": yaw, "scale": round(float(sc), 3), "size_m": [round(float(v), 3) for v in (phi - plo)],
             "anchor_box_m": [round(float(v), 3) for v in ext_p], "faces_added": faces_added}
 
 
@@ -2265,7 +2276,8 @@ for ap in (args.get("add_parts") or []):
         log("add %s: no seed mesh" % ap.get("name"))
         continue
     try:
-        res = attach_part(ob, f, ap["glb"], ap.get("name", "Part"), ap.get("place", "inside"), float(ap.get("size_m") or 0))
+        res = attach_part(ob, f, ap["glb"], ap.get("name", "Part"), ap.get("place", "inside"), float(ap.get("size_m") or 0),
+                          yaw=int(ap.get("yaw") or 0), blend=ap.get("blend"))
         report.setdefault("added_parts", []).append({"name": ap.get("name"), "phrase": ap.get("phrase"), **res})
         log("added %s: %s" % (ap.get("name"), json.dumps(res)))
         raw_tris = blib.tri_count(ob)

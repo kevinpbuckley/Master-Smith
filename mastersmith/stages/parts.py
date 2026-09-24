@@ -49,6 +49,54 @@ def make_part_seed(job, spec, part, reference_path):
 
 INTERIOR_WORDS = ("cockpit", "cabin", "interior", "seat", "console", "dashboard", "instrument")
 
+ADD_CHECK = """Is this a clear picture of ONLY {part}, whole, isolated on a plain white background, with NO hull, fuselage, body,
+engines, canopy or any other part of the vehicle or object it belongs to around it (a cockpit interior means the seat,
+panel, consoles and floor pan alone, not the nose section they sit in)?
+Answer JSON only: {{"ok": true/false, "score": 1-10, "fixes": "one sentence"}}"""
+
+PART_FRONT_PROMPT = """These 4 pictures show the same 3D model of a part: {part}. It belongs on a {noun}.
+They were taken from its four horizontal sides. Which picture looks straight at the part's FRONT, meaning the end that
+points the same way as the {noun}'s nose or muzzle when the part is fitted ({hint})?
+Answer with JSON only: {{"front": "A" | "B" | "C" | "D", "confidence": 0-1, "reason": "few words"}}"""
+
+FRONT_HINTS = (("cockpit", "the instrument panel the pilot looks at is the front, the seat back is at the rear"),
+               ("seat", "the seat faces forward"), ("interior", "the dashboard is the front, the seat back the rear"),
+               ("scope", "the large objective lens is the front, the eyepiece the rear"),
+               ("suppressor", "the closed muzzle end is the front"), ("stock", "the butt pad is the rear"),
+               ("pod", "the rounded nose is the front"), ("gun", "the muzzle is the front"),
+               ("turret", "the barrel points forward"))
+
+
+def orient_added_part(job, spec, part, glb):
+    """Give the part the same treatment as the body's prepare pass (long axis -> X, scaled to its size_m, centred,
+    four probe renders) and ask the vision model which side is its front: a Tripo seed faces any way it likes, and
+    the Havoc's cockpit interior went in backwards when the long axis alone was aligned (2026-09-24).
+    -> {"blend": oriented part, "yaw": degrees to turn it so its front points +X} or None when the pass fails."""
+    from .finish import _blender
+    from .probe import LETTERS, YAW_FOR
+    name = part.get("name", "Part")
+    part_dir = os.path.join(job.work_dir, "part_%s" % name)
+    size = float(part.get("size_m") or 0) or -1.0        # -1: keep the seed's own size; the fit scales it later
+    _blender(job, "prepare.py", {"name": name, "work_dir": part_dir, "glb": glb, "size_m": size, "forward_axis": "long",
+                                 "origin": "center", "probe_size": 448}, "part_%s_prepare" % name)
+    if not os.path.exists(os.path.join(part_dir, "work.blend")):
+        return None
+    views = ["posx", "negx", "posy", "negy"]
+    files = [os.path.join(part_dir, "probe_%s.png" % v) for v in views]
+    if not all(os.path.exists(f) for f in files):
+        return None
+    low = part["phrase"].lower()
+    hint = next((h for w, h in FRONT_HINTS if w in low), "the end that leads when the whole object moves forward")
+    noun = {"weapon": "gun", "vehicle": "vehicle", "aircraft": "aircraft", "helicopter": "helicopter",
+            "character": "character", "prop": "object", "environment": "building"}.get(spec.category, "object")
+    j = extract_json(job.llm.vision(PART_FRONT_PROMPT.format(part=part["phrase"], noun=noun, hint=hint), files,
+                                    max_tokens=600)) or {}
+    letter = str(j.get("front", "A")).strip().upper()[:1]
+    front = views[LETTERS.index(letter)] if letter in LETTERS else "posx"
+    yaw = YAW_FOR[front]
+    job.log("  add %s facing: front is the %s side (%s) -> yaw %d" % (name, front, j.get("reason", ""), yaw))
+    return {"blend": os.path.join(part_dir, "work.blend"), "yaw": yaw, "front": front, "confidence": j.get("confidence")}
+
 
 def make_added_part(job, spec, part, reference_path):
     """A part to ADD to the built model: drawn alone on white (from the customer's picture when they gave one, edited out
@@ -63,16 +111,20 @@ def make_added_part(job, spec, part, reference_path):
         for attempt in range(2):
             path = os.path.join(job.dir, "part_%s_ref_%d.png" % (name, attempt))
             if interior or not reference_path or not os.path.exists(reference_path):
-                prompt = ("%s of a %s, as one open-topped module seen from above at a three-quarter angle, complete, "
-                          "isolated on a plain pure white background, no roof, no glass, nothing else in frame, "
-                          "photorealistic, sharp. %s" % (phrase, (spec.search_query or spec.description[:140]), fixes)).strip()
+                # the fittings alone: the first Havoc interior came as a whole nose module with engines round it, so the
+                # seat was toy-sized once the module was scaled to the cockpit (2026-09-24)
+                prompt = ("ONLY the loose fittings of %s of a %s: the seat, panel, consoles, controls and floor pan as one "
+                          "open assembly with nothing around it, NO fuselage, NO hull, NO engines, NO canopy, NO exterior "
+                          "bodywork, seen from a three-quarter front angle slightly above, complete, isolated on a plain "
+                          "pure white background, nothing else in frame, photorealistic, sharp. %s"
+                          % (phrase, (spec.search_query or spec.description[:140]), fixes)).strip()
                 job.images.generate(prompt, path, model=pricing.concept_model(spec), aspect_ratio="4:3")
             else:
                 prompt = ("Show ONLY %s that belongs on this exact object, whole and complete, matching its colours and "
                           "materials, isolated on a plain pure white background, nothing else in frame, sharp, product "
                           "photograph. %s" % (phrase, fixes)).strip()
                 job.images.generate(prompt, path, model=pricing.edit_model(spec), references=[reference_path], aspect_ratio="4:3")
-            j = extract_json(job.llm.vision(CHECK.format(part=phrase), [path])) or {}
+            j = extract_json(job.llm.vision(ADD_CHECK.format(part=phrase), [path])) or {}
             job.log("  add %s picture: score %s" % (name, j.get("score")))
             if j.get("ok") and int(j.get("score", 0) or 0) >= 6:
                 picture = path
