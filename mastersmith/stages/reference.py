@@ -220,7 +220,12 @@ def make_reference(job, skill):
     views = [primary]
     pictures = [{"label": view, "path": primary}]
     seed_views = None
-    if spec.multiview and spec.category in ("vehicle", "aircraft", "helicopter") and not getattr(job, "edit_refused", False):
+    if spec.multiview and spec.category == "helicopter":
+        # the skill's rule: one three-quarter picture. A helicopter's front view is its rotor disc edge-on, which the
+        # checker rejects for "cut-off blade tips" every time (the Apache, 2026-09-24: two edits paid, none accepted)
+        # and which would fail the narrower-than-the-side test anyway; a profile grew a second tail rotor (2026-09-17).
+        job.log("  helicopter: seeding from the one three-quarter picture (no orthographic views, per the skill)")
+    elif spec.multiview and spec.category in ("vehicle", "aircraft") and not getattr(job, "edit_refused", False):
         seed_views = _orthographic_views(job, skill, primary)
         if seed_views:
             pictures += [{"label": "orthographic front view", "path": seed_views[0]}, {"label": "orthographic left side", "path": seed_views[1]},
