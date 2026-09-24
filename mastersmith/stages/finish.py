@@ -35,8 +35,30 @@ def _blender(job, script, args, tag):
         raise RuntimeError("Blender %s failed (exit %s); see %s\n%s\n%s" % (script, proc.returncode, log_path, tail, err))
 
 
-def run_finish(job, skill, seed_glb, reference=None, retexture_maps=None, recolor=None):
+def families_for(spec, skill):
+    """The skill's material families that apply to THIS brief: an entry with "only_if" words needs one of them in the
+    description or name (the weapon skill's blade family swallowed 44k faces of an M4A1, 2026-09-24)."""
+    fams = skill["meta"].get("material_families")
+    if not isinstance(fams, list):
+        return None
+    blob = ((spec.description or "") + " " + (spec.name or "") + " " + (spec.notes or "")).lower()
+    out = []
+    for fam in fams:
+        words = fam.get("only_if") if isinstance(fam, dict) else None
+        if words and not any(str(w).lower() in blob for w in words):
+            continue
+        out.append(fam)
+    return out
+
+
+def run_finish(job, skill, seed_glb, reference=None, retexture_maps=None, recolor=None, reference_source=None):
+    """reference_source: "concept" (drawn), "customer" or "research" (a photograph). The reference is projected back onto
+    the mesh only when it was drawn: a photograph's studio lighting projected onto a rifle is what the reviewer called
+    'baked from a 2D photograph' (M4A1, 2026-09-24)."""
     spec = job.spec
+    skill = {**skill, "meta": {**skill["meta"], "material_families": families_for(spec, skill)}}
+    if skill["meta"]["material_families"] is None:
+        skill["meta"].pop("material_families")
     common = {"name": spec.name, "work_dir": job.work_dir, "out_dir": os.path.join(job.dir, "delivery"),
               "tri_budget": spec.tri_budget, "size_m": spec.size_m, "engine": spec.engine,
               "forward_axis": skill["meta"].get("forward_axis", "long"), "origin": skill["meta"].get("origin", "bottom"),
@@ -77,7 +99,8 @@ def run_finish(job, skill, seed_glb, reference=None, retexture_maps=None, recolo
                                 "remove_parts": list(spec.remove_parts or []) or None,
                                 "texture_fixes": list(spec.texture_fixes or []) or None,
                                 "material_families": skill["meta"].get("material_families") if isinstance(skill["meta"].get("material_families"), list) else None,
-                                "bake_detail": True, "reproject": bool(skill["meta"].get("reproject", False)),
+                                "bake_detail": True,
+                                "reproject": bool(skill["meta"].get("reproject", False)) and reference_source in (None, "concept"),
                                 "repair_cylinders": skill["meta"].get("repair_cylinders") if isinstance(skill["meta"].get("repair_cylinders"), list) else None,
                                 "part_seeds": part_seeds or None}, "finish")
     report_path = os.path.join(common["out_dir"], "report.json")

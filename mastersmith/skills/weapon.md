@@ -11,7 +11,7 @@ glass_prompt: scope lens glass
 reproject: true
 repair_cylinders: [{"phrase": "the thin round metal barrel tube sticking out at the front of the gun", "current": "dark metal"}]
 part_seeds: [{"phrase": "the detachable magazine of the gun", "name": "Magazine"}, {"phrase": "the optic or scope mounted on top of the gun", "name": "Optic"}]
-material_families: [{"phrase": "the steel slide, barrel, receiver and muzzle of the gun", "current": "dark metal", "metal": true, "finish": "satin", "roughness": 0.68}, {"phrase": "the polymer frame, grip and stock of the gun", "current": "black polymer", "metal": false, "finish": "matte"}, {"phrase": "the rubber grip panels of the gun", "current": "black rubber", "metal": false, "finish": "matte", "roughness": 0.9}, {"phrase": "the forged iron or steel blade or axe head", "current": "dark metal", "metal": true, "finish": "satin", "roughness": 0.72}]
+material_families: [{"phrase": "the steel slide, barrel, receiver and muzzle of the gun", "current": "dark metal", "metal": true, "finish": "satin", "roughness": 0.68}, {"phrase": "the black plastic pistol grip, buttstock and handguard of the rifle", "current": "black polymer", "metal": false, "finish": "matte"}, {"phrase": "the rubber grip panels of the gun", "current": "black rubber", "metal": false, "finish": "matte", "roughness": 0.9}, {"phrase": "the forged iron or steel blade or axe head", "current": "dark metal", "metal": true, "finish": "satin", "roughness": 0.72, "only_if": ["sword", "axe", "blade", "knife", "dagger", "katana", "machete", "spear", "halberd", "mace", "hammer"]}]
 ---
 # Weapons (rifles, pistols, launchers, melee)
 

@@ -427,3 +427,13 @@ def test_pictures_come_from_fal_by_default_and_edits_use_the_edit_endpoint():
     assert pricing.image_price("fal-ai/nano-banana-2/edit") == 0.08 and pricing.price("fal-ai/nano-banana-pro") == 0.15
     crate = Spec(name="Crate", description="oak crate", category="prop")
     assert pricing.concept_model(crate) == "fal-ai/nano-banana-2" and pricing.edit_model(crate) == "fal-ai/nano-banana-2"
+
+
+def test_material_families_are_gated_by_the_brief_and_photos_are_not_reprojected():
+    from mastersmith.stages.finish import families_for
+    weapon = skills.load("weapon")
+    rifle = Spec(name="M4A1Carbine", description="Colt M4A1 carbine, black polymer stock", category="weapon")
+    sword = Spec(name="Claymore", description="two-handed steel sword with a leather grip", category="weapon")
+    assert not any("blade" in f["phrase"] for f in families_for(rifle, weapon))
+    assert any("blade" in f["phrase"] for f in families_for(sword, weapon))
+    assert families_for(rifle, {"meta": {}}) is None

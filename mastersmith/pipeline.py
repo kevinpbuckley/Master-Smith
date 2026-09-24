@@ -197,7 +197,8 @@ def build(spec, user, wallet, log=print, job_id=None):
             result["seed"]["repainted_glb"] = seed_glb if note == "pictures" else None
         job.stage("finish")
         log("3/4 Blender finish")
-        report = run_finish(job, skill, seed_glb, reference=ref["views"][0], retexture_maps=retex_maps)
+        report = run_finish(job, skill, seed_glb, reference=ref["views"][0], retexture_maps=retex_maps,
+                            reference_source=ref.get("source"))
         result["delivery"] = report
         result["delivery_dir"] = os.path.join(job.dir, "delivery")
         if spec.rig:
