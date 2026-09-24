@@ -152,7 +152,9 @@ TOOLS = [
                                         "it first answers a preview (red on the renders); call again with confirm_removal=true "
                                         "once the customer has confirmed the red is right.",
         "parameters": {"type": "object", "properties": {
-            "confirm_removal": {"type": "boolean", "description": "true only after the customer confirmed the red removal preview"}}}}},
+            "confirm_removal": {"type": "boolean", "description": "true only after the customer confirmed the red removal preview"},
+            "skip_preview": {"type": "boolean", "description": "true ONLY when the customer explicitly said to skip the reference "
+                                                               "preview; otherwise build needs approved pictures from make_reference"}}}}},
     {"type": "function", "function": {
         "name": "job_status", "description": "Status, log tail and results of a queued or finished build.",
         "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}, "required": ["job_id"]}}},
@@ -164,7 +166,7 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {}}}},
 ]
 
-MAX_TOOL_ROUNDS = 4
+MAX_TOOL_ROUNDS = 8
 
 PRICING_NOTE_OWN_KEYS = ("Money: the customer runs this on their own fal.ai and OpenRouter keys. Quote the worst case as US dollars "
                          "(estimate_usd, e.g. 'about $1.20 worst case') next to what the two accounts have left "
@@ -254,6 +256,13 @@ class Director:
     def _build(self, a):
         if not self.spec:
             return {"error": "no brief yet; call set_brief first"}
+        a = a or {}
+        approved = bool(self.reference and self.reference.get("for") == self._design())
+        reworking = bool(self.last_job_id) and (self.spec.retexture or self.spec.remove_parts or self.spec.texture_fixes)
+        if not approved and not reworking and not a.get("skip_preview") and not self.spec.reference_job:
+            # the Havoc of 2026-09-24: two failed reference attempts, then a build with no approval. Never again.
+            return {"error": "no approved reference pictures for this brief: call make_reference, show the pictures, and build "
+                             "only when the customer approves (or when they explicitly asked to skip the preview)"}
         spec_dict = self.spec.to_dict()
         if self.reference and self.reference.get("for") == self._design():
             spec_dict["reference_job"] = self.reference["job_dir"]       # seed from the approved pictures
@@ -360,7 +369,8 @@ class Director:
                 self.last_tools.append({"name": name, "args": a, "result": json.dumps(out, default=str)[:400]})
                 self.messages.append({"role": "tool", "tool_call_id": call["id"], "name": name,
                                       "content": json.dumps(out, default=str)})
-        return "(I ran out of tool rounds this turn; tell me what to do next.)"
+        done = ", ".join(t["name"] for t in self.last_tools) or "nothing"
+        return ("I used all my tool calls this turn (%s). Look at what came back above and tell me how to go on." % done)
 
     def chat_cost_usd(self):
         return self.llm.spent()

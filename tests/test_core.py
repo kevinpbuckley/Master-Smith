@@ -461,3 +461,21 @@ def test_diagnosis_names_remedies_from_logs_and_reviewer_words(tmp_path):
     happy = diagnose({"review": {"score": 8, "issues": []}, "delivery": {}, "reference": {"views": ["a", "b"]}, "seed": {"model": "x"}},
                      str(work), spec, "concept")
     assert happy[0]["finding"].startswith("reviewer 8/10")
+
+
+def test_build_refuses_without_approved_reference_pictures():
+    from mastersmith.agent import Director
+    from mastersmith.wallet import Wallet
+    with tempfile.TemporaryDirectory() as d:
+        w = Wallet(os.path.join(d, "w.db"))
+        director = Director("kev", w, log=lambda m: None)
+        director.submit = lambda spec_dict, confirm=False: {"job_id": "j1", "status": "queued"}
+        director._set_brief({"name": "Havoc", "description": "police gunship", "category": "aircraft"})
+        out = director._build({})
+        assert "no approved reference" in out.get("error", "")
+        assert director._build({"skip_preview": True}).get("job_id") == "j1"       # the customer said to skip
+        director.reference = {"job_dir": "/x", "views": ["/x/ref_0.png"], "for": director._design()}
+        assert director._build({}).get("job_id") == "j1"                            # approved pictures for THIS design
+        director._set_brief({"description": "a different gunship"})
+        assert "no approved reference" in director._build({}).get("error", "")     # the design changed: approve again
+        w.close()
