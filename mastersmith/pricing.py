@@ -211,6 +211,9 @@ def estimate(spec):
         steps.append(("humanoid auto-rig with walk/run (Meshy)", price("fal-ai/meshy/rigging")))
     steps.append(("Blender finish: decimate, orient, scale, LODs, collision, maps, FBX/GLB", 0.0))
     steps.append(("review the result against the picture (vision)", LLM_CALL_ALLOWANCE_USD))
+    for part in (getattr(spec, "add_parts", None) or []):
+        steps.append(("added part %s: picture + seed" % part.get("name", "?"),
+                      image_price(edit_model(spec)) + LLM_CALL_ALLOWANCE_USD + price(config.SEED_MODEL, seed_payload)))
     steps.append(("director chat overhead", 2 * LLM_CALL_ALLOWANCE_USD))
     total = round(sum(u for _, u in steps), 4)
     return {"steps": steps, "usd": total, "credits": config.credits_for_usd(total)}

@@ -494,3 +494,19 @@ def test_single_picture_counts_only_when_the_customer_asked():
         director._set_brief({"single_picture": True})
         assert director.spec.multiview is False
         w.close()
+
+
+def test_add_parts_are_normalised_and_priced():
+    from mastersmith.spec import PLACEMENTS
+    s = Spec(name="Havoc", description="police gunship", category="aircraft",
+             add_parts=[{"name": "Cockpit interior", "phrase": "the cockpit interior: seat, panel, consoles", "anchor": "glass", "place": "inside", "size_m": "2.2"},
+                        {"phrase": "a 4x scope", "anchor": "the top rail", "place": "sideways"}, {"name": "x"}, "junk"])
+    assert [p["name"] for p in s.add_parts] == ["Cockpitinterior", "scope"]
+    assert s.add_parts[0]["size_m"] == 2.2 and s.add_parts[0]["anchor"] == "glass"
+    assert s.add_parts[1]["place"] == "inside" and s.add_parts[1]["anchor"] == "the top rail"   # an unknown placement falls back
+    assert set(PLACEMENTS) == {"inside", "on_top", "in_front", "behind", "below"}
+    plain = Spec(name="Havoc", description="police gunship", category="aircraft")
+    with_part = pricing.estimate(s)
+    assert any(n.startswith("added part Cockpitinterior") for n, _ in with_part["steps"]) and with_part["usd"] > pricing.estimate(plain)["usd"]
+    rw = pricing.estimate_rework(s, "refinish")
+    assert any(n.startswith("added part") for n, _ in rw["steps"])

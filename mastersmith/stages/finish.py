@@ -9,7 +9,7 @@ import subprocess
 
 from .. import config
 from .cockpit import make_cockpit
-from .parts import make_part_seed
+from .parts import make_added_part, make_part_seed
 from .tiles import make_tiles
 from .probe import run_probe
 
@@ -89,6 +89,15 @@ def run_finish(job, skill, seed_glb, reference=None, retexture_maps=None, recolo
                 part_seeds.append({**ps, "index": i})
         except Exception as exc:  # noqa: BLE001 - the body ships without the part seed
             job.log("  part seed %s skipped: %s" % (sd.get("name"), str(exc)[:160]))
+    added = []
+    for i, part in enumerate(spec.add_parts or []):
+        job.log("  add part: %s (%s %s)" % (part["phrase"], part["place"], part["anchor"]))
+        try:
+            ap = make_added_part(job, spec, part, reference)
+            if ap:
+                added.append({**ap, "index": i, "place": part["place"], "anchor": part["anchor"], "size_m": part["size_m"]})
+        except Exception as exc:  # noqa: BLE001 - the body ships without the part
+            job.log("  add part %s skipped: %s" % (part["name"], str(exc)[:160]))
     job.log("  Blender pass 2: glass slot%s, maps, LODs to %s tris, collision, export" % (
         " + cockpit" if cockpit else "", format(spec.tri_budget, ",")))
     _blender(job, "finish.py", {**common, "render_size": 768, "cockpit_glb": (cockpit or {}).get("glb"),
@@ -102,7 +111,7 @@ def run_finish(job, skill, seed_glb, reference=None, retexture_maps=None, recolo
                                 "bake_detail": True,
                                 "reproject": bool(skill["meta"].get("reproject", False)) and reference_source in (None, "concept"),
                                 "repair_cylinders": skill["meta"].get("repair_cylinders") if isinstance(skill["meta"].get("repair_cylinders"), list) else None,
-                                "part_seeds": part_seeds or None}, "finish")
+                                "part_seeds": part_seeds or None, "add_parts": added or None}, "finish")
     report_path = os.path.join(common["out_dir"], "report.json")
     if not os.path.exists(report_path):
         log_path = os.path.join(job.work_dir, "finish.log")

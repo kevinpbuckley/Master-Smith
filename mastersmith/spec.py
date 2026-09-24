@@ -14,6 +14,16 @@ TEXTURE_FIXES = {
     "kill_highlights": "replace bright colourless speckles and streaks (painted specular on rails, receivers, barrels) with the surrounding colour",
 }
 
+# Where an added part goes, relative to its anchor (a phrase the segmenter finds on the body, or "glass" for the
+# canopy/window faces, or "body" for the whole object).
+PLACEMENTS = {
+    "inside": "fitted inside the anchor's box (a cockpit interior under the canopy, a cargo load in a bed)",
+    "on_top": "sitting on top of the anchor (a scope on the rail, a roof rack, a turret on the hull)",
+    "in_front": "ahead of the anchor along +X (a suppressor at the muzzle, a plough on the nose)",
+    "behind": "behind the anchor along -X (a stock, a tow hitch)",
+    "below": "hanging under the anchor (an underbarrel launcher, a sensor pod, a drop tank)",
+}
+
 DEFAULT_TRIS = {"weapon": 60000, "vehicle": 120000, "aircraft": 120000, "helicopter": 120000, "character": 80000, "prop": 30000, "environment": 80000}
 DEFAULT_SIZE_M = {"weapon": 1.0, "vehicle": 5.0, "aircraft": 15.0, "helicopter": 17.0, "character": 1.8, "prop": 1.0, "environment": 4.0}
 
@@ -53,6 +63,8 @@ class Spec:
                                       # ("the extra cylinder attached to the magazine"); re-applied on every re-finish
     picture_model: str = None         # OpenRouter image model for this build's pictures (concept, edits, views); None -> config
     texture_fixes: list = None        # scripted texture repairs applied on a re-finish (see TEXTURE_FIXES): free, deterministic
+    add_parts: list = None            # parts to model separately and fit onto the existing mesh on a re-finish (see PLACEMENTS):
+                                      # [{"name", "phrase", "anchor", "place", "size_m", "picture"}]; the body is not reseeded
 
     def __post_init__(self):
         # Asset name rule: letters, digits, underscores, hyphens, starting with a letter. Anything
@@ -113,6 +125,23 @@ class Spec:
             if key in TEXTURE_FIXES and key not in fixes:
                 fixes.append(key)
         self.texture_fixes = fixes
+        added = []
+        for p in self.add_parts or []:
+            if not isinstance(p, dict):
+                continue
+            phrase = str(p.get("phrase") or "").strip()
+            if not phrase:
+                continue
+            name = "".join(ch for ch in str(p.get("name") or phrase.split()[-1]) if ch.isalnum()) or "Part"
+            place = str(p.get("place") or "inside").strip().lower()
+            try:
+                size = float(p.get("size_m") or 0)
+            except (TypeError, ValueError):
+                size = 0.0
+            added.append({"name": name[:40], "phrase": phrase[:200], "anchor": str(p.get("anchor") or "body").strip()[:200],
+                          "place": place if place in PLACEMENTS else "inside", "size_m": max(0.0, size),
+                          "picture": str(p.get("picture") or "").strip() or None})
+        self.add_parts = added[:4]
 
         if self.research is None:
             self.research = bool(self.search_query) and not refs

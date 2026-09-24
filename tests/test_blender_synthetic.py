@@ -77,3 +77,29 @@ def test_prepare_and_finish_on_a_synthetic_box():
         assert rep["collision"]["triangles"] <= 128
         for f in ("SM_TestBox.fbx", "SM_TestBox_LOD1.fbx", "SM_TestBox.glb", "SM_TestBox.blend", "preview_iso.png"):
             assert os.path.exists(os.path.join(out, f)), f
+
+
+def test_add_parts_fits_a_seed_onto_the_body():
+    """A second copy of the box is fitted on top of the body at 0.3 m; the body keeps its size and gains faces."""
+    with tempfile.TemporaryDirectory() as d:
+        make = os.path.join(d, "make.py")
+        open(make, "w").write(MAKE_GLB)
+        glb = os.path.join(d, "seed.glb")
+        blender(make, glb)
+        work, out = os.path.join(d, "work"), os.path.join(d, "delivery")
+        common = {"name": "TestBox", "work_dir": work, "out_dir": out, "tri_budget": 4000, "size_m": 1.0,
+                  "engine": "unreal", "forward_axis": "long", "origin": "center", "glb": glb, "probe_size": 256, "render_size": 256}
+        a1 = os.path.join(d, "prepare.json")
+        json.dump(common, open(a1, "w"))
+        blender(str(config.ROOT / "mastersmith" / "blender" / "prepare.py"), a1)
+        json.dump({"yaw": 0, "facing": {"reason": "test"}, "regions": {}}, open(os.path.join(work, "decision.json"), "w"))
+        a2 = os.path.join(d, "finish.json")
+        json.dump({**common, "add_parts": [{"index": 0, "name": "Rack", "phrase": "a roof rack", "anchor": "body",
+                                            "place": "on_top", "size_m": 0.3, "glb": glb}]}, open(a2, "w"))
+        blender(str(config.ROOT / "mastersmith" / "blender" / "finish.py"), a2)
+        rep = json.load(open(os.path.join(out, "report.json")))
+        added = rep.get("added_parts") or []
+        assert added and added[0]["name"] == "Rack" and added[0]["place"] == "on_top" and added[0]["faces_added"] > 0
+        assert abs(max(added[0]["size_m"]) - 0.3) < 0.02                  # the spec's size wins
+        assert rep["dimensions_m"][0] > 0.99                                # the body was not shrunk
+        assert rep["dimensions_m"][2] > 0.08 + 0.03                         # taller: the rack sits on top

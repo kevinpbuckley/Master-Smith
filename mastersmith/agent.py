@@ -46,6 +46,11 @@ How a job goes:
      build first shows the customer what would go, in red on the renders; ask them to confirm, and only then call
      build with confirm_removal=true. If the red covers more than the defect (the whole magazine instead of the
      cylinder on it), reword the phrase or use another remedy instead;
+   - ADDING something to the built model (a cockpit interior, a scope, a suppressor, a launcher, a rack, a pod) is
+     add_parts: say what it is, where it anchors, how it sits (inside / on_top / in_front / behind / below) and its size
+     in metres; a re-finish models it alone, seeds it small and fits it there. The body is NOT reseeded and the brief's
+     name and description do not change. Ask for the size when it is not obvious (a cockpit interior of a 12 m gunship
+     is about 2.2 m; a rifle scope 0.25 m);
    - size, triangle budget, glass, rig or engine changes re-finish the same mesh;
    - a TEXTURE complaint (baked-in lighting or painted shadows, reflections or white blobs on the glass, a milky or
      hollow-looking canopy, blurry highlights) is a job for a script, never for a new mesh: put the matching
@@ -112,6 +117,20 @@ TOOLS = [
                               "description": "Scripted texture repairs on the built model, applied by a free re-finish of the same mesh: "
                                              + "; ".join("%s = %s" % (k, v) for k, v in TEXTURE_FIXES.items())
                                              + ". Use these FIRST for any texture complaint."},
+            "add_parts": {"type": "array", "items": {"type": "object", "properties": {
+                              "name": {"type": "string", "description": "PascalCase, e.g. Cockpit, Scope, Suppressor"},
+                              "phrase": {"type": "string", "description": "what to model, as a photo caption ('the cockpit interior: pilot seat, "
+                                                                          "instrument panel and side consoles', 'a 4x ACOG scope')"},
+                              "anchor": {"type": "string", "description": "where on the body it goes: 'glass' (under the canopy/windows), 'body' (the "
+                                                                          "whole object), or a phrase the segmenter finds ('the top rail of the rifle', "
+                                                                          "'the muzzle of the barrel')"},
+                              "place": {"type": "string", "enum": ["inside", "on_top", "in_front", "behind", "below"]},
+                              "size_m": {"type": "number", "description": "the part's longest dimension in metres; 0 = fit the anchor"},
+                              "picture": {"type": "string", "description": "an attached picture of the part, if the customer gave one"}},
+                              "required": ["name", "phrase", "anchor", "place"]},
+                          "description": "Model these parts separately and fit them onto the BUILT model on a re-finish (about $0.70 a part: "
+                                         "one picture + one small seed). The body is not reseeded. A cockpit interior under the canopy, a scope "
+                                         "on the rail, a suppressor at the muzzle, a roof rack, a drop tank. Keep earlier entries when adding."},
             "remove_parts": {"type": "array", "items": {"type": "string"},
                              "description": "A REPAIR of the built model: parts to delete in Blender, each a descriptive phrase a "
                                             "segmenter can find on a render ('the extra cylinder attached to the magazine', 'the "
@@ -263,7 +282,8 @@ class Director:
             return {"error": "no brief yet; call set_brief first"}
         a = a or {}
         approved = bool(self.reference and self.reference.get("for") == self._design())
-        reworking = bool(self.last_job_id) and (self.spec.retexture or self.spec.remove_parts or self.spec.texture_fixes)
+        reworking = bool(self.last_job_id) and (self.spec.retexture or self.spec.remove_parts or self.spec.texture_fixes
+                                                or self.spec.add_parts)
         if not approved and not reworking and not a.get("skip_preview") and not self.spec.reference_job:
             # the Havoc of 2026-09-24: two failed reference attempts, then a build with no approval. Never again.
             return {"error": "no approved reference pictures for this brief: call make_reference, show the pictures, and build "

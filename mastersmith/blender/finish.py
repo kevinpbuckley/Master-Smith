@@ -2149,6 +2149,88 @@ def fit_part(obj, faces, glb, name):
     return {"scale": round(float(sc), 3), "box_m": [round(float(v), 3) for v in ext_p], "faces_replaced": int(faces.sum())}
 
 
+def attach_part(obj, faces, glb, name, place="inside", size_m=0.0):
+    """Import a separately seeded part and put it where the brief said, relative to the anchor faces' box: inside
+    (scaled to fit the box), on_top / below (resting on the box's top / hanging under its bottom), in_front /
+    behind (butted against its +X / -X end). size_m sets the part's longest dimension; 0 fits it to the box.
+    The body is joined with the part; nothing on the body is removed or shrunk."""
+    me = obj.data
+    n = len(me.polygons)
+    cen = np.empty(n * 3, np.float32)
+    me.polygons.foreach_get("center", cen)
+    cen = cen.reshape(-1, 3)
+    if faces is None or faces.sum() < 3:
+        lo_o, hi_o = blib.dims(obj)
+        lo_p, hi_p = np.array(lo_o, np.float32), np.array(hi_o, np.float32)
+    else:
+        pts = main_cluster(cen[faces], max(blib.dims(obj)[1].length * 0.02, 1e-3))
+        lo_p, hi_p = np.percentile(pts, 2, axis=0), np.percentile(pts, 98, axis=0)
+    ext_p = hi_p - lo_p
+    if ext_p.max() < 1e-4:
+        return {"skipped": "degenerate anchor box"}
+    before = set(bpy.data.objects)
+    if glb.lower().endswith(".fbx"):
+        bpy.ops.import_scene.fbx(filepath=os.path.abspath(glb))
+    else:
+        bpy.ops.import_scene.gltf(filepath=os.path.abspath(glb))
+    new = [o for o in bpy.data.objects if o not in before]
+    parts = [o for o in new if o.type == "MESH"]
+    for o in parts:
+        mw = o.matrix_world.copy()
+        o.parent = None
+        o.matrix_world = mw
+    for o in [o for o in new if o.type != "MESH"]:
+        bpy.data.objects.remove(o, do_unlink=True)
+    if not parts:
+        return {"skipped": "empty seed"}
+    blib.select_only(parts)
+    if len(parts) > 1:
+        bpy.ops.object.join()
+    p = bpy.context.view_layer.objects.active
+    p.rotation_mode = "XYZ"
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    plo, phi = blib.dims(p)
+    pext = phi - plo
+    # the part's long axis follows the body's (+X), like every seed the prepare pass oriented
+    if pext.y > pext.x * 1.15:
+        blib.apply_yaw(p, 90)
+        plo, phi = blib.dims(p)
+        pext = phi - plo
+    if size_m and size_m > 0:
+        sc = float(size_m) / max(max(pext.x, pext.y, pext.z), 1e-6)
+    elif place == "inside":
+        sc = min(ext_p[0] / max(pext.x, 1e-6), ext_p[1] / max(pext.y, 1e-6), ext_p[2] / max(pext.z, 1e-6))
+    else:
+        sc = min(ext_p[0] / max(pext.x, 1e-6), ext_p[1] / max(pext.y, 1e-6))        # as wide/long as the anchor
+    p.scale = (sc, sc, sc)
+    bpy.ops.object.transform_apply(scale=True)
+    plo, phi = blib.dims(p)
+    cx, cy, cz = (lo_p + hi_p) * 0.5
+    pcx, pcy, pcz = (plo.x + phi.x) * 0.5, (plo.y + phi.y) * 0.5, (plo.z + phi.z) * 0.5
+    if place == "inside":
+        target = (cx, cy, lo_p[2] + (phi.z - plo.z) * 0.5)                 # floor of the box
+    elif place == "on_top":
+        target = (cx, cy, hi_p[2] + (phi.z - plo.z) * 0.5)
+    elif place == "below":
+        target = (cx, cy, lo_p[2] - (phi.z - plo.z) * 0.5)
+    elif place == "in_front":
+        target = (hi_p[0] + (phi.x - plo.x) * 0.5, cy, cz)
+    else:  # behind
+        target = (lo_p[0] - (phi.x - plo.x) * 0.5, cy, cz)
+    p.location += Vector((target[0] - pcx, target[1] - pcy, target[2] - pcz))
+    bpy.ops.object.transform_apply(location=True)
+    for slot in p.material_slots:
+        if slot.material:
+            slot.material.name = "MI_%s_%s" % (NAME, name)
+    p.name = name
+    faces_added = int(len(p.data.polygons))
+    blib.select_only([obj, p])
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.join()                     # p is gone after this; read nothing from it
+    return {"place": place, "scale": round(float(sc), 3), "size_m": [round(float(v), 3) for v in (phi - plo)],
+            "anchor_box_m": [round(float(v), 3) for v in ext_p], "faces_added": faces_added}
+
+
 if cyl_faces_each and args.get("repair_cylinders"):
     cols_for_cyl = face_colours(ob)
     for ci, f in sorted(cyl_faces_each.items()):
@@ -2164,6 +2246,31 @@ if cyl_faces_each and args.get("repair_cylinders"):
             cyl_faces_each = {k: np.concatenate([v, np.zeros(max(0, n_now - len(v)), bool)])[:n_now] for k, v in cyl_faces_each.items()}
         except Exception as exc:  # noqa: BLE001
             log("cylinder repair failed: %s" % str(exc)[:200])
+
+for ap in (args.get("add_parts") or []):
+    # the anchor: glass faces, the whole body, or the faces under the anchor phrase's masks
+    if ap.get("anchor") == "glass":
+        f = glass_faces
+    elif ap.get("anchor") == "body":
+        f = None
+    else:
+        key = "anchor%d" % ap.get("index", -1)
+        f = faces_under_masks(regions[key], min_votes=2 if len(regions[key]) >= 3 else 1)[0] if regions.get(key) else None
+        if f is not None and f.sum() < 3:
+            log("add %s: the anchor '%s' was not found on the renders; placing against the whole body" % (ap.get("name"), ap.get("anchor")))
+            f = None
+    if f is not None and len(f) != len(ob.data.polygons):
+        f = np.concatenate([f, np.zeros(max(0, len(ob.data.polygons) - len(f)), bool)])[:len(ob.data.polygons)]
+    if not os.path.exists(ap.get("glb", "")):
+        log("add %s: no seed mesh" % ap.get("name"))
+        continue
+    try:
+        res = attach_part(ob, f, ap["glb"], ap.get("name", "Part"), ap.get("place", "inside"), float(ap.get("size_m") or 0))
+        report.setdefault("added_parts", []).append({"name": ap.get("name"), "phrase": ap.get("phrase"), **res})
+        log("added %s: %s" % (ap.get("name"), json.dumps(res)))
+        raw_tris = blib.tri_count(ob)
+    except Exception as exc:  # noqa: BLE001 - the body ships without the part
+        log("add %s failed: %s" % (ap.get("name"), str(exc)[:200]))
 
 for ps in (args.get("part_seeds") or []):
     f = seed_faces_each.get(ps.get("index"))

@@ -75,6 +75,15 @@ re-finishes (cents). "Make it 2 m" or "rig it" re-finishes the same mesh. "Matte
 change of shape edits the reference picture, shows it for approval, and buys a new mesh. When the reviewer says
 rebuild, the director names the remedy for each issue and asks before spending.
 
+A missing attachment does not need a new body either. "Add the cockpit interior under the canopy, about 2.2 m" or
+"put a 4x scope on the top rail" goes on the brief as `add_parts`: each part names what it is, where it anchors
+(a phrase the segmenter finds on the body, `glass` for the canopy, or `body`), how it sits (`inside`, `on_top`,
+`in_front`, `behind`, `below`) and its longest dimension in metres. The part is pictured and seeded on its own
+(a small Tripo mesh, cents), then fitted in Blender against the anchor's box at that size, its materials named
+`MI_<Asset>_<Part>`, and joined; the body is neither reseeded nor shrunk. The job report lists `added_parts` with
+the scale and box used. A part whose anchor phrase is not found on the renders is placed against the whole body
+and the log says so.
+
 ### Bring your own model
 
 Attach a `.glb`, `.gltf`, `.fbx`, `.obj` or a delivered `.blend` in the chat and say what it is. It is finished
