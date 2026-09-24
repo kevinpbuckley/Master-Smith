@@ -167,7 +167,7 @@ def _orthographic_views(job, skill, primary):
             try:
                 job.images.generate(("Show this exact same vehicle from %s. Same vehicle, same colours, markings and materials, same "
                                      "lighting, plain pure white background, sharp focus, nothing else in frame. %s" % (text, fixes)).strip(),
-                                    path, model=pricing.edit_model(spec), references=[primary], aspect_ratio="1:1")
+                                    path, model=pricing.edit_model(job.spec), references=[primary], aspect_ratio="1:1")
             except ImageRefused:
                 job.log("  the picture editor refused the %s view; seeding from one picture" % key)
                 return None
