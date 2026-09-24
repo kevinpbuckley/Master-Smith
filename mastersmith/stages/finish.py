@@ -96,7 +96,8 @@ def run_finish(job, skill, seed_glb, reference=None, retexture_maps=None, recolo
             ap = make_added_part(job, spec, part, reference)
             if ap:
                 oriented = orient_added_part(job, spec, part, ap["glb"]) or {}
-                added.append({**ap, **oriented, "index": i, "place": part["place"], "anchor": part["anchor"], "size_m": part["size_m"]})
+                added.append({**ap, **oriented, "index": i, "place": part["place"], "anchor": part["anchor"], "size_m": part["size_m"],
+                              "offset_m": part.get("offset_m") or [0, 0, 0]})
         except Exception as exc:  # noqa: BLE001 - the body ships without the part
             job.log("  add part %s skipped: %s" % (part["name"], str(exc)[:160]))
     job.log("  Blender pass 2: glass slot%s, maps, LODs to %s tris, collision, export" % (

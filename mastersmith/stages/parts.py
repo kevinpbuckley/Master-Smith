@@ -59,7 +59,11 @@ They were taken from its four horizontal sides. Which picture looks straight at 
 points the same way as the {noun}'s nose or muzzle when the part is fitted ({hint})?
 Answer with JSON only: {{"front": "A" | "B" | "C" | "D", "confidence": 0-1, "reason": "few words"}}"""
 
-FRONT_HINTS = (("cockpit", "the instrument panel the pilot looks at is the front, the seat back is at the rear"),
+FRONT_HINTS = (("bulkhead", "the rear bulkhead wall is at the rear; the open end is the front"),
+               ("shell", "the closed wall is at the rear; the open end is the front"),
+               ("pedal", "the pedals lean toward the pilot: their treads face the rear"),
+               ("stick", "the grip's trigger side faces the pilot at the rear; the stick leans forward"),
+               ("cockpit", "the instrument panel the pilot looks at is the front, the seat back is at the rear"),
                ("seat", "the seat faces forward"), ("interior", "the dashboard is the front, the seat back the rear"),
                ("scope", "the large objective lens is the front, the eyepiece the rear"),
                ("suppressor", "the closed muzzle end is the front"), ("stock", "the butt pad is the rear"),
@@ -112,17 +116,22 @@ def make_added_part(job, spec, part, reference_path):
     if part.get("picture") and os.path.exists(part["picture"]):
         picture = part["picture"]
     else:
-        interior = part.get("place") == "inside" and any(w in phrase.lower() for w in INTERIOR_WORDS)
+        low = phrase.lower()
+        inside = part.get("place") == "inside"
+        whole_interior = inside and any(w in low for w in INTERIOR_WORDS) \
+            and not any(w in low for w in ("wall", "shell", "bulkhead", "stick", "pedal", "lever", "panel only"))
         for attempt in range(2):
             path = os.path.join(job.dir, "part_%s_ref_%d.png" % (name, attempt))
-            if interior or not reference_path or not os.path.exists(reference_path):
-                # the fittings alone: the first Havoc interior came as a whole nose module with engines round it, so the
-                # seat was toy-sized once the module was scaled to the cockpit (2026-09-24)
-                prompt = ("ONLY the loose fittings of %s of a %s: the seat, panel, consoles, controls and floor pan as one "
-                          "open assembly with nothing around it, NO fuselage, NO hull, NO engines, NO canopy, NO exterior "
-                          "bodywork, seen from a three-quarter front angle slightly above, complete, isolated on a plain "
-                          "pure white background, nothing else in frame, photorealistic, sharp. %s"
-                          % (phrase, (spec.search_query or spec.description[:140]), fixes)).strip()
+            if inside or not reference_path or not os.path.exists(reference_path):
+                # a part that lives inside is not on the exterior reference: it is drawn from the words. The first Havoc
+                # interior came as a whole nose module with engines round it, so the seat was toy-sized once the module
+                # was scaled to the cockpit (2026-09-24): no bodywork, ever.
+                what = ("the loose fittings of %s: the seat, panel, consoles, controls and floor pan as one open assembly"
+                        % phrase) if whole_interior else phrase
+                prompt = ("ONLY %s, of a %s, as one object with nothing around it, NO fuselage, NO hull, NO engines, "
+                          "NO canopy, NO exterior bodywork, seen from a three-quarter front angle slightly above, whole "
+                          "and complete, isolated on a plain pure white background, nothing else in frame, "
+                          "photorealistic, sharp. %s" % (what, (spec.search_query or spec.description[:140]), fixes)).strip()
                 job.images.generate(prompt, path, model=pricing.concept_model(spec), aspect_ratio="4:3")
             else:
                 prompt = ("Show ONLY %s that belongs on this exact object, whole and complete, matching its colours and "

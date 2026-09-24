@@ -2161,7 +2161,7 @@ def protect_added(mod, o):
         mod.vertex_group_factor = 10.0
 
 
-def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=None):
+def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=None, offset=(0.0, 0.0, 0.0)):
     """Import a separately seeded part and put it where the brief said, relative to the anchor faces' box: inside
     (scaled to fit the box), on_top / below (resting on the box's top / hanging under its bottom), in_front /
     behind (butted against its +X / -X end). size_m sets the part's longest dimension; 0 fits it to the box.
@@ -2262,7 +2262,8 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=
         target = (hi_p[0] + (phi.x - plo.x) * 0.5, cy, cz)
     else:  # behind
         target = (lo_p[0] - (phi.x - plo.x) * 0.5, cy, cz)
-    p.location += Vector((target[0] - pcx, target[1] - pcy, target[2] - pcz))
+    ox, oy, oz = [float(v or 0) for v in (list(offset) + [0, 0, 0])[:3]]      # forward, left, up from the placement
+    p.location += Vector((target[0] - pcx + ox, target[1] - pcy + oy, target[2] - pcz + oz))
     bpy.ops.object.transform_apply(location=True)
     for slot in p.material_slots:
         if slot.material:
@@ -2286,7 +2287,8 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=
     blib.select_only([obj, p])
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.join()                     # p is gone after this; read nothing from it
-    return {"place": place, "yaw": yaw, "scale": round(float(sc), 3), "size_m": [round(float(v), 3) for v in (phi - plo)],
+    return {"place": place, "yaw": yaw, "offset_m": [ox, oy, oz], "scale": round(float(sc), 3),
+            "size_m": [round(float(v), 3) for v in (phi - plo)],
             "anchor_box_m": [round(float(v), 3) for v in ext_p], "faces_added": faces_added, "floor": floor_note,
             "triangles": {"seed": int(part_tris), "kept": int(tris_kept), "share_of_budget": int(part_budget)}}
 
@@ -2326,7 +2328,7 @@ for ap in (args.get("add_parts") or []):
         continue
     try:
         res = attach_part(ob, f, ap["glb"], ap.get("name", "Part"), ap.get("place", "inside"), float(ap.get("size_m") or 0),
-                          yaw=int(ap.get("yaw") or 0), blend=ap.get("blend"))
+                          yaw=int(ap.get("yaw") or 0), blend=ap.get("blend"), offset=ap.get("offset_m") or (0, 0, 0))
         report.setdefault("added_parts", []).append({"name": ap.get("name"), "phrase": ap.get("phrase"), **res})
         log("added %s: %s" % (ap.get("name"), json.dumps(res)))
         raw_tris = blib.tri_count(ob)

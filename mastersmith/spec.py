@@ -64,8 +64,9 @@ class Spec:
     picture_model: str = None         # OpenRouter image model for this build's pictures (concept, edits, views); None -> config
     texture_fixes: list = None        # scripted texture repairs applied on a re-finish (see TEXTURE_FIXES): free, deterministic
     add_parts: list = None            # parts to model separately and fit onto the existing mesh on a re-finish (see PLACEMENTS):
-                                      # [{"name", "phrase", "anchor", "place", "size_m", "picture", "seed"}]; the body is not
-                                      # reseeded; "seed" is a part mesh an earlier job bought, reused as it is
+                                      # [{"name", "phrase", "anchor", "place", "size_m", "offset_m", "picture", "seed"}]; the
+                                      # body is not reseeded; "seed" is a part mesh an earlier job bought, reused as it is;
+                                      # offset_m = [forward, left, up] metres from where the placement would put it
 
     def __post_init__(self):
         # Asset name rule: letters, digits, underscores, hyphens, starting with a letter. Anything
@@ -139,8 +140,15 @@ class Spec:
                 size = float(p.get("size_m") or 0)
             except (TypeError, ValueError):
                 size = 0.0
+            off = []
+            for v in (p.get("offset_m") or [0, 0, 0])[:3]:
+                try:
+                    off.append(max(-50.0, min(50.0, float(v or 0))))
+                except (TypeError, ValueError):
+                    off.append(0.0)
+            off = (off + [0.0, 0.0, 0.0])[:3]
             added.append({"name": name[:40], "phrase": phrase[:200], "anchor": str(p.get("anchor") or "body").strip()[:200],
-                          "place": place if place in PLACEMENTS else "inside", "size_m": max(0.0, size),
+                          "place": place if place in PLACEMENTS else "inside", "size_m": max(0.0, size), "offset_m": off,
                           "picture": str(p.get("picture") or "").strip() or None,
                           "seed": str(p.get("seed") or "").strip() or None})     # a mesh already bought for this part
         self.add_parts = added[:4]

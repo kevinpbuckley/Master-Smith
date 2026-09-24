@@ -47,8 +47,12 @@ How a job goes:
      build with confirm_removal=true. If the red covers more than the defect (the whole magazine instead of the
      cylinder on it), reword the phrase or use another remedy instead;
    - ADDING something to the built model (a cockpit interior, a scope, a suppressor, a launcher, a rack, a pod) is
-     add_parts: say what it is, where it anchors, how it sits (inside / on_top / in_front / behind / below) and its size
-     in metres; a re-finish models it alone, seeds it small and fits it there. The body is NOT reseeded and the brief's
+     add_parts: say what it is, where it anchors, how it sits (inside / on_top / in_front / behind / below), its size
+     in metres and, when several parts share an anchor, offset_m [forward, left, up] to spread them (pedals ahead of
+     the seat, a stick between seat and panel); a re-finish models each alone, seeds it and fits it there. Parts that
+     live inside are drawn from the words, so the phrase must say exactly what to include and what to leave out ("floor
+     pan, two side walls and a rear bulkhead, no seat"). A part already bought is reused by name + phrase, so repeat
+     them exactly to keep it. The body is NOT reseeded and the brief's
      name and description do not change. Ask for the size when it is not obvious (a cockpit interior of a 12 m gunship
      is about 2.2 m; a rifle scope 0.25 m);
    - size, triangle budget, glass, rig or engine changes re-finish the same mesh;
@@ -126,6 +130,8 @@ TOOLS = [
                                                                           "'the muzzle of the barrel')"},
                               "place": {"type": "string", "enum": ["inside", "on_top", "in_front", "behind", "below"]},
                               "size_m": {"type": "number", "description": "the part's longest dimension in metres; 0 = fit the anchor"},
+                              "offset_m": {"type": "array", "items": {"type": "number"}, "description": "[forward, left, up] metres to "
+                                           "move it from where the placement puts it (a joystick 0.3 m ahead of the seat: [0.3, 0, 0])"},
                               "picture": {"type": "string", "description": "an attached picture of the part, if the customer gave one"}},
                               "required": ["name", "phrase", "anchor", "place"]},
                           "description": "Model these parts separately and fit them onto the BUILT model on a re-finish (about $0.70 a part: "

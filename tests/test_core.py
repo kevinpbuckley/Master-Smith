@@ -519,3 +519,10 @@ def test_add_parts_keep_a_bought_seed_and_price_it_as_a_fit():
     steps = dict(pricing.estimate(s)["steps"])
     fit = [k for k in steps if k.startswith("added part CockpitInterior")]
     assert fit and "already bought" in fit[0] and steps[fit[0]] < 0.05
+
+
+def test_add_parts_offset_is_three_floats():
+    s = Spec(name="H", description="g", category="aircraft",
+             add_parts=[{"name": "Stick", "phrase": "a flight stick", "anchor": "glass", "offset_m": ["0.3", None]},
+                        {"name": "Pedals", "phrase": "rudder pedals", "anchor": "glass"}])
+    assert s.add_parts[0]["offset_m"] == [0.3, 0.0, 0.0] and s.add_parts[1]["offset_m"] == [0.0, 0.0, 0.0]
