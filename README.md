@@ -64,7 +64,10 @@ is opt-in (`cockpit: true` in the brief); it is a gamble on the tub's fit.
 
 ### Fixing a build without buying another mesh
 
-Cheapest remedy first. "Remove the extra cylinder on the magazine" deletes that part in Blender under its mask and
+Cheapest remedy first. A texture complaint ("the glass has white reflections painted on it", "the shading is baked
+in", "the canopy looks hollow") is a job for a script: the brief carries `texture_fixes` (`delight`,
+`clear_glass_highlights`, `dark_canopy`) and a free re-finish of the same mesh applies them. "Remove the extra
+cylinder on the magazine" deletes that part in Blender under its mask, after you confirm the red preview, and
 re-finishes (cents). "Make it 2 m" or "rig it" re-finishes the same mesh. "Matte black frame" repaints it. Only a
 change of shape edits the reference picture, shows it for approval, and buys a new mesh. When the reviewer says
 rebuild, the director names the remedy for each issue and asks before spending.

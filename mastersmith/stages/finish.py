@@ -75,6 +75,7 @@ def run_finish(job, skill, seed_glb, reference=None, retexture_maps=None, recolo
                                 "retexture_parts": spec.retexture_parts if retexture_maps else None,
                                 "recolor_parts": recolor, "protect_parts": spec.protect_parts,
                                 "remove_parts": list(spec.remove_parts or []) or None,
+                                "texture_fixes": list(spec.texture_fixes or []) or None,
                                 "material_families": skill["meta"].get("material_families") if isinstance(skill["meta"].get("material_families"), list) else None,
                                 "bake_detail": True, "reproject": bool(skill["meta"].get("reproject", False)),
                                 "repair_cylinders": skill["meta"].get("repair_cylinders") if isinstance(skill["meta"].get("repair_cylinders"), list) else None,

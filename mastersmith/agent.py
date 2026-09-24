@@ -7,7 +7,7 @@ import os
 from . import config, pricing, providers, skills
 from .llm import LLM
 from .pipeline import build
-from .spec import CATEGORIES, ENGINES, STYLES, Spec
+from .spec import CATEGORIES, ENGINES, STYLES, TEXTURE_FIXES, Spec
 from .wallet import InsufficientCredits
 
 SYSTEM = """You are Master Smith, a 3D asset director. A customer describes a game asset; you turn it into a build brief,
@@ -46,6 +46,10 @@ How a job goes:
      build with confirm_removal=true. If the red covers more than the defect (the whole magazine instead of the
      cylinder on it), reword the phrase or use another remedy instead;
    - size, triangle budget, glass, rig or engine changes re-finish the same mesh;
+   - a TEXTURE complaint (baked-in lighting or painted shadows, reflections or white blobs on the glass, a milky or
+     hollow-looking canopy, blurry highlights) is a job for a script, never for a new mesh: put the matching
+     texture_fixes on the brief and build - a free re-finish applies them. Only if the scripts cannot fix it, a
+     repaint (retexture=true, about $1.20). Reviewer notes about "painted", "baked" or "blurry" textures mean delight;
    - colour, finish or material changes go through retexture=true: the mesh is repainted, nothing moves;
    - only a change of shape or proportions buys a new mesh: keep the description, put the change in edit_instructions,
      call make_reference so the customer approves the edited picture, then build.
@@ -96,6 +100,10 @@ TOOLS = [
             "protect_parts": {"type": "array", "items": {"type": "object", "properties": {"phrase": {"type": "string"}, "hex": {"type": "string"}},
                               "required": ["phrase"]}, "description": "With retexture: neighbouring parts that must not change, each a "
                               "descriptive phrase with its colour ('the translucent amber magazine') and its #rrggbb"},
+            "texture_fixes": {"type": "array", "items": {"type": "string", "enum": list(TEXTURE_FIXES)},
+                              "description": "Scripted texture repairs on the built model, applied by a free re-finish of the same mesh: "
+                                             + "; ".join("%s = %s" % (k, v) for k, v in TEXTURE_FIXES.items())
+                                             + ". Use these FIRST for any texture complaint."},
             "remove_parts": {"type": "array", "items": {"type": "string"},
                              "description": "A REPAIR of the built model: parts to delete in Blender, each a descriptive phrase a "
                                             "segmenter can find on a render ('the extra cylinder attached to the magazine', 'the "

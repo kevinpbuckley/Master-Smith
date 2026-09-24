@@ -390,3 +390,11 @@ def test_picture_model_choice_drives_the_estimate_and_the_catalogue():
     assert pricing.estimate(lite)["usd"] < pricing.estimate(crate)["usd"]
     bogus = Spec(name="Crate", description="oak crate", category="prop", picture_model="nobody/unknown")
     assert pricing.concept_model(bogus) == pricing.concept_model(crate)     # an unknown id falls back to the config
+
+
+def test_texture_fixes_are_a_known_catalogue():
+    from mastersmith.spec import TEXTURE_FIXES
+    s = Spec(name="Jet", description="grey jet", category="aircraft", texture_fixes=["delight", " Dark_Canopy ", "nonsense", "delight"])
+    assert s.texture_fixes == ["delight", "dark_canopy"]
+    assert Spec(name="Jet", description="grey jet").texture_fixes == []
+    assert set(TEXTURE_FIXES) == {"delight", "clear_glass_highlights", "dark_canopy"}

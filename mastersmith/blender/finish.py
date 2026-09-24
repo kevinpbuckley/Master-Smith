@@ -19,6 +19,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blib  # noqa: E402
 
 args = json.load(open(sys.argv[sys.argv.index("--") + 1]))
+# Scripted texture repairs the brief asked for (Spec.texture_fixes): deterministic, free, applied on a re-finish of
+# the same seed. "delight" = strong removal of baked shading; "clear_glass_highlights" = painted reflections under
+# the canopy darkened (forced, whatever the env says); "dark_canopy" = an opaque dark canopy instead of a clear one.
+TEXTURE_FIXES = set(args.get("texture_fixes") or [])
 OUT, WORK, NAME = args["out_dir"], args["work_dir"], args["name"]
 os.makedirs(OUT, exist_ok=True)
 report = {"name": NAME, "lods": [], "maps": [], "files": [], "notes": []}
@@ -618,10 +622,11 @@ if (glass_faces is not None and glass_faces.sum() > 20) or panes:
     # windows (opaque white panes). Unreal's FBX path ignores both anyway; the README names the material for an
     # opacity setup. A canopy with a cockpit under it is clearer than a car window over a hollow shell.
     _cat = (args.get("spec") or {}).get("category")
-    _alpha = 0.7 if _cat == "vehicle" else 0.2        # a contained tub lets the canopy be clear (F-16 wave 19/20: "opaque and dark")
+    _dark = _cat == "vehicle" or "dark_canopy" in TEXTURE_FIXES
+    _alpha = 0.7 if _dark else 0.2                    # a contained tub lets the canopy be clear (F-16 wave 19/20: "opaque and dark")
     # near-black tint and a modest specular: at 0.09 grey with specular 0.8 the panes mirrored the backdrop and read
     # as opaque light grey in both Blender and model-viewer (wave 18 F-150 / Humvee "windows are opaque white")
-    bsdf.inputs["Base Color"].default_value = (0.03, 0.04, 0.05, 1.0) if _cat == "vehicle" else (0.16, 0.20, 0.26, 1.0)   # a canopy is clear: light enough to see in, not milky (wave 21)
+    bsdf.inputs["Base Color"].default_value = (0.03, 0.04, 0.05, 1.0) if _dark else (0.16, 0.20, 0.26, 1.0)   # a canopy is clear: light enough to see in, not milky (wave 21)
     bsdf.inputs["Roughness"].default_value = 0.08
     bsdf.inputs["Metallic"].default_value = 0.0
     bsdf.inputs["Alpha"].default_value = _alpha
@@ -1586,6 +1591,10 @@ for slot in ob.material_slots:
             profile = {**profile, "roughness_dielectric": 0.62, "roughness_metal": 0.5}
         elif any(w in _d for w in ("gloss", "metallic paint", "sports car", "muscle car", "sedan", "supercar", "showroom")):
             profile = {**profile, "roughness_dielectric": 0.28}
+    if "delight" in TEXTURE_FIXES:
+        # the brief asked for the baked shading to go: full-strength de-light whatever the category profile says
+        profile = {**(profile or {}), "delight": True, "delight_strength": 0.95}
+        log("texture fix: strong de-light requested")
     # a seed with colour but no roughness / metallic maps (Hi3D v3 ships BC + N only) gets a flat ORM-style map so the
     # material pass, the families and the recolour have something to write into and the delivery has an ORM
     if "BC" in found and ("R" not in found or "M" not in found) and profile:
@@ -1804,7 +1813,7 @@ for idx, faces in sorted(part_faces_each.items()):
 
 # Painted glass highlights under a clear canopy (aircraft, helicopters, vehicles with a cabin).
 if glass_faces is not None and (args.get("spec") or {}).get("category") in ("aircraft", "helicopter", "vehicle") \
-        and os.environ.get("MASTERSMITH_CLEAR_GLASS_HIGHLIGHTS", "1") != "0":
+        and (os.environ.get("MASTERSMITH_CLEAR_GLASS_HIGHLIGHTS", "1") != "0" or "clear_glass_highlights" in TEXTURE_FIXES):
     try:
         _cleared = clear_painted_reflections(ob, glass_faces)
         if _cleared:

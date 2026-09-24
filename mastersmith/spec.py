@@ -5,6 +5,14 @@ CATEGORIES = ("weapon", "vehicle", "aircraft", "helicopter", "character", "prop"
 ENGINES = ("unreal", "unity", "godot")
 STYLES = ("realistic", "stylized")
 
+# Scripted texture repairs the finish can apply on a re-finish of the same seed (no vendor, no spend). The director
+# reaches for these before any repaint or new mesh when the complaint is about the texture, not the shape.
+TEXTURE_FIXES = {
+    "delight": "remove baked-in lighting and painted shadows/highlights from the base colour (strong de-light)",
+    "clear_glass_highlights": "darken the reflections the vendor painted on the cockpit interior under a clear canopy",
+    "dark_canopy": "make the canopy/windows an opaque dark tint instead of clear glass (hides a hollow interior)",
+}
+
 DEFAULT_TRIS = {"weapon": 60000, "vehicle": 120000, "aircraft": 120000, "helicopter": 120000, "character": 80000, "prop": 30000, "environment": 80000}
 DEFAULT_SIZE_M = {"weapon": 1.0, "vehicle": 5.0, "aircraft": 15.0, "helicopter": 17.0, "character": 1.8, "prop": 1.0, "environment": 4.0}
 
@@ -43,6 +51,7 @@ class Spec:
     remove_parts: list = None         # a repair on the existing mesh: parts to delete in Blender, as descriptive phrases
                                       # ("the extra cylinder attached to the magazine"); re-applied on every re-finish
     picture_model: str = None         # OpenRouter image model for this build's pictures (concept, edits, views); None -> config
+    texture_fixes: list = None        # scripted texture repairs applied on a re-finish (see TEXTURE_FIXES): free, deterministic
 
     def __post_init__(self):
         # Asset name rule: letters, digits, underscores, hyphens, starting with a letter. Anything
@@ -97,6 +106,12 @@ class Spec:
             if phrase and phrase not in parts:
                 parts.append(phrase)
         self.remove_parts = parts[:4]
+        fixes = []
+        for f in self.texture_fixes or []:
+            key = str(f or "").strip().lower()
+            if key in TEXTURE_FIXES and key not in fixes:
+                fixes.append(key)
+        self.texture_fixes = fixes
 
         if self.research is None:
             self.research = bool(self.search_query) and not refs
