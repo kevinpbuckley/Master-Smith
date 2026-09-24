@@ -64,8 +64,17 @@ def diagnose(result, work_dir, spec, reference_source=None):
         out.append({"finding": "reviewer: blurry / muddy / flat texture", "remedy": "free re-finish with delight; if still flat, a repaint",
                     "fix": {"texture_fixes": ["delight"]}})
     if any(w in joined for w in GEOMETRY_WORDS):
-        out.append({"finding": "reviewer: melted or fused geometry", "remedy": "a crisper seed: Hitem3D v3 (2048) from the same approved "
-                               "pictures, or more angles for Tripo", "fix": {"seed_vendor": "hitem3d3"}})
+        vendor = str(getattr(spec, "seed_vendor", None) or "").lower()
+        if vendor.startswith("hitem"):
+            # Hitem3D already had its go (the Abrams: Tripo 4/10, Hi3D v3 4/10, 2026-09-24): the crisper seed is not the
+            # answer; the next lever is the mesh's own detail, not another vendor of the same picture
+            out.append({"finding": "reviewer: melted or fused geometry, already on Hitem3D v3",
+                        "remedy": "another vendor of the same picture will not fix it: redraw the reference with cleaner, higher-contrast "
+                                  "panel lines and try Meshy v7 multi-image, or accept the shape and repaint / remove the fused part",
+                        "fix": {"seed_vendor": "meshy7mv"}})
+        else:
+            out.append({"finding": "reviewer: melted or fused geometry", "remedy": "a crisper seed: Hitem3D v3 (2048) from the same approved "
+                                   "pictures, or more angles for Tripo", "fix": {"seed_vendor": "hitem3d3"}})
     if any(w in joined for w in GLASS_WORDS) and getattr(spec, "glass", False):
         out.append({"finding": "reviewer: the glass / canopy reads wrong", "remedy": "free re-finish: clear_glass_highlights, or dark_canopy "
                                "when the interior is hollow", "fix": {"texture_fixes": ["clear_glass_highlights", "dark_canopy"]}})
