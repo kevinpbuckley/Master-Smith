@@ -2190,8 +2190,17 @@ def attach_part(obj, faces, glb, name, place="inside", size_m=0.0, yaw=0, blend=
             & (np.abs(cen[:, 1] - (lo_p[1] + hi_p[1]) * 0.5) < 0.4 * ext_p[1]) \
             & (cen[:, 2] < lo_p[2]) & (cen[:, 2] >= lo_p[2] - 1.0 * ext_p[2])
         if body_sel.sum() >= 30:
-            floor_z = float(np.percentile(cen[body_sel][:, 2], 8))
-            floor_note = "cavity floor %.2f m under a glass edge at %.2f m (%d body faces)" % (floor_z, lo_p[2], int(body_sel.sum()))
+            # the floor is the highest 0.2 m layer that holds a real share of those faces (the hull skin under the
+            # cockpit); a low percentile found the chin details and put the Havoc's interior at 0.28 m (2026-09-24)
+            zs = cen[body_sel][:, 2]
+            step = max(0.2, 0.08 * ext_p[2])
+            edges = np.arange(zs.min(), lo_p[2] + step, step)
+            counts, _ = np.histogram(zs, bins=edges)
+            dense = [i for i, c in enumerate(counts) if c >= 0.15 * len(zs)]
+            top_band = max(dense) if dense else int(np.argmax(counts))
+            floor_z = float(edges[top_band + 1])
+            floor_z = max(floor_z, lo_p[2] - 0.6 * ext_p[2])
+            floor_note = "cavity floor %.2f m under a glass edge at %.2f m (%d body faces, densest layer)" % (floor_z, lo_p[2], int(body_sel.sum()))
     before = set(bpy.data.objects)
     prepared = bool(blend) and os.path.exists(blend)
     if prepared:
