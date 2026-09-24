@@ -142,3 +142,31 @@ def test_jfif_and_webp_uploads_become_png(client):
         assert Image.open(j["path"]).size == (8, 8)
     bad = client.post("/v1/uploads", headers=H, files={"file": ("broken.jfif", b"not a picture", "image/jpeg")})
     assert bad.status_code == 415
+
+
+def test_chats_persist_reload_and_delete(client):
+    from mastersmith import service
+    H = {"Authorization": "Bearer " + KEY}
+    from mastersmith import config
+    service.CHATS_DIR = config.DATA_DIR / "chats"           # the fixture moved DATA_DIR after import
+    sess = service._session("chat-one", "agent")
+    d = sess["director"]
+    d.spec = service.Spec(name="Crate", description="oak crate", category="prop")
+    d.last_job_id = "20260101_000000_abcdef"
+    d.last_tools = [{"name": "make_reference", "args": {}, "result": '{"job_id": "20260101_000001_abc123", "status": "done"}'}]
+    turn = {"at": 1.0, "user": "an oak crate", "attachments": [], "reply": "Brief set.",
+            "turn": {"brief": d.spec.to_dict(), "last_job": d.last_job_id, "balance": 0, "providers": None, "pictures": [],
+                     "pictures_kind": None, "reference_job": None, "settings": {}, "chat_cost_usd": 0.001, "tools": []}}
+    state = service.save_chat("agent", "chat-one", sess, turn)
+    assert state["title"] == "Crate" and state["jobs"] == ["20260101_000000_abcdef", "20260101_000001_abc123"]
+    lst = client.get("/v1/chats", headers=H).json()
+    assert [c["id"] for c in lst] == ["chat-one"] and lst[0]["turns"] == 1 and lst[0]["name"] == "Crate"
+    # forget the warm session: the folder rebuilds it, behind a fresh system prompt, with the brief and the job
+    service._sessions.pop("agent:chat-one", None)
+    one = client.get("/v1/chats/chat-one", headers=H).json()
+    assert one["turns"][0]["reply"] == "Brief set." and one["spec"]["name"] == "Crate"
+    d2 = service._session("chat-one", "agent")["director"]
+    assert d2.spec.name == "Crate" and d2.last_job_id == "20260101_000000_abcdef" and d2.messages[0]["role"] == "system"
+    assert client.delete("/v1/chats/chat-one", headers=H).json() == {"deleted": True}
+    assert client.get("/v1/chats/chat-one", headers=H).status_code == 404
+    assert client.get("/v1/chats", headers=H).json() == []

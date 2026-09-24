@@ -246,7 +246,8 @@ def job_view(row, user):
             "glb": next(("/v1/jobs/%s/files/%s" % (row["id"], f) for f in files if f.lower().endswith(".glb") and f.startswith("SM_")), None)}
 
 
-def _director(session_id, user):
+def _session(session_id, user):
+    """The live session for a chat: in memory while it is warm, rebuilt from its folder on disk otherwise."""
     with _lock:
         now = time.time()
         for sid in [s for s, v in _sessions.items() if now - v["touched"] > SESSION_TTL]:
@@ -255,6 +256,15 @@ def _director(session_id, user):
         if key not in _sessions:
             d = Director(user, wallet, log=lambda m: None)
             sess = {"director": d, "user": user, "touched": now, "settings": {}}
+            state = load_chat(user, session_id)
+            if state:
+                # the transcript comes back behind a FRESH system prompt, so rule changes reach old chats too
+                d.messages = d.messages[:1] + [m for m in (state.get("messages") or []) if m.get("role") != "system"]
+                d.spec = Spec.from_dict(state["spec"]) if state.get("spec") else None
+                d.reference = state.get("reference") or None
+                d.last_job_id = state.get("last_job_id")
+                d.model = state.get("model") or d.model
+                sess["settings"] = dict(state.get("settings") or {})
 
             def with_settings(spec_dict):
                 """The session's model choices ride on every spec the director sends, unless the brief names one."""
@@ -270,12 +280,97 @@ def _director(session_id, user):
             d.job_status = lambda job_id: (lambda row: job_view(row, user) if row else {"error": "unknown job"})(store.job(job_id, user))
             _sessions[key] = sess
         _sessions[key]["touched"] = now
-        return _sessions[key]["director"]
+        return _sessions[key]
+
+
+def _director(session_id, user):
+    return _session(session_id, user)["director"]
 
 
 def _session_settings(session_id, user):
-    with _lock:
-        return _sessions["%s:%s" % (user, session_id)]["settings"]
+    return _session(session_id, user)["settings"]
+
+
+# ------------------------------------------------------------------ chats on disk
+# Every chat is a folder: <data>/chats/<user>/<session>/chat.json holds the director's transcript, the brief, the
+# approved reference, the settings, the jobs it made and the turns the web shows. Reloading a chat restores all of
+# it, so a model built last week can be re-finished, repainted or repaired today.
+CHATS_DIR = config.DATA_DIR / "chats"
+_SAFE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _chat_dir(user, session_id):
+    return os.path.join(str(CHATS_DIR), _SAFE.sub("_", user)[:40], _SAFE.sub("_", session_id)[:80])
+
+
+def load_chat(user, session_id):
+    path = os.path.join(_chat_dir(user, session_id), "chat.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _job_ids_in(turn, director):
+    ids = []
+    if turn and (turn.get("turn") or {}).get("last_job"):
+        ids.append(turn["turn"]["last_job"])
+    for t in director.last_tools:
+        m = re.search(r'"job_id":\s*"([0-9]{8}_[0-9]{6}_[0-9a-f]{6})"', t.get("result") or "")
+        if m:
+            ids.append(m.group(1))
+    return ids
+
+
+def _chat_title(state, director):
+    if director.spec and director.spec.name:
+        return director.spec.name
+    for t in state.get("turns") or []:
+        text = (t.get("user") or "").strip()
+        if text:
+            return text[:60]
+    return "New chat"
+
+
+def save_chat(user, session_id, sess, turn=None):
+    d = sess["director"]
+    state = load_chat(user, session_id) or {"id": session_id, "user": user, "created": time.time(), "turns": [], "jobs": []}
+    if turn:
+        state["turns"].append(turn)
+    for jid in _job_ids_in(turn, d):
+        if jid not in state["jobs"]:
+            state["jobs"].append(jid)
+    state.update({"updated": time.time(), "title": _chat_title(state, d), "messages": d.messages,
+                  "spec": d.spec.to_dict() if d.spec else None, "reference": d.reference, "last_job_id": d.last_job_id,
+                  "model": d.model, "settings": sess["settings"]})
+    folder = _chat_dir(user, session_id)
+    os.makedirs(folder, exist_ok=True)
+    tmp = os.path.join(folder, "chat.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, default=str)
+    os.replace(tmp, os.path.join(folder, "chat.json"))
+    return state
+
+
+def chat_summary(state):
+    return {"id": state["id"], "title": state.get("title") or "New chat", "created": state.get("created"),
+            "updated": state.get("updated"), "turns": len(state.get("turns") or []), "jobs": list(state.get("jobs") or []),
+            "last_job_id": state.get("last_job_id"), "name": (state.get("spec") or {}).get("name")}
+
+
+def list_chats(user, limit=100):
+    root = os.path.join(str(CHATS_DIR), _SAFE.sub("_", user)[:40])
+    out = []
+    if os.path.isdir(root):
+        for sid in os.listdir(root):
+            st = load_chat(user, sid)
+            if st:
+                out.append(chat_summary(st))
+    out.sort(key=lambda c: -(c.get("updated") or 0))
+    return out[:limit]
 
 
 def _director_entry(mid, prices, tag=None):
@@ -404,13 +499,57 @@ def chat(body: ChatIn, who=Depends(auth)):
         reply = d.turn(text)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, "director error: %s" % str(exc)[:300])
-    return {"reply": reply, "brief": d.spec.to_dict() if d.spec else None, "balance": wallet.balance(who["user"]),
-            "providers": providers.balances(), "last_job": d.last_job_id, "chat_cost_usd": round(d.chat_cost_usd(), 5),
-            "pictures": list(d.last_pictures), "pictures_kind": d.last_pictures_kind,
-            "reference_job": (d.reference or {}).get("job_dir"),
-            "settings": {"seed_vendor": settings.get("seed_vendor") or model_options()["defaults"]["seed_vendor"],
-                         "director_model": d.model, "picture_model": settings.get("picture_model") or config.CONCEPT_MODEL},
-            "tools": [{"name": t["name"], "args": t.get("args"), "result": t.get("result")} for t in d.last_tools]}
+    out = {"reply": reply, "brief": d.spec.to_dict() if d.spec else None, "balance": wallet.balance(who["user"]),
+           "providers": providers.balances(), "last_job": d.last_job_id, "chat_cost_usd": round(d.chat_cost_usd(), 5),
+           "pictures": list(d.last_pictures), "pictures_kind": d.last_pictures_kind,
+           "reference_job": (d.reference or {}).get("job_dir"),
+           "settings": {"seed_vendor": settings.get("seed_vendor") or model_options()["defaults"]["seed_vendor"],
+                        "director_model": d.model, "picture_model": settings.get("picture_model") or config.CONCEPT_MODEL},
+           "tools": [{"name": t["name"], "args": t.get("args"), "result": t.get("result")} for t in d.last_tools]}
+    try:
+        turn = {"at": time.time(), "user": body.message, "attachments": [a.model_dump() for a in body.attachments], "reply": reply,
+                "turn": {k: out[k] for k in ("brief", "last_job", "balance", "providers", "pictures", "pictures_kind",
+                                             "reference_job", "settings", "chat_cost_usd", "tools")}}
+        out["chat"] = chat_summary(save_chat(who["user"], body.session_id, _session(body.session_id, who["user"]), turn))
+    except Exception as exc:  # noqa: BLE001 - a chat that could not be saved still answers
+        out["chat_save_error"] = str(exc)[:200]
+    return out
+
+
+@app.get("/v1/chats")
+def get_chats(who=Depends(auth)):
+    """Every chat this user had, newest first: title, when, the jobs it made."""
+    return list_chats(who["user"])
+
+
+@app.get("/v1/chats/{session_id}")
+def get_chat(session_id: str, who=Depends(auth)):
+    """One chat with its turns (what the web shows), brief, settings and the jobs it made with their files; loading it
+    also warms the session so the next message continues where it left off."""
+    state = load_chat(who["user"], session_id)
+    if not state:
+        raise HTTPException(404, "no such chat")
+    _session(session_id, who["user"])
+    jobs = []
+    for jid in state.get("jobs") or []:
+        row = store.job(jid, who["user"])
+        if row:
+            jobs.append(job_view(row, who["user"]))
+    return {**chat_summary(state), "turns": state.get("turns") or [], "spec": state.get("spec"),
+            "settings": state.get("settings") or {}, "reference": state.get("reference"), "job_views": jobs}
+
+
+@app.delete("/v1/chats/{session_id}")
+def delete_chat(session_id: str, who=Depends(auth)):
+    """Forget a chat (its folder). The jobs it made and their files stay."""
+    import shutil
+    folder = _chat_dir(who["user"], session_id)
+    gone = os.path.isdir(folder)
+    if gone:
+        shutil.rmtree(folder, ignore_errors=True)
+    with _lock:
+        _sessions.pop("%s:%s" % (who["user"], session_id), None)
+    return {"deleted": gone}
 
 
 @app.post("/v1/jobs")

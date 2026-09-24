@@ -59,6 +59,33 @@ export type TurnData = {
   tools: { name: string; args: unknown; result: string }[];
 };
 
+export type ChatSummary = {
+  id: string;
+  title: string;
+  created: number | null;
+  updated: number | null;
+  turns: number;
+  jobs: string[];
+  last_job_id: string | null;
+  name: string | null;
+};
+
+export type ChatTurn = {
+  at: number;
+  user: string;
+  attachments: Attachment[];
+  reply: string;
+  turn: Omit<TurnData, "tools"> & { tools?: TurnData["tools"] };
+};
+
+export type ChatState = ChatSummary & {
+  turns: ChatTurn[];
+  spec: Record<string, unknown> | null;
+  settings: Settings;
+  reference: Record<string, unknown> | null;
+  job_views: JobView[];
+};
+
 export type JobView = {
   id: string;
   status: "queued" | "running" | "done" | "failed" | "refused";
