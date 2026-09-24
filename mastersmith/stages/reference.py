@@ -104,6 +104,7 @@ def _make_view(job, skill, view, fixes, index):
         try:
             images.generate(edit_prompt(spec, skill, view, fixes), path, model=pricing.edit_model(spec), references=sources[:4], aspect_ratio="4:3")
             made = True
+            job.edit_refused = False        # a refusal is per call: one 422 on an Apache photo must not cost the extra angles
         except ImageRefused as exc:
             job.edit_refused = True
             job.log("  the picture editor refused this subject (%s); cutting the photograph out instead" % str(exc)[:100])
