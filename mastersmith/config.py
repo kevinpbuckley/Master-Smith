@@ -48,14 +48,14 @@ DIRECTOR_MODELS = [m.strip() for m in os.environ.get(
 ).split(",") if m.strip()]
 
 # --- fal endpoints by role. One vendor per role; the 2026-09-16 bake-off picked these.
-# --- pictures: OpenRouter's image API (POST /api/v1/images) since 2026-09-19 (ported from the openrouter-only branch):
-# the same Gemini image models as fal's nano-banana at about 7 cents a picture, with edits from reference pictures and
-# the cost reported per call. Ids in pricing.IMAGE_PRICES; every one has an MASTERSMITH_* override.
-CONCEPT_MODEL = os.environ.get("MASTERSMITH_CONCEPT_MODEL", "google/gemini-3.1-flash-image")        # text -> clean product shot
-CONCEPT_MODEL_PREMIUM = os.environ.get("MASTERSMITH_CONCEPT_PREMIUM", "google/gemini-3-pro-image")
+# --- pictures come from fal too (fal-ai/nano-banana-2 and friends; a fal id with reference pictures runs the /edit
+# endpoint), so one account covers pictures and meshes. OpenRouter image ids (google/gemini-3.1-flash-image, ...) still
+# work anywhere a picture model is named. Ids and prices in pricing.IMAGE_PRICES; every one has a MASTERSMITH_* override.
+CONCEPT_MODEL = os.environ.get("MASTERSMITH_CONCEPT_MODEL", "fal-ai/nano-banana-2")        # text -> clean product shot
+CONCEPT_MODEL_PREMIUM = os.environ.get("MASTERSMITH_CONCEPT_PREMIUM", "fal-ai/nano-banana-pro")
 # Hard-surface categories get a stronger picture model: the seed reproduces every 2D error as geometry, and
 # the cheap model hallucinates extra fine parts on weapons and vehicles (issue #8). Set MASTERSMITH_CONCEPT_HARD to override.
-CONCEPT_MODEL_HARD = os.environ.get("MASTERSMITH_CONCEPT_HARD", "google/gemini-3-pro-image")
+CONCEPT_MODEL_HARD = os.environ.get("MASTERSMITH_CONCEPT_HARD", "fal-ai/nano-banana-pro")
 IMAGE_RESOLUTION = os.environ.get("MASTERSMITH_IMAGE_RESOLUTION", "1K")
 # The hybrid repaint of the seed: "meshy" = Meshy retexture on fal ($0.30); "pictures" = the picture model repaints the
 # seed's own orthographic renders in the reference's look and Blender projects and bakes them (about $0.40 of pictures,
@@ -85,7 +85,7 @@ HYBRID_SEED = os.environ.get("MASTERSMITH_HYBRID_SEED", "meshy7mv").strip().lowe
 # energy of four vendors (issue #6, 2026-09-17). Default for hard-surface categories; MASTERSMITH_SEED_QUAD=0/1 forces it.
 _quad_env = os.environ.get("MASTERSMITH_SEED_QUAD", "")
 SEED_QUAD = _quad_env == "1" if _quad_env in ("0", "1") else None   # None -> by category
-EDIT_MODEL = os.environ.get("MASTERSMITH_EDIT_MODEL", "google/gemini-3.1-flash-image")   # photo -> clean profile / other view
+EDIT_MODEL = os.environ.get("MASTERSMITH_EDIT_MODEL", "fal-ai/nano-banana-2")   # photo -> clean profile / other view (its /edit endpoint)
 CUTOUT_MODEL = "fal-ai/birefnet/v2"             # background removal, $0.003
 SEED_MODEL = "tripo3d/h3.1/image-to-3d"         # full PBR, thin parts survive
 RETEXTURE_MODEL = "fal-ai/meshy/v5/retexture"   # repaint an existing mesh on its own UVs, $0.30

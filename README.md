@@ -7,8 +7,8 @@ mesh seeded from it, and a headless Blender finish that makes the mesh engine-re
 metres, glass slot, LODs, collision hull, packed PBR maps, previews, FBX/GLB). You can also hand it a model you
 already have and get the same finish.
 
-It runs on your own **fal.ai** key (meshes, masks, rigs, the repaint) and **OpenRouter** key (the director, the
-vision checks, the picture models). Nothing else is required. A typical build costs about a dollar of provider
+It runs on your own **fal.ai** key (pictures, meshes, masks, rigs, the repaint) and **OpenRouter** key (the
+director and the vision checks; OpenRouter's image models are available too). Nothing else is required. A typical build costs about a dollar of provider
 spend; the director's chat costs cents.
 
 One person's tool: your keys, your machine, your models. Contributions are welcome; see
@@ -58,8 +58,9 @@ with the files to download. Every picture a job drew (reference angles, cockpit 
 previews) is listed there too, and each picture shown in the chat has a save link. Output also lands in
 `out/<Name>_<job>/delivery/`.
 
-The header's three selectors choose, per session, the mesh vendor, the picture model (OpenRouter's image models,
-Nano Banana 2 by default) and the director model; every label carries the price.
+The header's three selectors choose, per session, the mesh vendor, the picture model (fal.ai's Nano Banana 2 by
+default; fal's other picture models and OpenRouter's are listed too) and the director model; every label carries
+the price.
 
 Aircraft and helicopters get a glass canopy slot by default. The second "cockpit tub" model fitted under the canopy
 is opt-in (`cockpit: true` in the brief); it is a gamble on the tub's fit.

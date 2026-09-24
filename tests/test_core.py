@@ -410,3 +410,20 @@ def test_director_ask_records_the_question_and_options():
         assert out["status"] == "asked" and director.last_question == {"question": "Realistic or stylized?", "options": ["Realistic", "Stylized, low-poly"]}
         assert "error" in director._ask({"question": "?", "options": ["only one"]})
         w.close()
+
+
+def test_pictures_come_from_fal_by_default_and_edits_use_the_edit_endpoint():
+    from mastersmith.images import fal_endpoint, fal_payload
+    cat = pricing.picture_catalogue()
+    assert cat[0]["id"] == "fal-ai/nano-banana-2" and cat[0]["default"] and cat[0]["provider"] == "fal.ai"
+    assert not any(c["id"].endswith("/edit") for c in cat) and any(c["provider"] == "OpenRouter" for c in cat)
+    assert fal_endpoint("fal-ai/nano-banana-2", True) == "fal-ai/nano-banana-2/edit"
+    assert fal_endpoint("fal-ai/nano-banana-2", False) == "fal-ai/nano-banana-2"
+    assert fal_endpoint("fal-ai/nano-banana-2/edit", True) == "fal-ai/nano-banana-2/edit"
+    p = fal_payload("fal-ai/nano-banana-2/edit", "a crate", ["https://x/a.png"], "4:3", "1K")
+    assert p == {"prompt": "a crate", "aspect_ratio": "4:3", "resolution": "1K", "num_images": 1, "output_format": "png", "image_urls": ["https://x/a.png"]}
+    f = fal_payload("fal-ai/flux-2", "a crate", (), "1:1", "1K")
+    assert f["image_size"] == "square_hd" and "image_urls" not in f
+    assert pricing.image_price("fal-ai/nano-banana-2/edit") == 0.08 and pricing.price("fal-ai/nano-banana-pro") == 0.15
+    crate = Spec(name="Crate", description="oak crate", category="prop")
+    assert pricing.concept_model(crate) == "fal-ai/nano-banana-2" and pricing.edit_model(crate) == "fal-ai/nano-banana-2"

@@ -15,6 +15,11 @@ FAL_PRICES = {
     "fal-ai/meshy/v7/multi-image-to-3d": 0.05,   # MEASURED 2026-09-18 via fal's balance endpoint: $0.034 and $0.037
                                                  # on two 4-view 300k-quad PBR runs. Held at 0.05 as the reservation.
     "fal-ai/birefnet/v2": 0.003,
+    # pictures on fal (fal's published per-image prices, 2026-09-24; 2K/4K outputs cost more)
+    "fal-ai/nano-banana-2": 0.08, "fal-ai/nano-banana-2/edit": 0.08,
+    "fal-ai/nano-banana": 0.04, "fal-ai/nano-banana/edit": 0.04,
+    "fal-ai/nano-banana-pro": 0.15, "fal-ai/nano-banana-pro/edit": 0.15,
+    "fal-ai/flux-2": 0.02, "fal-ai/flux-2/edit": 0.04, "fal-ai/flux-2-pro": 0.05,
     "tripo3d/h3.1/image-to-3d": 0.30,         # standard; +0.10 HD textures, +0.20 detailed geometry, +0.05 quad
     "tripo3d/h3.1/multiview-to-3d": 0.30,
     "fal-ai/hyper3d/rodin/v2": 0.40,
@@ -30,9 +35,14 @@ FAL_PRICES = {
 }
 
 
-# Worst-case USD for ONE picture from OpenRouter's image API (per-image output token prices as of 2026-09-18, 1K
-# resolution, rounded up); the real usage.cost is what gets billed.
+# Worst-case USD for ONE picture. fal ids (the default: the same account as the meshes) are fal's fixed per-image
+# prices at 1K; OpenRouter ids are per-image output token prices as of 2026-09-18, and the reported usage.cost is what
+# gets billed there.
 IMAGE_PRICES = {
+    "fal-ai/nano-banana-2": 0.08, "fal-ai/nano-banana-2/edit": 0.08,
+    "fal-ai/nano-banana": 0.04, "fal-ai/nano-banana/edit": 0.04,
+    "fal-ai/nano-banana-pro": 0.15, "fal-ai/nano-banana-pro/edit": 0.15,
+    "fal-ai/flux-2": 0.02, "fal-ai/flux-2/edit": 0.04, "fal-ai/flux-2-pro": 0.05,
     "google/gemini-3.1-flash-image": 0.08,
     "google/gemini-3.1-flash-image-preview": 0.08,
     "google/gemini-3.1-flash-lite-image": 0.04,
@@ -56,7 +66,9 @@ def image_price(model):
     return IMAGE_PRICES[model]
 
 
-PICTURE_NAMES = {           # what OpenRouter calls them; the ids are what the API takes
+PICTURE_NAMES = {           # what the providers call them; the ids are what the APIs take
+    "fal-ai/nano-banana-2": "Nano Banana 2", "fal-ai/nano-banana": "Nano Banana", "fal-ai/nano-banana-pro": "Nano Banana Pro",
+    "fal-ai/flux-2": "FLUX 2", "fal-ai/flux-2-pro": "FLUX 2 Pro",
     "google/gemini-3.1-flash-image": "Nano Banana 2", "google/gemini-3.1-flash-image-preview": "Nano Banana 2 (preview)",
     "google/gemini-3.1-flash-lite-image": "Nano Banana 2 Lite", "google/gemini-2.5-flash-image": "Nano Banana",
     "google/gemini-3-pro-image": "Nano Banana Pro", "google/gemini-3-pro-image-preview": "Nano Banana Pro (preview)",
@@ -68,11 +80,12 @@ def picture_catalogue():
     """The picture models a build may pick (Spec.picture_model), with the worst-case price of one picture."""
     out = []
     for mid, usd in IMAGE_PRICES.items():
-        if mid.endswith("-preview"):
-            continue                                   # the preview ids are aliases of the released ones
-        out.append({"id": mid, "label": "%s (%s) · $%.2f a picture" % (PICTURE_NAMES.get(mid, mid), mid, usd),
-                    "name": PICTURE_NAMES.get(mid, mid), "usd": usd, "default": mid == config.CONCEPT_MODEL})
-    return sorted(out, key=lambda r: (not r["default"], r["usd"]))
+        if mid.endswith("-preview") or mid.endswith("/edit"):
+            continue                                   # preview ids alias the released ones; /edit is derived from the base id
+        provider = "fal.ai" if mid.startswith("fal-ai/") else "OpenRouter"
+        out.append({"id": mid, "label": "%s · %s (%s) · $%.2f a picture" % (PICTURE_NAMES.get(mid, mid), provider, mid, usd),
+                    "name": PICTURE_NAMES.get(mid, mid), "provider": provider, "usd": usd, "default": mid == config.CONCEPT_MODEL})
+    return sorted(out, key=lambda r: (not r["default"], r["provider"] != "fal.ai", r["usd"]))
 
 
 def edit_model(spec=None):
