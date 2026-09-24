@@ -15,7 +15,9 @@ quote the credits, and run the build when they confirm. You are concise and conc
 How a job goes:
 1. From the customer's words call set_brief with your best complete brief. Fill sensible defaults yourself
    (category, real size in metres, triangle budget, engine) - ask at most ONE short question, and only when the
-   answer would change the model itself (e.g. "which tank?", "realistic or stylized?"). Write `description`
+   answer would change the model itself (e.g. "which tank?", "realistic or stylized?"). Ask through ask_customer
+   with 2-4 concrete options: the chat shows them as numbered buttons the customer can click, and they may also
+   type anything. Do that whenever you need a decision, including "go ahead?" moments and which remedy to apply. Write `description`
    as a photo caption: what it is, its materials and colours, distinctive parts, era. Write colours as a camera
    sees them, never as trade terms ('blued steel' is dark blue-black oxidised steel, not blue). Fixed-wing aircraft are
    category "aircraft" and rotorcraft "helicopter" (not "vehicle"). Name real machines by name
@@ -124,6 +126,15 @@ TOOLS = [
             "glass": {"type": "boolean"}, "rig": {"type": "boolean"}, "notes": {"type": "string"}},
             "required": ["path", "name", "category"]}}},
     {"type": "function", "function": {
+        "name": "ask_customer",
+        "description": "Ask the customer to choose. The chat shows the options as numbered buttons (they can also type). "
+                       "Call it, then end your reply with the question; do nothing else this turn.",
+        "parameters": {"type": "object", "properties": {
+            "question": {"type": "string", "description": "One short question"},
+            "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 5,
+                        "description": "2-5 concrete answers, each a few words ('Realistic', 'Stylized, low-poly')"}},
+            "required": ["question", "options"]}}},
+    {"type": "function", "function": {
         "name": "make_reference",
         "description": "Draw the reference picture(s) for the current brief and show them to the customer, without buying a "
                        "mesh. Call it when the customer confirms the brief; call build once they approve the picture.",
@@ -173,6 +184,7 @@ class Director:
         self.reference = None       # the approved pictures: {"job_dir", "views", "for": design snapshot}
         self.last_pictures = []     # pictures produced this turn, for the chat to show: [{"label", "url"}]
         self.last_pictures_kind = None   # "reference" (approve to build) or "removal" (confirm to delete the red faces)
+        self.last_question = None   # {"question", "options"} when the director asked the customer to choose this turn
         self.messages = [{"role": "system", "content": SYSTEM.format(
             categories=", ".join(skills.all_categories()), cats=", ".join(CATEGORIES),
             styles=", ".join(STYLES), engines=", ".join(ENGINES), pricing=pricing_note)}]
@@ -286,6 +298,15 @@ class Director:
             self.last_job_id = out["job_id"]
         return out
 
+    def _ask(self, a):
+        q = str((a or {}).get("question") or "").strip()
+        opts = [str(o).strip() for o in ((a or {}).get("options") or []) if str(o).strip()][:5]
+        if not q or len(opts) < 2:
+            return {"error": "ask_customer needs a question and 2-5 options"}
+        self.last_question = {"question": q, "options": opts}
+        return {"status": "asked", "next": "End your reply with the question and the options numbered 1..n. Do not call "
+                                           "other tools this turn; the customer's next message is their answer."}
+
     def _job_status(self, a):
         jid = a.get("job_id") or self.last_job_id
         if not jid:
@@ -312,6 +333,7 @@ class Director:
         self.last_tools = []
         self.last_pictures = []
         self.last_pictures_kind = None
+        self.last_question = None
         for _ in range(MAX_TOOL_ROUNDS):
             msg = self.llm.chat(self.messages, model=self.model, tools=TOOLS)
             self.messages.append({"role": "assistant", "content": msg.get("content") or "",
@@ -326,7 +348,7 @@ class Director:
                     a = {}
                 fn = {"set_brief": self._set_brief, "build": self._build, "read_skill": self._read_skill,
                       "balance": self._balance, "job_status": self._job_status, "import_model": self._import_model,
-                      "make_reference": self._make_reference}.get(name)
+                      "make_reference": self._make_reference, "ask_customer": self._ask}.get(name)
                 out = fn(a) if fn else {"error": "unknown tool %s" % name}
                 self.last_tools.append({"name": name, "args": a, "result": json.dumps(out, default=str)[:400]})
                 self.messages.append({"role": "tool", "tool_call_id": call["id"], "name": name,

@@ -3,8 +3,33 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Attachment, ChatState, ChatSummary, ChatTurn, JobView, ModelOptions, Providers, Settings, TurnData } from "@/lib/api";
 import JobPanel from "./JobPanel";
+
+// Assistant replies are markdown (bold, lists, code); users' own text stays as typed.
+function Md({ text }: { text: string }) {
+  return (
+    <div className="md">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  );
+}
+
+// The director asked a question with choices: numbered buttons the customer can click; typing still works.
+function Options({ q, onPick, busy }: { q: { question: string; options: string[] }; onPick: (text: string) => void; busy: boolean }) {
+  return (
+    <div className="options">
+      {q.options.map((o, i) => (
+        <button key={i} type="button" className="option" disabled={busy} onClick={() => onPick(`${i + 1}. ${o}`)}>
+          <span className="num">{i + 1}</span> {o}
+        </button>
+      ))}
+      <span className="dim">or type your own answer</span>
+    </div>
+  );
+}
 
 const SETTINGS_KEY = "mastersmith.settings";
 
@@ -411,13 +436,20 @@ function ChatSession({
                 </p>
               </div>
             )}
-            {messages.map((m) => (
+            {messages.map((m, mi) => (
               <div key={m.id} className={`msg ${m.role}`}>
                 {m.parts.map((p, i) => {
-                  if (p.type === "text") return <p key={i}>{p.text}</p>;
+                  if (p.type === "text") return m.role === "assistant" ? <Md key={i} text={p.text} /> : <p key={i}>{p.text}</p>;
                   if (p.type === "data-turn")
                     return (
                       <div key={i}>
+                        {p.data.question && mi === messages.length - 1 && (
+                          <Options
+                            q={p.data.question}
+                            busy={busy}
+                            onPick={(answer) => sendMessage({ text: answer }, { body: { attachments: [], settings } })}
+                          />
+                        )}
                         {p.data.pictures?.length > 0 && (
                           <Pictures
                             urls={p.data.pictures}

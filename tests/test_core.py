@@ -397,3 +397,16 @@ def test_texture_fixes_are_a_known_catalogue():
     assert s.texture_fixes == ["delight", "dark_canopy"]
     assert Spec(name="Jet", description="grey jet").texture_fixes == []
     assert set(TEXTURE_FIXES) == {"delight", "clear_glass_highlights", "dark_canopy"}
+
+
+def test_director_ask_records_the_question_and_options():
+    from mastersmith.agent import Director
+    from mastersmith.wallet import Wallet
+    with tempfile.TemporaryDirectory() as d:
+        w = Wallet(os.path.join(d, "w.db"))
+        director = Director("kev", w, log=lambda m: None)
+        assert director.last_question is None
+        out = director._ask({"question": "Realistic or stylized?", "options": ["Realistic", " Stylized, low-poly ", ""]})
+        assert out["status"] == "asked" and director.last_question == {"question": "Realistic or stylized?", "options": ["Realistic", "Stylized, low-poly"]}
+        assert "error" in director._ask({"question": "?", "options": ["only one"]})
+        w.close()

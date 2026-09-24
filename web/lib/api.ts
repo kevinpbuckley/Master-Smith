@@ -54,6 +54,7 @@ export type TurnData = {
   providers: Providers | null;
   pictures: { label: string; url: string }[];   // pictures shown this turn: reference angles, or a removal preview
   pictures_kind: "reference" | "removal" | null;
+  question: { question: string; options: string[] } | null;   // the director asked; options render as numbered buttons
   reference_job: string | null;   // the approved reference job the next build will seed from
   chat_cost_usd: number;
   tools: { name: string; args: unknown; result: string }[];

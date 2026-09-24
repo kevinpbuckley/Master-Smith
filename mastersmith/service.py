@@ -482,14 +482,14 @@ def chat(body: ChatIn, who=Depends(auth)):
         raise HTTPException(502, "director error: %s" % str(exc)[:300])
     out = {"reply": reply, "brief": d.spec.to_dict() if d.spec else None, "balance": wallet.balance(who["user"]),
            "providers": providers.balances(), "last_job": d.last_job_id, "chat_cost_usd": round(d.chat_cost_usd(), 5),
-           "pictures": list(d.last_pictures), "pictures_kind": d.last_pictures_kind,
+           "pictures": list(d.last_pictures), "pictures_kind": d.last_pictures_kind, "question": d.last_question,
            "reference_job": (d.reference or {}).get("job_dir"),
            "settings": {"seed_vendor": settings.get("seed_vendor") or model_options()["defaults"]["seed_vendor"],
                         "director_model": d.model, "picture_model": settings.get("picture_model") or config.CONCEPT_MODEL},
            "tools": [{"name": t["name"], "args": t.get("args"), "result": t.get("result")} for t in d.last_tools]}
     try:
         turn = {"at": time.time(), "user": body.message, "attachments": [a.model_dump() for a in body.attachments], "reply": reply,
-                "turn": {k: out[k] for k in ("brief", "last_job", "balance", "providers", "pictures", "pictures_kind",
+                "turn": {k: out[k] for k in ("brief", "last_job", "balance", "providers", "pictures", "pictures_kind", "question",
                                              "reference_job", "settings", "chat_cost_usd", "tools")}}
         out["chat"] = chat_summary(save_chat(who["user"], body.session_id, _session(body.session_id, who["user"]), turn))
     except Exception as exc:  # noqa: BLE001 - a chat that could not be saved still answers
