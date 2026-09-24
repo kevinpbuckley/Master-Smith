@@ -76,8 +76,8 @@ TOOLS = [
             "reference_images": {"type": "array", "items": {"type": "string"}, "description": "Every picture the customer supplied (up to 4)"},
             "search_query": {"type": "string", "description": "For a REAL, named thing (an M1 Abrams, a Willys MB, a Glock 17, a Ford F-150): its exact name, so a photograph is looked up on the web and the mesh is built from it. Empty for fictional or generic objects."},
             "research": {"type": "boolean", "description": "Force web research on or off (default: on when search_query is set and no pictures were supplied)"},
-            "multiview": {"type": "boolean", "description": "Draw and seed from several angles (default true for every category: the "
-                          "customer sees front/side/rear pictures before approving); false only when they ask for one picture"},
+            "single_picture": {"type": "boolean", "description": "ONLY when the customer explicitly asks for a single picture / "
+                               "one view. Leave it out otherwise: every build draws and seeds from several angles by default."},
             "premium": {"type": "boolean", "description": "Dearer picture model for hard briefs"},
             "glass": {"type": "boolean", "description": "Give windows/lenses a glass material slot (default for vehicles, weapons, buildings)"},
             "rig": {"type": "boolean", "description": "Rig it: characters get a UE5-named humanoid skeleton with walk/run clips; vehicles get wheel bones; weapons get Muzzle/Grip/Sight socket bones"},
@@ -175,6 +175,10 @@ class Director:
     # ------------------------------------------------------------ tools
     def _set_brief(self, a):
         base = self.spec.to_dict() if self.spec else {}
+        a = dict(a)
+        if "single_picture" in a:                       # the tool's narrow switch; multiview itself is never exposed
+            base["multiview"] = not bool(a.pop("single_picture"))
+        a.pop("multiview", None)
         base.update({k: v for k, v in a.items() if v not in (None, "")})
         # the words in the brief decide the category (a helicopter filed as a prop loses its canopy and cockpit)
         from .brief import fix_category
