@@ -79,8 +79,9 @@ class Fal:
         low = str(path).lower()
         mime = mime or ("image/png" if low.endswith(".png") else "image/jpeg" if low.endswith((".jpg", ".jpeg"))
                         else "image/webp" if low.endswith(".webp") else "model/gltf-binary")
-        init = self.http.post(UPLOAD_INIT + "?storage_type=fal-cdn-v3", headers=self._h(),
-                              data=json.dumps({"content_type": mime, "file_name": os.path.basename(path)}), timeout=120)
+        # a dropped TLS handshake here (SSLEOFError, the Havoc re-finish of 2026-09-24) is a ConnectionError: retried
+        init = self._retry(lambda: self.http.post(UPLOAD_INIT + "?storage_type=fal-cdn-v3", headers=self._h(),
+                                                  data=json.dumps({"content_type": mime, "file_name": os.path.basename(path)}), timeout=120))
         if init.status_code != 200:
             raise FalError("fal upload initiate: HTTP %d %s" % (init.status_code, init.text[:200]))
         body = init.json()
