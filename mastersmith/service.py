@@ -738,6 +738,72 @@ def get_session(session_id: str, who=Depends(auth)):
             "messages": [m for m in d.messages if m.get("role") != "system"], "last_tools": d.last_tools}
 
 
+# ------------------------------------------------------------------ another brain: Claude Code, Codex, any MCP client
+# The director's tools and state are the session's; who calls them is up to you. These three routes let an outside
+# model act as the director with the same system prompt, skills and tools (mastersmith/mcp_server.py wraps them for
+# MCP), so a Claude Code or Codex subscription can drive builds instead of OpenRouter. The chat is still recorded.
+class ToolIn(BaseModel):
+    name: str
+    args: dict = {}
+
+
+class TurnIn(BaseModel):
+    user: str
+    reply: str
+    attachments: list[Attachment] = []
+
+
+@app.get("/v1/sessions/{session_id}/prompt")
+def get_prompt(session_id: str, who=Depends(auth)):
+    """The director's system prompt for this session, verbatim, plus the tool schemas."""
+    from .agent import TOOLS
+    d = _director(session_id, who["user"])
+    return {"session_id": session_id, "system_prompt": d.messages[0]["content"], "tools": [t["function"] for t in TOOLS],
+            "brief": d.spec.to_dict() if d.spec else None, "last_job": d.last_job_id}
+
+
+@app.post("/v1/sessions/{session_id}/tool")
+def run_tool(session_id: str, body: ToolIn, who=Depends(auth)):
+    """Run one director tool in this session (set_brief, make_reference, build, ...) and answer what the model would see."""
+    d = _director(session_id, who["user"])
+    fn = {"set_brief": d._set_brief, "build": d._build, "read_skill": d._read_skill, "balance": d._balance,
+          "job_status": d._job_status, "import_model": d._import_model, "make_reference": d._make_reference,
+          "ask_customer": d._ask}.get(body.name)
+    if not fn:
+        raise HTTPException(404, "no such tool: %s" % body.name)
+    try:
+        out = fn(dict(body.args or {}))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, "tool %s failed: %s" % (body.name, str(exc)[:300]))
+    d.last_tools.append({"name": body.name, "args": body.args, "result": json.dumps(out, default=str)[:400]})
+    if isinstance(out, dict) and out.get("pictures"):
+        out = {**out, "pictures": [p if isinstance(p, dict) else {"label": "picture", "url": p} for p in out["pictures"]]}
+    return out
+
+
+@app.post("/v1/sessions/{session_id}/turn")
+def record_turn(session_id: str, body: TurnIn, who=Depends(auth)):
+    """Record one exchange (the customer's words and the outside model's reply) so the chat is saved and shows in
+    the web like any other; the tool calls made since the last record ride along."""
+    sess = _session(session_id, who["user"])
+    d = sess["director"]
+    settings = sess["settings"]
+    d.messages.append({"role": "user", "content": body.user})
+    d.messages.append({"role": "assistant", "content": body.reply})
+    turn_data = {"brief": d.spec.to_dict() if d.spec else None, "last_job": d.last_job_id, "balance": wallet.balance(who["user"]),
+                 "providers": providers.balances(), "pictures": list(d.last_pictures), "pictures_kind": d.last_pictures_kind,
+                 "question": d.last_question, "reference_job": (d.reference or {}).get("job_dir"),
+                 "settings": {"seed_vendor": settings.get("seed_vendor") or "tripo", "director_model": "external",
+                              "picture_model": settings.get("picture_model") or config.CONCEPT_MODEL},
+                 "chat_cost_usd": 0.0,
+                 "tools": [{"name": t["name"], "args": t.get("args"), "result": t.get("result")} for t in d.last_tools]}
+    turn = {"at": time.time(), "user": body.user, "attachments": [a.model_dump() for a in body.attachments], "reply": body.reply,
+            "turn": turn_data}
+    state = save_chat(who["user"], session_id, sess, turn)
+    d.last_tools, d.last_pictures, d.last_pictures_kind, d.last_question = [], [], None, None
+    return {"recorded": True, "chat": chat_summary(state)}
+
+
 @app.delete("/v1/sessions/{session_id}")
 def drop_session(session_id: str, who=Depends(auth)):
     with _lock:

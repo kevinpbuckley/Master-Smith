@@ -164,6 +164,12 @@ estimates, queueing, polling, full logs, the debug bundle with Blender log tails
 Jobs are queued and run one at a time by the worker thread (Blender is CPU-bound). Run more workers with
 `python -m mastersmith worker` against the same data directory, or set `MASTERSMITH_NO_WORKER=1` on the API.
 
+**Another brain.** Claude Code, Codex or any MCP client can be the director with the same prompt, skills and
+tools: `python -m mastersmith mcp` exposes them, the repo's `.mcp.json` and `/director` skill wire Claude Code up,
+and every chat driven that way is recorded and shows in the web. The director's thinking then runs on your
+subscription instead of OpenRouter; pictures, meshes and checks still run in the API. See
+[docs/AGENT_MODE.md](docs/AGENT_MODE.md).
+
 The chat in `web/` is a Next.js app on the Vercel AI SDK. Its route handlers proxy to this API (so an API key, if
 any, stays server-side) and turn each turn into a UI message stream with a `data-turn` part carrying the brief and
 the queued job.

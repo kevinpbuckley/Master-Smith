@@ -91,6 +91,12 @@ def cmd_rerun(a):
     print(json.dumps({k: r.get(k) for k in ("status", "delivery_dir", "rig", "review", "bill", "error")}, indent=1, default=str))
 
 
+def cmd_mcp(_a):
+    """Expose the director's tools over MCP (stdio) so Claude Code, Codex or any MCP client can be the director."""
+    from .mcp_server import main
+    main()
+
+
 def cmd_serve(a):
     import uvicorn
     uvicorn.run("mastersmith.service:app", host=a.host, port=a.port, log_level="info")
@@ -152,6 +158,8 @@ def main(argv=None):
     sv.set_defaults(fn=cmd_serve)
     wk = sub.add_parser("worker", help="run a standalone build worker")
     wk.set_defaults(fn=cmd_worker)
+    mc = sub.add_parser("mcp", help="MCP server (stdio): Claude Code / Codex / any MCP client drives the director's tools")
+    mc.set_defaults(fn=cmd_mcp)
     a = p.parse_args(argv)
     a.fn(a)
 

@@ -170,3 +170,23 @@ def test_chats_persist_reload_and_delete(client):
     assert client.delete("/v1/chats/chat-one", headers=H).json() == {"deleted": True}
     assert client.get("/v1/chats/chat-one", headers=H).status_code == 404
     assert client.get("/v1/chats", headers=H).json() == []
+
+
+def test_an_outside_model_can_drive_the_director_through_the_session_routes(client):
+    from mastersmith import service, config
+    H = {"Authorization": "Bearer " + KEY}
+    service.CHATS_DIR = config.DATA_DIR / "chats"
+    p = client.get("/v1/sessions/outside/prompt", headers=H).json()
+    assert "You are Master Smith" in p["system_prompt"] and any(t["name"] == "ask_customer" for t in p["tools"]) and p["brief"] is None
+    r = client.post("/v1/sessions/outside/tool", headers=H, json={"name": "set_brief", "args": {"name": "Barrel", "description": "oak barrel", "category": "prop"}})
+    assert r.status_code == 200 and r.json()["brief"]["name"] == "Barrel" and r.json()["estimate_usd"] > 0
+    r = client.post("/v1/sessions/outside/tool", headers=H, json={"name": "ask_customer", "args": {"question": "Size?", "options": ["1 m", "2 m"]}})
+    assert r.json()["status"] == "asked"
+    assert client.post("/v1/sessions/outside/tool", headers=H, json={"name": "nope", "args": {}}).status_code == 404
+    t = client.post("/v1/sessions/outside/turn", headers=H, json={"user": "a barrel", "reply": "Set. How big? 1. 1 m 2. 2 m"}).json()
+    assert t["recorded"] and t["chat"]["title"] == "Barrel"
+    chat = client.get("/v1/chats/outside", headers=H).json()
+    assert chat["turns"][0]["turn"]["question"] == {"question": "Size?", "options": ["1 m", "2 m"]}
+    assert chat["turns"][0]["turn"]["settings"]["director_model"] == "external"
+    assert [x["name"] for x in chat["turns"][0]["turn"]["tools"]] == ["set_brief", "ask_customer"]
+    client.delete("/v1/chats/outside", headers=H)
