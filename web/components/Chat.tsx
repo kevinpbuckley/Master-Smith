@@ -403,9 +403,13 @@ function ChatSession({
   return (
     <div className="shell">
       <header className="top">
-        <div>
-          <h1>Master Smith</h1>
-          <p className="dim">Prompt in, game-ready 3D model out. Describe an asset, or attach a model to finish it.</p>
+        <div className="brand">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="logo" src="/logo.png" alt="" width={48} height={48} />
+          <div>
+            <h1>Master Smith</h1>
+            <p className="dim">Prompt in, game-ready 3D model out. Describe an asset, or attach a model to finish it.</p>
+          </div>
         </div>
         <div className="me">
           <ModelPicker options={options} settings={settings} onChange={changeSettings} onLoadAll={loadAllModels} busy={busy} />

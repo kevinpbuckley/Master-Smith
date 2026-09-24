@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" width="180" alt="Master Smith"></p>
+
 # Master Smith
 
 Prompt in, game-ready 3D model out. A chat agent directs a fixed pipeline: a clean reference picture, a vendor
