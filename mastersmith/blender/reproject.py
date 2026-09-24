@@ -189,7 +189,7 @@ def _apply(obj, fits, ref_img, ref_px, ref_mask, probe_to_now, log, mirror, colo
     RH, RW = ref_mask.shape
     L = 0.2126 * ref_px[:, :, 0] + 0.7152 * ref_px[:, :, 1] + 0.0722 * ref_px[:, :, 2]
     nrm = _height_to_normal(L, strength=2.0)
-    nrm_img = bpy.data.images.new("anvil_ref_normal", RW, RH, alpha=False, float_buffer=False)
+    nrm_img = bpy.data.images.new("ms_ref_normal", RW, RH, alpha=False, float_buffer=False)
     nrm_img.colorspace_settings.name = "Non-Color"
     buf = np.ones((RH, RW, 4), np.float32)
     buf[:, :, :3] = nrm
@@ -201,7 +201,7 @@ def _apply(obj, fits, ref_img, ref_px, ref_mask, probe_to_now, log, mirror, colo
     er = max(2, int((rb[2] - rb[0]) * 0.004)) if rb else 3     # 1.5% erased every barrel and scope tube (coverage 34% -> 10%)
     fgf = ref_mask.astype(np.float32)
     eroded = (_box_blur(fgf, er) > 0.999).astype(np.float32)
-    msk_img = bpy.data.images.new("anvil_ref_mask", RW, RH, alpha=False, float_buffer=False)
+    msk_img = bpy.data.images.new("ms_ref_mask", RW, RH, alpha=False, float_buffer=False)
     msk_img.colorspace_settings.name = "Non-Color"
     mbuf = np.ones((RH, RW, 4), np.float32)
     mbuf[:, :, 0] = eroded
@@ -265,13 +265,13 @@ def _apply(obj, fits, ref_img, ref_px, ref_mask, probe_to_now, log, mirror, colo
         uv = uv_vert[lv]
         # only loops of weighted faces matter; clip the others to a corner so CLIP extension yields transparent
         wl = w_face[loop_poly]
-        if "anvil_proj" in me.uv_layers:
-            me.uv_layers.remove(me.uv_layers["anvil_proj"])
-        layer = me.uv_layers.new(name="anvil_proj")
+        if "ms_proj" in me.uv_layers:
+            me.uv_layers.remove(me.uv_layers["ms_proj"])
+        layer = me.uv_layers.new(name="ms_proj")
         layer.data.foreach_set("uv", uv.ravel())
-        if "anvil_w" in me.color_attributes:
-            me.color_attributes.remove(me.color_attributes["anvil_w"])
-        attr = me.color_attributes.new("anvil_w", "FLOAT_COLOR", "CORNER")
+        if "ms_w" in me.color_attributes:
+            me.color_attributes.remove(me.color_attributes["ms_w"])
+        attr = me.color_attributes.new("ms_w", "FLOAT_COLOR", "CORNER")
         colw = np.zeros((n_loops, 4), np.float32)
         colw[:, 0] = wl
         colw[:, 1] = wl
@@ -280,7 +280,7 @@ def _apply(obj, fits, ref_img, ref_px, ref_mask, probe_to_now, log, mirror, colo
         attr.data.foreach_set("color", colw.ravel())
         # bake three passes through a temporary emission shader: colour*w, normal*w, w
         for which, src_img, cs in (("col", ref_img, "sRGB"), ("nrm", nrm_img, "Non-Color"), ("msk", msk_img, "Non-Color"), ("w", None, "Non-Color")):
-            target = bpy.data.images.new("anvil_reproj_%s" % which, size, size, alpha=False, float_buffer=True)
+            target = bpy.data.images.new("ms_reproj_%s" % which, size, size, alpha=False, float_buffer=True)
             target.colorspace_settings.name = "Non-Color" if which != "col" else "sRGB"
             restore = []
             for m in mats:
@@ -289,9 +289,9 @@ def _apply(obj, fits, ref_img, ref_px, ref_mask, probe_to_now, log, mirror, colo
                 prev = outn.inputs["Surface"].links[0].from_socket if outn.inputs["Surface"].is_linked else None
                 temps = []
                 e = nt.nodes.new("ShaderNodeEmission"); temps.append(e)
-                wa = nt.nodes.new("ShaderNodeVertexColor"); wa.layer_name = "anvil_w"; temps.append(wa)
+                wa = nt.nodes.new("ShaderNodeVertexColor"); wa.layer_name = "ms_w"; temps.append(wa)
                 if src_img is not None:
-                    uvn = nt.nodes.new("ShaderNodeUVMap"); uvn.uv_map = "anvil_proj"; temps.append(uvn)
+                    uvn = nt.nodes.new("ShaderNodeUVMap"); uvn.uv_map = "ms_proj"; temps.append(uvn)
                     tex = nt.nodes.new("ShaderNodeTexImage"); tex.image = src_img; tex.extension = "CLIP"; tex.interpolation = "Linear"; temps.append(tex)
                     nt.links.new(uvn.outputs["UV"], tex.inputs["Vector"])
                     mul = nt.nodes.new("ShaderNodeMixRGB"); mul.blend_type = "MULTIPLY"; mul.inputs["Fac"].default_value = 1.0; temps.append(mul)
@@ -310,7 +310,7 @@ def _apply(obj, fits, ref_img, ref_px, ref_mask, probe_to_now, log, mirror, colo
             scn.cycles.device = "CPU"
             scn.cycles.samples = 1
             blib.select_only([obj])
-            me.uv_layers.active = me.uv_layers[0] if me.uv_layers[0].name != "anvil_proj" else me.uv_layers[1]
+            me.uv_layers.active = me.uv_layers[0] if me.uv_layers[0].name != "ms_proj" else me.uv_layers[1]
             bpy.ops.object.bake(type="EMIT", margin=2, use_clear=True, target="IMAGE_TEXTURES")
             px = _pixels(target)
             if which == "col":
@@ -329,8 +329,8 @@ def _apply(obj, fits, ref_img, ref_px, ref_mask, probe_to_now, log, mirror, colo
                 for n in temps:
                     nt.nodes.remove(n)
             bpy.data.images.remove(target)
-        me.uv_layers.remove(me.uv_layers["anvil_proj"])
-        me.color_attributes.remove(me.color_attributes["anvil_w"])
+        me.uv_layers.remove(me.uv_layers["ms_proj"])
+        me.color_attributes.remove(me.color_attributes["ms_w"])
     for cam in cam_objs:
         bpy.data.objects.remove(cam, do_unlink=True)
     bpy.data.images.remove(nrm_img)

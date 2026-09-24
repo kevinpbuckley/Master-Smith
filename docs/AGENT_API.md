@@ -11,9 +11,9 @@ Put any string you like in `.env`:
 MASTERSMITH_API_KEY=ms_dev_change_me
 ```
 
-and send it as `Authorization: Bearer ms_dev_change_me` or `X-API-Key: ms_dev_change_me`. It acts as the admin user
-`agent` (rename with `MASTERSMITH_API_USER`). Keys made with `python -m mastersmith keys create <user>` keep working
-beside it. With no key configured anywhere, every request is the local admin user and no header is needed.
+and send it as `Authorization: Bearer ms_dev_change_me` or `X-API-Key: ms_dev_change_me`. Requests are then the user
+`agent` (rename with `MASTERSMITH_API_USER`). With no key configured, every request is the local user and no header
+is needed.
 
 ```bash
 export MS=http://localhost:8080

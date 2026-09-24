@@ -8,7 +8,6 @@ from . import config, pricing, providers, skills
 from .llm import LLM
 from .pipeline import build
 from .spec import CATEGORIES, ENGINES, STYLES, TEXTURE_FIXES, Spec
-from .wallet import InsufficientCredits
 
 SYSTEM = """You are Master Smith, a 3D asset director. A customer describes a game asset; you turn it into a build brief,
 quote the credits, and run the build when they confirm. You are concise and concrete.
@@ -154,14 +153,12 @@ PRICING_NOTE_OWN_KEYS = ("Money: the customer runs this on their own fal.ai and 
                          "(provider_balances_usd, e.g. 'fal has $135, OpenRouter $157'). There is no local balance, hold or top-up. "
                          "Only when provider_too_low_for_this_build names an account say the build will be refused until that "
                          "account is topped up at the provider.")
-PRICING_NOTE_ENFORCED = ("Credits: 1 credit = 1 cent. set_brief returns the balance and whether the build is affordable; "
-                         "quote the credits it will hold and, when it is not affordable, say how many more are needed.")
 
 
 class Director:
     def __init__(self, user, wallet, log=print, model=None, pricing_note=None):
         if pricing_note is None:
-            pricing_note = (PRICING_NOTE_ENFORCED if config.ENFORCE_CREDITS else PRICING_NOTE_OWN_KEYS)
+            pricing_note = PRICING_NOTE_OWN_KEYS
         self.user, self.wallet, self.log = user, wallet, log
         self.last_tools = []
         self.model = model or config.DIRECTOR_MODEL
@@ -198,18 +195,15 @@ class Director:
         return {**out, **self._money(est["credits"])}
 
     def _money(self, needed=0):
-        """What the director may say about money. With credits enforced: the balance and whether the build is
-        affordable. Otherwise the ledger only keeps score of the customer's own spend, and no balance is quoted."""
+        """What the director may say about money: the provider accounts, and what this instance has spent so far."""
         bal = self.wallet.balance(self.user)
         accounts = providers.balances()
         money = {"provider_balances_usd": {k: (v or {}).get("usd") for k, v in accounts.items() if k in ("fal", "openrouter")}}
-        needed_usd = needed * config.CREDIT_USD / max(config.MARKUP, 1e-9)
+        needed_usd = needed * config.CREDIT_USD
         low = [k for k, v in money["provider_balances_usd"].items() if v is not None and needed and v < needed_usd]
         if low:
             money["provider_too_low_for_this_build"] = low
-        if config.ENFORCE_CREDITS:
-            return {**money, "balance": bal, "affordable": bal >= needed}
-        return {**money, "spent_so_far_usd": round(-bal / 100, 2), "credits_enforced": False}
+        return {**money, "spent_so_far_usd": round(-bal / 100, 2)}
 
     DESIGN_FIELDS = ("description", "category", "style", "edit_instructions", "reference_images", "search_query", "multiview")
 
@@ -253,10 +247,7 @@ class Director:
             if out.get("job_id") and out.get("status") == "queued":
                 self.last_job_id = out["job_id"]
             return out
-        try:
-            self.last_result = build(Spec.from_dict(spec_dict), self.user, self.wallet, log=self.log)
-        except InsufficientCredits as exc:
-            return {"error": "insufficient credits", "needed": exc.needed, "balance": exc.balance}
+        self.last_result = build(Spec.from_dict(spec_dict), self.user, self.wallet, log=self.log)
         return self._summary(self.last_result)
 
     @staticmethod

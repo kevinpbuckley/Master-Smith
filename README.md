@@ -9,8 +9,8 @@ It runs on your own **fal.ai** key (meshes, masks, rigs, the repaint) and **Open
 vision checks, the picture models). Nothing else is required. A typical build costs about a dollar of provider
 spend; the director's chat costs cents.
 
-This is the open-source edition of the pipeline behind a commercial product. Improvements here are carried
-upstream; see [CONTRIBUTING.md](CONTRIBUTING.md).
+One person's tool: your keys, your machine, your models. Contributions are welcome; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Quick start (local)
 
@@ -138,15 +138,13 @@ worse. So the pipeline spends on the picture and the seed and does the rest itse
 reserves its worst-case estimate, spends, then settles to the real cost (fal table price + OpenRouter's reported
 usage). The real account balances are read from fal and OpenRouter (`mastersmith/providers.py`): the chat header
 shows them, the director quotes against them, and a build whose worst case exceeds a known balance is refused before
-it spends anything. An unreadable balance never blocks a build. By default the ledger only keeps score of what your keys spent (`python -m mastersmith wallet show`). For a
-shared instance set `MASTERSMITH_ENFORCE_CREDITS=1`, top users up with `wallet add <user> <credits>` and give them
-API keys (`keys create <user>`); one credit is one cent and `MASTERSMITH_MARKUP` scales the charge.
+it spends anything. An unreadable balance never blocks a build. The ledger keeps score of what your keys spent,
+job by job (`python -m mastersmith spend`); nothing is charged, held or refused by Master Smith itself.
 
 ## API
 
 Put any made-up string in `.env` as `MASTERSMITH_API_KEY` and send it as `Authorization: Bearer <key>` (or
-`X-API-Key`); it acts as an admin user for scripts and agents. With no key configured anywhere, every request is the
-local admin user. [docs/AGENT_API.md](docs/AGENT_API.md) has `curl` recipes for driving and debugging it: dry-run
+`X-API-Key`). With no key configured, every request is the local user: this is one person's tool. [docs/AGENT_API.md](docs/AGENT_API.md) has `curl` recipes for driving and debugging it: dry-run
 estimates, queueing, polling, full logs, the debug bundle with Blender log tails, work files, and chat sessions.
 
 | Method | Path | What |
@@ -176,7 +174,7 @@ mastersmith/pricing.py     price table + job estimate
 mastersmith/fal.py         fal queue client (submit/poll/upload/download)
 mastersmith/llm.py         OpenRouter chat + tools + vision, cost capture
 mastersmith/images.py      OpenRouter image generation and edits
-mastersmith/wallet.py      SQLite spend ledger: reserve / settle / refund
+mastersmith/wallet.py      SQLite spend ledger: what your keys spent, job by job
 mastersmith/spec.py        the brief
 mastersmith/brief.py       words in the brief that decide the category
 mastersmith/skills/*.md    per-category guidance with front matter the pipeline reads
@@ -186,7 +184,7 @@ mastersmith/pipeline.py    build() from a brief; rework() on an existing mesh (i
 mastersmith/agent.py       the director (chat + tools)
 mastersmith/service.py     FastAPI: chat, uploads, jobs, files, wallet
 mastersmith/worker.py      the build queue
-mastersmith/cli.py         chat / run / import / rerun / wallet / keys / serve / worker
+mastersmith/cli.py         chat / run / import / rerun / spend / serve / worker
 web/                       Next.js chat (Vercel AI SDK)
 tests/                     pure tests; a Blender test behind MASTERSMITH_BLENDER_TESTS=1
 ```

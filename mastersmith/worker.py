@@ -9,7 +9,7 @@ import uuid
 from . import pipeline
 from .spec import Spec
 from .store import Store
-from .wallet import InsufficientCredits, Wallet
+from .wallet import Wallet
 
 
 def new_job_id():
@@ -32,8 +32,6 @@ def run_one(store, wallet, row):
         else:
             result = pipeline.build(Spec.from_dict(row["spec"]), row["user"], wallet, log=log, job_id=job_id)
         store.finish(job_id, result["status"], result=result, error=result.get("error"))
-    except InsufficientCredits as exc:
-        store.finish(job_id, "refused", error=str(exc))
     except Exception:  # noqa: BLE001 - the worker must survive any single job
         store.finish(job_id, "failed", error=traceback.format_exc()[-1500:])
 

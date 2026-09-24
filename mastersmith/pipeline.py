@@ -20,7 +20,6 @@ from .stages.review import review
 from .stages.rig import rig_asset
 from .stages.retexture import make_retexture
 from .stages.seed import hybrid_wanted, make_seed
-from .wallet import InsufficientCredits
 
 
 class Job:
@@ -161,7 +160,7 @@ def load_reference(job_dir):
 
 
 def build(spec, user, wallet, log=print, job_id=None):
-    """Run a full build for `user`. Raises InsufficientCredits or ProviderBalanceLow before spending anything.
+    """Run a full build for `user`. Raises ProviderBalanceLow before spending anything.
     With spec.reference_job set, the approved pictures of that job are used and the picture stage is skipped."""
     approved = load_reference(spec.reference_job) if spec.reference_job else None
     est = pricing.estimate_after_reference(spec) if approved else pricing.estimate(spec)
@@ -380,4 +379,4 @@ def preview_removal_job(source_dir, spec, user, wallet, log=print, job_id=None):
 
 
 __all__ = ["build", "make_reference_only", "load_reference", "preview_removal_job", "refinish", "rework", "seed_of", "Job",
-           "InsufficientCredits", "MESH_EXTENSIONS"]
+           "MESH_EXTENSIONS"]

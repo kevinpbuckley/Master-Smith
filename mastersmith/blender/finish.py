@@ -1025,7 +1025,7 @@ if ((cockpit_glb and os.path.exists(cockpit_glb)) or cockpit_parametric) and gla
 
 # wheel faces are remembered as a face attribute so the rig pass can pick them up after decimation
 if wheel_faces is not None and wheel_faces.sum() > 20:
-    attr = ob.data.attributes.new("anvil_wheel", "INT", "FACE")
+    attr = ob.data.attributes.new("ms_wheel", "INT", "FACE")
     attr.data.foreach_set("value", wheel_faces.astype(np.int32))
     report["wheel_faces"] = int(wheel_faces.sum())
 
@@ -1331,15 +1331,15 @@ def bake_face_mask(obj, faces, size=2048):
     """A UV-space image (H, W) in [0, 1]: 1 where a selected face's UVs land. Cycles EMIT bake of a per-corner
     colour attribute, through a temporary emission shader on every material slot."""
     me = obj.data
-    if "anvil_mask" in me.color_attributes:
-        me.color_attributes.remove(me.color_attributes["anvil_mask"])
-    attr = me.color_attributes.new("anvil_mask", "BYTE_COLOR", "CORNER")
+    if "ms_mask" in me.color_attributes:
+        me.color_attributes.remove(me.color_attributes["ms_mask"])
+    attr = me.color_attributes.new("ms_mask", "BYTE_COLOR", "CORNER")
     loop_poly = np.repeat(np.arange(len(me.polygons)), [p.loop_total for p in me.polygons])
     col = np.zeros((len(me.loops), 4), np.float32)
     col[:, 3] = 1.0
     col[faces[loop_poly], :3] = 1.0
     attr.data.foreach_set("color", col.ravel())
-    img = bpy.data.images.new("anvil_mask_bake", size, size, alpha=False, float_buffer=False)
+    img = bpy.data.images.new("ms_mask_bake", size, size, alpha=False, float_buffer=False)
     img.colorspace_settings.name = "Non-Color"
     restore = []
     for slot in obj.material_slots:
@@ -1353,7 +1353,7 @@ def bake_face_mask(obj, faces, size=2048):
             continue
         prev = out.inputs["Surface"].links[0].from_socket if out.inputs["Surface"].is_linked else None
         a = nt.nodes.new("ShaderNodeVertexColor")
-        a.layer_name = "anvil_mask"
+        a.layer_name = "ms_mask"
         e = nt.nodes.new("ShaderNodeEmission")
         t = nt.nodes.new("ShaderNodeTexImage")
         t.image = img
@@ -1380,7 +1380,7 @@ def bake_face_mask(obj, faces, size=2048):
         for n in nodes:
             nt.nodes.remove(n)
     bpy.data.images.remove(img)
-    me.color_attributes.remove(me.color_attributes["anvil_mask"])
+    me.color_attributes.remove(me.color_attributes["ms_mask"])
     return mask
 
 
@@ -1601,7 +1601,7 @@ for slot in ob.material_slots:
         bc_img = found["BC"][0].image
         w0, h0 = (bc_img.size if bc_img and bc_img.size[0] else (2048, 2048))
         w0, h0 = min(w0, 4096), min(h0, 4096)
-        orm = bpy.data.images.new("anvil_ORM_%s" % m.name, w0, h0, alpha=False)
+        orm = bpy.data.images.new("ms_ORM_%s" % m.name, w0, h0, alpha=False)
         orm.colorspace_settings.name = "Non-Color"
         flat = np.empty((h0, w0, 4), np.float32)
         flat[:, :, 0] = 1.0                                                   # AO
@@ -1708,7 +1708,7 @@ def export_maps(obj):
             if rpx.shape[:2] != mpx.shape[:2]:
                 m_node.image.scale(r_node.image.size[0], r_node.image.size[1]); mpx = pixels(m_node.image)
             rr, _c = channel_of(rpx, r_ch); mm, _c2 = channel_of(mpx, m_ch)
-            orm = bpy.data.images.new("anvil_ORM_%s" % m.name, rpx.shape[1], rpx.shape[0], alpha=False)
+            orm = bpy.data.images.new("ms_ORM_%s" % m.name, rpx.shape[1], rpx.shape[0], alpha=False)
             orm.colorspace_settings.name = "Non-Color"
             comp = np.empty_like(rpx)
             comp[:, :, 0] = rpx[:, :, 0] if r_ch == "Green" else 1.0    # AO lives in R when the source was an ORM
@@ -2221,11 +2221,11 @@ def bake_detail(high, low):
     # LOD0 is a decimation of the same surface, so it sits within a hair of the high-poly: a tiny cage keeps the
     # rays off the far side of fins, blades and barrels (a 0.4% cage on a jet baked the wings inside-out, 2026-09-17)
     extr = max(diag * 0.0006, 1e-5)
-    n_img = bpy.data.images.new("anvil_bake_N", size, size, alpha=False, float_buffer=False)
+    n_img = bpy.data.images.new("ms_bake_N", size, size, alpha=False, float_buffer=False)
     n_img.colorspace_settings.name = "Non-Color"
-    ao_img = bpy.data.images.new("anvil_bake_AO", size, size, alpha=False, float_buffer=False)
+    ao_img = bpy.data.images.new("ms_bake_AO", size, size, alpha=False, float_buffer=False)
     ao_img.colorspace_settings.name = "Non-Color"
-    cov_img = bpy.data.images.new("anvil_bake_COV", size, size, alpha=False, float_buffer=False)
+    cov_img = bpy.data.images.new("ms_bake_COV", size, size, alpha=False, float_buffer=False)
     cov_img.colorspace_settings.name = "Non-Color"
     temps = []
     for m in mats:
@@ -2329,7 +2329,7 @@ def apply_bake(low, baked):
             node.image.update()
             stats["normal_detail_std"] = round(float(np.std(px[:, :, :2][cov])), 4) if cov.any() else 0.0
         else:
-            img = bpy.data.images.new("anvil_N_%s" % m.name, baked["size"], baked["size"], alpha=False)
+            img = bpy.data.images.new("ms_N_%s" % m.name, baked["size"], baked["size"], alpha=False)
             img.colorspace_settings.name = "Non-Color"
             arr = np.ones((baked["size"], baked["size"], 4), np.float32)
             arr[:, :, :3] = baked["N"]
@@ -2580,13 +2580,13 @@ p = os.path.join(OUT, "SM_%s.glb" % NAME)
 bpy.ops.export_scene.gltf(filepath=p, use_selection=True, export_format="GLB", export_yup=True)
 report["files"].append(os.path.basename(p))
 if args.get("spec"):
-    txt = bpy.data.texts.get("anvil_spec.json") or bpy.data.texts.new("anvil_spec.json")
+    txt = bpy.data.texts.get("ms_spec.json") or bpy.data.texts.new("ms_spec.json")
     txt.clear()
     txt.write(json.dumps(args["spec"]))
 if args.get("reference") and os.path.exists(args["reference"]):
     # the picture the mesh was built from rides along, so a later re-finish can still be reviewed against it
     ref_img = bpy.data.images.load(os.path.abspath(args["reference"]))
-    ref_img.name = "anvil_reference"
+    ref_img.name = "ms_reference"
     ref_img.pack()
     ref_img.use_fake_user = True      # an image nobody uses is orphan data and would be dropped on save
 p = os.path.join(OUT, "SM_%s.blend" % NAME)

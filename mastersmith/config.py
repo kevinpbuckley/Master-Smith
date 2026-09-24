@@ -31,9 +31,8 @@ DB_PATH = DATA_DIR / "mastersmith.db"
 
 BLENDER_BIN = os.environ.get("BLENDER_BIN", r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe")
 
-# A fixed API key for scripts and agents, straight from .env: any string you make up. It is accepted as an admin key
-# for the user named in MASTERSMITH_API_USER, beside the keys created with `keys create`. With no key configured at
-# all (this and the database), every request is the local admin user.
+# A fixed API key for scripts and agents, straight from .env: any string you make up. Requests then carry it as a
+# bearer token or X-API-Key. With no key configured, every request is the local user: this is one person's tool.
 API_KEY = os.environ.get("MASTERSMITH_API_KEY", "").strip()
 API_USER = os.environ.get("MASTERSMITH_API_USER", "agent").strip() or "agent"
 
@@ -93,15 +92,12 @@ RETEXTURE_MODEL = "fal-ai/meshy/v5/retexture"   # repaint an existing mesh on it
 SEED_MULTIVIEW_MODEL = "tripo3d/h3.1/multiview-to-3d"
 SEED_ALT_MODEL = "fal-ai/hyper3d/rodin/v2"      # several references at once; refuses military subjects
 
-# --- spend. You run this against your own fal and OpenRouter keys, so the ledger only keeps score: one credit is one
-# cent of provider cost and a build is never refused for lack of credits unless MASTERSMITH_ENFORCE_CREDITS=1 (a shared
-# instance where each user is topped up by an admin). MASTERSMITH_MARKUP scales the charge for that case.
+# --- spend. You run this against your own fal and OpenRouter keys; the ledger only keeps score of what they spent,
+# in cents. Nothing is charged, held or refused here.
 CREDIT_USD = 0.01                                # one credit is one cent
-MARKUP = float(os.environ.get("MASTERSMITH_MARKUP", "1.0"))   # charge = provider cost x markup
-ENFORCE_CREDITS = os.environ.get("MASTERSMITH_ENFORCE_CREDITS", "0") == "1"
 
 
 def credits_for_usd(usd):
-    """Provider cost -> credits charged (rounded up so we never undercharge a cent)."""
+    """Provider cost -> cents, rounded up."""
     import math
-    return int(math.ceil(usd * MARKUP / CREDIT_USD))
+    return int(math.ceil(usd / CREDIT_USD))

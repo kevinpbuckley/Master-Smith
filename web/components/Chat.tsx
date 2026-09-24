@@ -96,22 +96,26 @@ type SmithMessage = UIMessage<unknown, { turn: TurnData }>;
 
 type Me = { user: string; balance: number; local_mode: boolean; providers?: Providers | null; error?: string };
 
+// The two accounts everything is billed to, with what each has left, linking to where you top them up.
 function Accounts({ p }: { p: Providers | null | undefined }) {
   if (!p) return null;
-  const cell = (label: string, v: { usd: number } | null, err?: string) =>
-    v ? (
-      <span className={v.usd < 2 ? "low" : ""} title={err}>
-        {label} ${v.usd.toFixed(2)}
-      </span>
-    ) : (
-      <span className="low" title={err}>
-        {label} ?
-      </span>
-    );
+  const cell = (label: string, href: string, v: { usd: number } | null, err?: string, extra?: string) => (
+    <a
+      className={`account${!v || v.usd < 2 ? " low" : ""}`}
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={err ? `${label}: ${err}` : `${label} balance${extra ? ` · ${extra}` : ""} · opens your ${label} billing page`}
+    >
+      {label} {v ? `$${v.usd.toFixed(2)}` : "?"}
+    </a>
+  );
   const month = p.openrouter?.key_usage_month_usd;
   return (
-    <span className="accounts" title={month !== undefined ? `OpenRouter key: $${month.toFixed(2)} this month` : undefined}>
-      {cell("fal", p.fal, p.errors?.fal)} · {cell("OpenRouter", p.openrouter, p.errors?.openrouter)}
+    <span className="accounts">
+      {cell("fal.ai", "https://fal.ai/dashboard/billing", p.fal, p.errors?.fal)}
+      {" · "}
+      {cell("OpenRouter", "https://openrouter.ai/settings/credits", p.openrouter, p.errors?.openrouter, month !== undefined ? `$${month.toFixed(2)} used this month` : undefined)}
     </span>
   );
 }

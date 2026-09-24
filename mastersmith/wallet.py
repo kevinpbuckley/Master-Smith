@@ -1,6 +1,6 @@
-"""Spend ledger (SQLite). A build RESERVES its worst-case credits before the first paid call and SETTLES to the
-actual charge afterwards. By default the balance is only a running score of what your own keys spent (it goes
-negative); with MASTERSMITH_ENFORCE_CREDITS=1 a user cannot start a build the balance does not cover."""
+"""Spend ledger (SQLite). A build RESERVES its worst-case cents before the first paid call and SETTLES to the real
+cost afterwards, so `balance` is a running score of what your own keys spent (it goes negative) and `history` is
+the bill, job by job. Nothing is ever refused here."""
 import functools
 import os
 import sqlite3
@@ -8,12 +8,6 @@ import threading
 import time
 
 from . import config
-
-
-class InsufficientCredits(Exception):
-    def __init__(self, needed, balance):
-        super().__init__("needs %d credits, balance is %d" % (needed, balance))
-        self.needed, self.balance = needed, balance
 
 
 def _locked(fn):
@@ -58,10 +52,8 @@ class Wallet:
 
     @_locked
     def reserve(self, user, credits, note):
-        """Hold `credits` against a job; raises when the balance cannot cover it. Returns the hold id."""
-        bal = self.balance(user)
-        if config.ENFORCE_CREDITS and credits > bal:
-            raise InsufficientCredits(credits, bal)
+        """Hold `credits` against a job (the worst case, settled to the real cost after). Returns the hold id."""
+        self.ensure(user)
         self.db.execute("UPDATE users SET balance = balance - ? WHERE name=?", (credits, user))
         cur = self.db.execute("INSERT INTO ledger(user, ts, kind, credits, usd_cost, note, settled) VALUES (?,?,?,?,?,?,0)",
                               (user, time.time(), "reserve", -credits, None, note))
@@ -76,9 +68,7 @@ class Wallet:
             raise ValueError("hold %s unknown or already settled" % hold_id)
         user, held = row[0], -row[1]
         charge = config.credits_for_usd(usd_cost)
-        if config.ENFORCE_CREDITS:
-            charge = min(charge, held)          # a user is never charged past what was held from their balance
-        refund = held - charge                  # negative when the job cost more than the hold (spend-only mode)
+        refund = held - charge                  # negative when the job cost more than the hold
         if refund:
             self.db.execute("UPDATE users SET balance = balance + ? WHERE name=?", (refund, user))
         self.db.execute("UPDATE ledger SET kind='charge', credits=?, usd_cost=?, note=?, settled=1 WHERE id=?",

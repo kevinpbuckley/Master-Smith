@@ -1,7 +1,7 @@
 """HTTP service: chat with the director, upload pictures and models, queue builds, poll jobs, fetch files, see the spend.
     python -m mastersmith serve --port 8080
-Auth: with no API keys created, every request is the local admin user (a single-user machine). Create keys with
-`python -m mastersmith keys create <user>` and requests then need `Authorization: Bearer ms_...`.
+Auth: one person's tool. With MASTERSMITH_API_KEY set, requests carry it (bearer or X-API-Key); with no key
+configured, every request is the local user.
 The worker thread runs inside this process unless MASTERSMITH_NO_WORKER=1 (then run `python -m mastersmith worker`)."""
 import json
 import mimetypes
@@ -33,7 +33,7 @@ _sessions = {}          # session_id -> {"director": Director, "user": str, "tou
 SESSION_TTL = 6 * 3600
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".jfif", ".jpe", ".bmp", ".gif", ".tif", ".tiff", ".avif", ".heic")
 NATIVE_IMAGE = (".png", ".jpg", ".jpeg")      # anything else is re-saved as PNG so every stage and vendor reads it
-LOCAL_USER = {"user": "local", "role": "admin"}
+LOCAL_USER = {"user": "local"}
 
 
 @app.on_event("startup")
@@ -46,20 +46,11 @@ def _start():
 # ------------------------------------------------------------------ auth
 def auth(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
     key = authorization[7:] if authorization.lower().startswith("bearer ") else (x_api_key or "")
-    if config.API_KEY and key == config.API_KEY:
-        return {"user": config.API_USER, "role": "admin"}      # the fixed key from .env (scripts, agents, the web app)
-    if not config.API_KEY and not store.has_keys():
-        return dict(LOCAL_USER)             # no key configured anywhere: this is one person's machine
-    who = store.user_for_key(key)
-    if not who:
-        raise HTTPException(401, "missing or unknown API key (Authorization: Bearer <key> or X-API-Key)")
-    return who
-
-
-def admin(who=Depends(auth)):
-    if who["role"] != "admin":
-        raise HTTPException(403, "admin key required")
-    return who
+    if not config.API_KEY:
+        return dict(LOCAL_USER)             # no key configured: this is one person's machine
+    if key == config.API_KEY:
+        return {"user": config.API_USER}    # the fixed key from .env (scripts, agents, the web app)
+    raise HTTPException(401, "wrong or missing API key (Authorization: Bearer <key> or X-API-Key)")
 
 
 # ------------------------------------------------------------------ models
@@ -88,12 +79,6 @@ class ImportIn(BaseModel):
 class RefinishIn(BaseModel):
     source_job: str
     overrides: dict = {}
-
-
-class CreditsIn(BaseModel):
-    user: str
-    credits: int
-    note: str = "admin top-up"
 
 
 # ------------------------------------------------------------------ helpers
@@ -130,8 +115,6 @@ def _enqueue(user, spec, kind, source=None):
         est = pricing.estimate(spec)
     credits = est["credits"]
     bal = wallet.balance(user)
-    if config.ENFORCE_CREDITS and bal < credits:
-        return {"error": "insufficient credits", "needed": credits, "balance": bal}
     try:
         providers.check_affordable(est["usd"])      # a known provider balance below the worst case stops it here
     except providers.ProviderBalanceLow as exc:
@@ -145,14 +128,13 @@ def run_removal_preview(user, source_dir, spec):
     """Red-on-render pictures of what remove_parts would delete, registered as a finished job so they are served."""
     from .pipeline import preview_removal_job
     from .providers import ProviderBalanceLow
-    from .wallet import InsufficientCredits
     job_id = new_job_id()
     store.enqueue(job_id, user, "removal_preview", spec.to_dict(), source_job=source_dir)
     store.db.execute("UPDATE jobs SET status='running', started=? WHERE id=?", (time.time(), job_id))
     store.db.commit()
     try:
         r = preview_removal_job(source_dir, spec, user, wallet, log=lambda m: store.append_log(job_id, m), job_id=job_id)
-    except (InsufficientCredits, ProviderBalanceLow) as exc:
+    except ProviderBalanceLow as exc:
         store.finish(job_id, "refused", error=str(exc))
         return {"job_id": job_id, "status": "refused", "error": str(exc)}
     store.finish(job_id, r["status"], result=r, error=r.get("error"))
@@ -193,7 +175,6 @@ def run_reference(user, spec_dict):
     "reference" so its pictures are served like any job's files. Tens of seconds; no Blender, no mesh."""
     from .pipeline import make_reference_only
     from .providers import ProviderBalanceLow
-    from .wallet import InsufficientCredits
     spec = Spec.from_dict({**spec_dict, "reference_job": None})
     job_id = new_job_id()
     store.enqueue(job_id, user, "reference", spec.to_dict())
@@ -201,7 +182,7 @@ def run_reference(user, spec_dict):
     store.db.commit()
     try:
         r = make_reference_only(spec, user, wallet, log=lambda m: store.append_log(job_id, m), job_id=job_id)
-    except (InsufficientCredits, ProviderBalanceLow) as exc:
+    except ProviderBalanceLow as exc:
         store.finish(job_id, "refused", error=str(exc))
         return {"job_id": job_id, "status": "refused", "error": str(exc)}
     store.finish(job_id, r["status"], result=r, error=r.get("error"))
@@ -423,12 +404,12 @@ def index():
 
 
 def local_mode():
-    return not config.API_KEY and not store.has_keys()
+    return not config.API_KEY
 
 
 @app.get("/v1/me")
 def me(who=Depends(auth)):
-    return {"user": who["user"], "role": who["role"], "balance": wallet.balance(who["user"]),
+    return {"user": who["user"], "balance": wallet.balance(who["user"]),
             "local_mode": local_mode(), "providers": providers.balances(), "jobs": store.jobs_for(who["user"])}
 
 
@@ -653,13 +634,8 @@ def job_pictures(row):
 
 @app.get("/v1/wallet")
 def get_wallet(who=Depends(auth)):
-    return {"user": who["user"], "balance": wallet.balance(who["user"]), "enforced": config.ENFORCE_CREDITS,
+    return {"user": who["user"], "balance": wallet.balance(who["user"]), "spent_usd": round(-wallet.balance(who["user"]) / 100, 2),
             "history": [{"ts": t, "kind": k, "credits": c, "usd": u, "note": n} for t, k, c, u, n in wallet.history(who["user"])]}
-
-
-@app.post("/v1/admin/credits")
-def add_credits(body: CreditsIn, who=Depends(admin)):
-    return {"user": body.user, "balance": wallet.add(body.user, body.credits, body.note)}
 
 
 @app.get("/v1/estimate")
@@ -678,7 +654,7 @@ def healthz():
 # ------------------------------------------------------------------ debugging and testing from scripts and agents
 SAFE_CONFIG = ("DIRECTOR_MODEL", "VISION_MODEL", "PREMIUM_MODEL", "CONCEPT_MODEL", "CONCEPT_MODEL_PREMIUM", "CONCEPT_MODEL_HARD",
                "EDIT_MODEL", "IMAGE_RESOLUTION", "SEED_MODEL", "SEED_MULTIVIEW_MODEL", "RETEXTURE_MODEL", "REPAINT_DEFAULT",
-               "HYBRID_SEED", "SEED_QUAD", "HARD_SURFACE_CATEGORIES", "MARKUP", "ENFORCE_CREDITS", "BLENDER_BIN", "API_USER")
+               "HYBRID_SEED", "SEED_QUAD", "HARD_SURFACE_CATEGORIES", "BLENDER_BIN", "API_USER")
 
 
 @app.get("/v1/config")

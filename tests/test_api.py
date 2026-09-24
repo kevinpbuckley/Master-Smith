@@ -40,7 +40,7 @@ def test_fixed_key_is_required_and_accepted(client):
     assert client.get("/v1/me").status_code == 401
     assert client.get("/v1/me", headers={"Authorization": "Bearer nope"}).status_code == 401
     me = client.get("/v1/me", headers={"X-API-Key": KEY}).json()
-    assert me["user"] == "agent" and me["role"] == "admin" and me["local_mode"] is False
+    assert me["user"] == "agent" and me["local_mode"] is False
     h = client.get("/healthz").json()
     assert h["ok"] and h["local_mode"] is False and h["worker"] is False
 

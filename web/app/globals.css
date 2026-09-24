@@ -586,6 +586,15 @@ pre.error {
 .accounts {
   color: var(--fg);
 }
+.accounts a.account {
+  color: var(--fg);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--dim);
+}
+.accounts a.account:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 .accounts .low {
   color: var(--bad);
 }

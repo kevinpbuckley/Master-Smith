@@ -1,7 +1,5 @@
-"""Persistence for the service: API keys and the job queue, in the same SQLite file as the wallet."""
-import hashlib
+"""Persistence for the service: the job queue, in the same SQLite file as the spend ledger."""
 import json
-import secrets
 import os
 import sqlite3
 import time
@@ -15,36 +13,9 @@ class Store:
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("""CREATE TABLE IF NOT EXISTS api_keys (key_hash TEXT PRIMARY KEY, user TEXT NOT NULL,
-                           role TEXT NOT NULL DEFAULT 'user', created REAL NOT NULL, label TEXT)""")
         self.db.execute("""CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, user TEXT NOT NULL, kind TEXT NOT NULL,
                            spec TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL, started REAL, finished REAL,
                            result TEXT, error TEXT, log TEXT NOT NULL DEFAULT '', source_job TEXT)""")
-        self.db.commit()
-
-    # ------------------------------------------------------------ keys
-    @staticmethod
-    def _hash(key):
-        return hashlib.sha256(key.encode()).hexdigest()
-
-    def create_key(self, user, role="user", label=""):
-        key = "ms_" + secrets.token_urlsafe(24)
-        self.db.execute("INSERT INTO api_keys(key_hash, user, role, created, label) VALUES (?,?,?,?,?)",
-                        (self._hash(key), user, role, time.time(), label))
-        self.db.commit()
-        return key                                     # shown once; only the hash is stored
-
-    def has_keys(self):
-        return self.db.execute("SELECT 1 FROM api_keys LIMIT 1").fetchone() is not None
-
-    def user_for_key(self, key):
-        if not key:
-            return None
-        row = self.db.execute("SELECT user, role FROM api_keys WHERE key_hash=?", (self._hash(key),)).fetchone()
-        return {"user": row[0], "role": row[1]} if row else None
-
-    def revoke_key(self, key):
-        self.db.execute("DELETE FROM api_keys WHERE key_hash=?", (self._hash(key),))
         self.db.commit()
 
     # ------------------------------------------------------------ jobs

@@ -95,7 +95,7 @@ def setup_render(size, samples, look="probe"):
         bg.inputs[0].default_value = (0.55, 0.58, 0.63, 1) if look == "probe" else (0.38, 0.39, 0.42, 1)
         bg.inputs[1].default_value = 1.0
         nt.links.new(bg.outputs[0], outn.inputs[0])
-    scn["anvil_look"] = look
+    scn["ms_look"] = look
     return scn
 
 
@@ -109,7 +109,7 @@ class Stage:
 
     def __init__(self, target, extra_hidden=(), look=None):
         self.target = target
-        look = look or bpy.context.scene.get("anvil_look", "probe")
+        look = look or bpy.context.scene.get("ms_look", "probe")
         lo, hi = dims(target)
         self.centre = (lo + hi) * 0.5
         self.radius = max((hi - lo).length * 0.5, 1e-4)

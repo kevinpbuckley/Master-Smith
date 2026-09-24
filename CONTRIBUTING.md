@@ -1,7 +1,7 @@
 # Contributing
 
-Master Smith is the open-source edition of the pipeline behind a commercial product. Improvements land here first
-and are carried across, so a pull request here can end up in production. Thank you for that.
+Master Smith is one person's asset pipeline made public. Pull requests that make the models better are the ones
+that matter most. Thank you for them.
 
 ## What helps most
 
@@ -41,10 +41,8 @@ ESLint config.
 
 `.env` is ignored and must stay that way. Never paste a key, a signed URL or a customer picture into an issue.
 
-## Relationship to the upstream product
+## Names inside .blend files
 
-The upstream package is named `anvil`; this one is `mastersmith`. A change ported upstream is the same diff with
-`mastersmith` → `anvil` and `MASTERSMITH_` → `ANVIL_`, so keep imports relative (`from . import config`) and read
-settings through `config` rather than `os.environ` where you can. Blender datablock names inside delivered
-`.blend` files (`anvil_spec.json`, `anvil_reference`, `anvil_mask`, …) are kept as they are so files move between
-the two without conversion; do not rename them.
+Delivered `.blend` files carry the brief and the reference picture as datablocks named `ms_spec.json` and
+`ms_reference`; the finish's scratch attributes and images are `ms_*` too. `blend_to_seed.py` also reads the names
+early builds used, so keep both when you touch that script.

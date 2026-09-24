@@ -46,14 +46,14 @@ for img in bpy.data.images:
             pass
 bpy.ops.export_scene.gltf(filepath=out_glb, use_selection=True, export_format="GLB", export_yup=True)
 spec = None
-txt = bpy.data.texts.get("anvil_spec.json")
+txt = bpy.data.texts.get("ms_spec.json") or bpy.data.texts.get("anvil_spec.json")
 if txt:
     try:
         spec = json.loads(txt.as_string())
     except ValueError:
         spec = None
 ref_path = None
-ref = bpy.data.images.get("anvil_reference")
+ref = bpy.data.images.get("ms_reference") or bpy.data.images.get("anvil_reference")
 if ref is not None and ref.size[0]:
     ref_path = os.path.join(os.path.dirname(out_glb), "previous_reference.png")
     ref.filepath_raw = ref_path
