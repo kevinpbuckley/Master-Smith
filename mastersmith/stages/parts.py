@@ -82,7 +82,7 @@ def orient_added_part(job, spec, part, glb):
     part_dir = os.path.join(job.work_dir, "part_%s" % name)
     size = float(part.get("size_m") or 0) or -1.0        # -1: keep the seed's own size; the fit scales it later
     _blender(job, "prepare.py", {"name": name, "work_dir": part_dir, "glb": glb, "size_m": size, "forward_axis": "long",
-                                 "origin": "center", "probe_size": 448}, "part_%s_prepare" % name)
+                                 "origin": "center", "probe_size": 448, "keep_upright": True}, "part_%s_prepare" % name)
     if not os.path.exists(os.path.join(part_dir, "work.blend")):
         return None
     views = ["posx", "negx", "posy", "negy"]
