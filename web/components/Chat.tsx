@@ -334,6 +334,28 @@ function ChatSession({
     onFinish: () => onTurn(),
   });
   const busy = status === "submitted" || status === "streaming";
+  // jobs queued from outside this page (an agent driving the session over the API or MCP): the saved chat is
+  // re-read every few seconds and any job id it has that this page has not seen joins the strip
+  const [outsideJobs, setOutsideJobs] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await fetch(`/api/chats/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+        if (!alive || !r.ok) return;
+        const st = (await r.json()) as ChatState;
+        const ids = st.jobs ?? [];
+        if (alive && ids.length) setOutsideJobs((prev) => (ids.every((id) => prev.includes(id)) ? prev : ids));
+      } catch {
+        /* the API is away; try again next tick */
+      }
+    };
+    const timer = setInterval(tick, 8000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [sessionId]);
 
   useEffect(() => {
     fetch("/api/me", { cache: "no-store" })
@@ -357,8 +379,9 @@ function ChatSession({
     }
     const jobs = [...initialJobs];
     for (const id of jobIdsInMessages(messages)) if (!jobs.includes(id)) jobs.push(id);
+    for (const id of outsideJobs) if (!jobs.includes(id)) jobs.push(id);
     return { balance, providers, jobs };
-  }, [messages, initialJobs]);
+  }, [messages, initialJobs, outsideJobs]);
   const jobId = selectedJob && latest.jobs.includes(selectedJob) ? selectedJob : latest.jobs[latest.jobs.length - 1] ?? null;
   const balance = latest.balance ?? me?.balance ?? 0;
   const accounts = latest.providers ?? me?.providers;

@@ -768,7 +768,8 @@ def get_prompt(session_id: str, who=Depends(auth)):
 @app.post("/v1/sessions/{session_id}/tool")
 def run_tool(session_id: str, body: ToolIn, who=Depends(auth)):
     """Run one director tool in this session (set_brief, make_reference, build, ...) and answer what the model would see."""
-    d = _director(session_id, who["user"])
+    sess = _session(session_id, who["user"])
+    d = sess["director"]
     fn = {"set_brief": d._set_brief, "build": d._build, "read_skill": d._read_skill, "balance": d._balance,
           "job_status": d._job_status, "import_model": d._import_model, "make_reference": d._make_reference,
           "ask_customer": d._ask}.get(body.name)
@@ -779,6 +780,9 @@ def run_tool(session_id: str, body: ToolIn, who=Depends(auth)):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, "tool %s failed: %s" % (body.name, str(exc)[:300]))
     d.last_tools.append({"name": body.name, "args": body.args, "result": json.dumps(out, default=str)[:400]})
+    # the chat on disk carries the brief and any job this call queued at once, so the web (which reads the chat and
+    # polls its jobs) shows an outside director's build running instead of waiting for the turn to be recorded
+    save_chat(who["user"], session_id, sess)
     if isinstance(out, dict) and out.get("pictures"):
         out = {**out, "pictures": [p if isinstance(p, dict) else {"label": "picture", "url": p} for p in out["pictures"]]}
     return out
