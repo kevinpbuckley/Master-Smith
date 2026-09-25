@@ -3,6 +3,7 @@
 Auth: one person's tool. With MASTERSMITH_API_KEY set, requests carry it (bearer or X-API-Key); with no key
 configured, every request is the local user.
 The worker thread runs inside this process unless MASTERSMITH_NO_WORKER=1 (then run `python -m mastersmith worker`)."""
+import hmac
 import json
 import mimetypes
 import os
@@ -25,7 +26,7 @@ from .wallet import Wallet
 from .worker import Worker, new_job_id
 
 app = FastAPI(title="Master Smith", version="0.1")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 store = Store()
 wallet = Wallet()
 _lock = threading.Lock()
@@ -38,6 +39,10 @@ LOCAL_USER = {"user": "local"}
 
 @app.on_event("startup")
 def _start():
+    if config.API_KEY == config.PLACEHOLDER_API_KEY:
+        raise RuntimeError("MASTERSMITH_API_KEY is still the example value %r, which everyone knows. Put a key of your own in "
+                           ".env (python -c \"import secrets; print(secrets.token_urlsafe(24))\") or leave it empty."
+                           % config.PLACEHOLDER_API_KEY)
     os.makedirs(config.UPLOADS_DIR, exist_ok=True)
     if os.environ.get("MASTERSMITH_NO_WORKER") != "1":
         Worker(store, wallet).start()
@@ -48,7 +53,7 @@ def auth(authorization: str = Header(default=""), x_api_key: str = Header(defaul
     key = authorization[7:] if authorization.lower().startswith("bearer ") else (x_api_key or "")
     if not config.API_KEY:
         return dict(LOCAL_USER)             # no key configured: this is one person's machine
-    if key == config.API_KEY:
+    if hmac.compare_digest(key.encode(), config.API_KEY.encode()):
         return {"user": config.API_USER}    # the fixed key from .env (scripts, agents, the web app)
     raise HTTPException(401, "wrong or missing API key (Authorization: Bearer <key> or X-API-Key)")
 

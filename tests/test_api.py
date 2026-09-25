@@ -213,3 +213,30 @@ def test_briefs_may_only_name_files_the_service_stored(client, tmp_path):
     assert service._foreign_paths({"reference_job": str(job_dir)}) == []
     assert client.post("/v1/jobs", headers=H, json={"spec": {"name": "Crate", "description": "oak crate",
                                                              "reference_image": up}}).status_code == 200
+
+
+def test_only_the_chat_origin_may_call_from_a_browser(client):
+    H = {"Authorization": "Bearer " + KEY}
+    evil = client.options("/v1/jobs", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+    assert "access-control-allow-origin" not in evil.headers
+    ok = client.get("/v1/me", headers={**H, "Origin": "http://localhost:3000"})
+    assert ok.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+
+def test_the_example_key_is_refused_at_start_up(client, monkeypatch):
+    from mastersmith import config, service
+    monkeypatch.setattr(config, "API_KEY", config.PLACEHOLDER_API_KEY)
+    with pytest.raises(RuntimeError, match="example value"):
+        service._start()
+
+
+def test_every_blender_run_disables_embedded_scripts():
+    import re
+    from mastersmith import config
+    assert "-Y" in config.BLENDER_FLAGS and "-b" in config.BLENDER_FLAGS
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mastersmith")
+    for folder, _, files in os.walk(root):
+        for f in files:
+            if f.endswith(".py"):
+                text = open(os.path.join(folder, f), encoding="utf-8").read()
+                assert not re.search(r"BLENDER_BIN,\s*\"-b\"", text), f

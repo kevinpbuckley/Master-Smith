@@ -241,7 +241,7 @@ def blend_to_seed(blend_path, work_dir, log=print):
     glb = os.path.join(work_dir, "blend_seed.glb")
     info = os.path.join(work_dir, "blend_seed.json")
     script = str(config.ROOT / "mastersmith" / "blender" / "blend_to_seed.py")
-    proc = subprocess.run([config.BLENDER_BIN, "-b", "--python", script, "--", blend_path, glb, info],
+    proc = subprocess.run([config.BLENDER_BIN, *config.BLENDER_FLAGS, "--python", script, "--", blend_path, glb, info],
                           capture_output=True, text=True, timeout=1200)
     if proc.returncode != 0 or not os.path.exists(glb):
         raise RuntimeError("blend_to_seed failed: %s" % ((proc.stdout or "")[-600:] + (proc.stderr or "")[-300:]))
