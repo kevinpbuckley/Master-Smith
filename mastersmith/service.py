@@ -82,14 +82,48 @@ class RefinishIn(BaseModel):
 
 
 # ------------------------------------------------------------------ helpers
-def _upload_path_ok(path):
-    """Only files under the uploads directory (or a finished job's output) may seed a job."""
+def _inside(path, roots, want_dir=False):
+    """`path` resolves (symlinks and .. included) to a file, or a directory with want_dir, under one of `roots`."""
     try:
-        real = os.path.realpath(path)
+        real = os.path.normcase(os.path.realpath(path))
     except (TypeError, ValueError):
         return False
-    roots = (os.path.realpath(config.UPLOADS_DIR), os.path.realpath(config.OUT_DIR))
-    return os.path.isfile(real) and any(real.startswith(r + os.sep) for r in roots)
+    if not (os.path.isdir(real) if want_dir else os.path.isfile(real)):
+        return False
+    return any(real.startswith(os.path.normcase(os.path.realpath(r)) + os.sep) for r in roots)
+
+
+def _upload_path_ok(path):
+    """Only files under the uploads directory (or a finished job's output) may seed a job."""
+    return _inside(path, (config.UPLOADS_DIR, config.OUT_DIR))
+
+
+def _foreign_paths(spec_dict):
+    """Local paths in a brief that point outside the uploads and job folders. The pipeline copies a brief's pictures
+    into the job and uploads them to fal's CDN and hands its part meshes to Blender, so a brief from the API or the
+    director may only name files this service stored (URLs stay allowed for pictures). The CLI passes local photos
+    straight to the pipeline and is not checked here."""
+    d = spec_dict or {}
+    bad = []
+    pictures = [d.get("reference_image")] + list(d.get("reference_images") or [])
+    for p in d.get("add_parts") or []:
+        if isinstance(p, dict):
+            pictures.append(p.get("picture"))
+            if p.get("seed") and not _upload_path_ok(p["seed"]):
+                bad.append(str(p["seed"]))
+    for pic in pictures:
+        if not pic or (isinstance(pic, str) and pic.startswith(("http://", "https://"))):
+            continue
+        if not isinstance(pic, str) or not _upload_path_ok(pic):
+            bad.append(str(pic))
+    if d.get("reference_job") and not _inside(d["reference_job"], (config.OUT_DIR,), want_dir=True):
+        bad.append(str(d["reference_job"]))
+    return bad
+
+
+def _refuse_paths(bad):
+    return {"error": "the brief names files outside the uploads and job folders: %s; attach files through /v1/uploads"
+                     % ", ".join(b[:120] for b in bad[:4]), "status": "rejected", "bad_paths": bad}
 
 
 def last_seed(user, job_id):
@@ -177,6 +211,9 @@ def submit_build(user, spec_dict, seed=None, confirm_removal=False):
     """Queue a build. With `seed` (the session's current model): a repaint keeps the mesh, a change that keeps the
     shape re-finishes it, and a change of shape edits the previous picture rather than redrawing from the text.
     New remove_parts are previewed (red on the renders) and queued only once confirmed."""
+    bad = _foreign_paths(spec_dict)
+    if bad:
+        return _refuse_paths(bad)
     spec = Spec.from_dict(spec_dict)
     if seed:
         same_shape = all(spec_dict.get(k) == seed["spec"].get(k) for k in ("description", "category", "style"))
@@ -205,6 +242,9 @@ def run_reference(user, spec_dict):
     "reference" so its pictures are served like any job's files. Tens of seconds; no Blender, no mesh."""
     from .pipeline import make_reference_only
     from .providers import ProviderBalanceLow
+    bad = _foreign_paths({**spec_dict, "reference_job": None})
+    if bad:
+        return _refuse_paths(bad)
     spec = Spec.from_dict({**spec_dict, "reference_job": None})
     job_id = new_job_id()
     store.enqueue(job_id, user, "reference", spec.to_dict())
@@ -230,6 +270,9 @@ def run_reference(user, spec_dict):
 def submit_import(user, path, spec_dict):
     if not _upload_path_ok(path) or not path.lower().endswith(MESH_EXTENSIONS):
         return {"error": "not an uploaded model file: %s" % path}
+    bad = _foreign_paths(spec_dict)
+    if bad:
+        return _refuse_paths(bad)
     d = dict(spec_dict or {})
     d.setdefault("name", re.sub(r"[^A-Za-z0-9]", "", os.path.splitext(os.path.basename(path))[0]) or "Imported")
     d.setdefault("description", "imported model")
@@ -575,7 +618,7 @@ def create_job(body: JobIn, dry_run: bool = False, who=Depends(auth)):
                 "steps": [{"step": s, "usd": round(u, 4)} for s, u in est["steps"]], "providers": providers.balances()}
     out = submit_build(who["user"], body.spec)
     if "error" in out:
-        raise HTTPException(402, out)
+        raise HTTPException(400 if out.get("bad_paths") else 402, out)
     return out
 
 
@@ -585,7 +628,7 @@ def make_reference_endpoint(body: JobIn, who=Depends(auth)):
     POST /v1/jobs and "reference_job": <dir> in the spec: the picture stage is then skipped."""
     out = run_reference(who["user"], body.spec)
     if out.get("status") != "done":
-        raise HTTPException(402 if out.get("status") == "refused" else 500, out)
+        raise HTTPException({"refused": 402, "rejected": 400}.get(out.get("status"), 500), out)
     return out
 
 
@@ -604,6 +647,9 @@ def refinish_job(body: RefinishIn, confirm_removal: bool = False, who=Depends(au
     src = store.job(body.source_job, who["user"])
     if not src or not (src.get("result") or {}).get("dir"):
         raise HTTPException(404, "source job not found or has no output")
+    bad = _foreign_paths(body.overrides)       # the stored brief was checked when it was queued
+    if bad:
+        raise HTTPException(400, _refuse_paths(bad))
     spec = Spec.from_dict({**src["spec"], **body.overrides})
     new_removals = [p for p in spec.remove_parts if p not in (src["spec"].get("remove_parts") or [])]
     if new_removals and not confirm_removal:

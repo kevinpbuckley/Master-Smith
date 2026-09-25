@@ -190,3 +190,26 @@ def test_an_outside_model_can_drive_the_director_through_the_session_routes(clie
     assert chat["turns"][0]["turn"]["settings"]["director_model"] == "external"
     assert [x["name"] for x in chat["turns"][0]["turn"]["tools"]] == ["set_brief", "ask_customer"]
     client.delete("/v1/chats/outside", headers=H)
+
+
+def test_briefs_may_only_name_files_the_service_stored(client, tmp_path):
+    from mastersmith import config, service
+    H = {"Authorization": "Bearer " + KEY}
+    outside = tmp_path / "secret.png"
+    outside.write_bytes(b"\x89PNG\r\n\x1a\n")
+    up = client.post("/v1/uploads", headers=H, files={"file": ("ok.png", outside.read_bytes(), "image/png")}).json()["path"]
+    sneaky = os.path.join(config.UPLOADS_DIR, "..", "..", os.path.relpath(str(outside), str(config.DATA_DIR.parent)))
+    for spec in ({"reference_image": str(outside)}, {"reference_images": [up, str(outside)]}, {"reference_image": sneaky},
+                 {"reference_job": str(tmp_path)}, {"add_parts": [{"phrase": "a scope", "picture": str(outside)}]},
+                 {"add_parts": [{"phrase": "a scope", "seed": str(outside)}]}):
+        body = {"spec": {"name": "Crate", "description": "oak crate", **spec}}
+        r = client.post("/v1/jobs", headers=H, json=body)
+        assert r.status_code == 400 and r.json()["detail"]["bad_paths"], spec
+        if "reference_job" not in spec:            # /v1/reference drops reference_job: it draws new pictures
+            assert client.post("/v1/reference", headers=H, json=body).status_code == 400, spec
+    assert service._foreign_paths({"reference_images": [up, "https://example.com/a.png"]}) == []
+    job_dir = config.OUT_DIR / "Crate_x"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    assert service._foreign_paths({"reference_job": str(job_dir)}) == []
+    assert client.post("/v1/jobs", headers=H, json={"spec": {"name": "Crate", "description": "oak crate",
+                                                             "reference_image": up}}).status_code == 200
