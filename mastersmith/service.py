@@ -170,8 +170,7 @@ def run_removal_preview(user, source_dir, spec):
     from .providers import ProviderBalanceLow
     job_id = new_job_id()
     store.enqueue(job_id, user, "removal_preview", spec.to_dict(), source_job=source_dir)
-    store.db.execute("UPDATE jobs SET status='running', started=? WHERE id=?", (time.time(), job_id))
-    store.db.commit()
+    store.mark_running(job_id)
     try:
         r = preview_removal_job(source_dir, spec, user, wallet, log=lambda m: store.append_log(job_id, m), job_id=job_id)
     except ProviderBalanceLow as exc:
@@ -254,8 +253,7 @@ def run_reference(user, spec_dict):
     spec = Spec.from_dict({**spec_dict, "reference_job": None})
     job_id = new_job_id()
     store.enqueue(job_id, user, "reference", spec.to_dict())
-    store.db.execute("UPDATE jobs SET status='running', started=? WHERE id=?", (time.time(), job_id))
-    store.db.commit()
+    store.mark_running(job_id)
     try:
         r = make_reference_only(spec, user, wallet, log=lambda m: store.append_log(job_id, m), job_id=job_id)
     except ProviderBalanceLow as exc:

@@ -571,3 +571,32 @@ def test_outside_links_must_resolve_to_public_addresses(monkeypatch, tmp_path):
     assert not os.path.exists(tmp_path / "c.png")
     from mastersmith.stages import research
     assert research.fetch_image("https://good.example/a.png") == (None, None)
+
+
+def test_the_job_store_survives_the_worker_and_requests_at_once(tmp_path):
+    """The service shares one Store between request threads and the worker: a build logs while the chat polls it."""
+    import threading
+    from mastersmith.store import Store
+    st = Store(str(tmp_path / "jobs.db"))
+    st.enqueue("job", "u", "build", {"name": "X"})
+    errors = []
+
+    def run(fn, n=300):
+        try:
+            for i in range(n):
+                fn(i)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+    work = [lambda i: st.append_log("job", "line %d" % i),
+            lambda i: st.job("job", "u"),
+            lambda i: st.enqueue("q%d_%d" % (threading.get_ident(), i), "u", "build", {"name": "Y"}),
+            lambda i: st.jobs_for("u"),
+            lambda i: st.claim_next(),
+            lambda i: st.mark_running("job")]
+    threads = [threading.Thread(target=run, args=(w,)) for w in work * 2]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(st.job("job")["log"].splitlines()) == 600
