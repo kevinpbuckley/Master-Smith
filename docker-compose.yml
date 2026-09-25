@@ -26,6 +26,7 @@ services:
     environment:
       MASTERSMITH_API_URL: http://api:8080
       MASTERSMITH_API_KEY: ${MASTERSMITH_API_KEY:-}   # the fixed key from .env, if you set one
+      MASTERSMITH_WEB_PASSWORD: ${MASTERSMITH_WEB_PASSWORD:-}   # the chat asks for it when set (web/proxy.ts)
     ports:
       - "127.0.0.1:3000:3000"    # this machine only: the chat has no login of its own
     depends_on:

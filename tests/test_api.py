@@ -240,3 +240,16 @@ def test_every_blender_run_disables_embedded_scripts():
             if f.endswith(".py"):
                 text = open(os.path.join(folder, f), encoding="utf-8").read()
                 assert not re.search(r"BLENDER_BIN,\s*\"-b\"", text), f
+
+
+def test_the_chat_says_which_key_is_missing_and_outside_directors_need_none(client, monkeypatch):
+    from mastersmith import config, service
+    H = {"Authorization": "Bearer " + KEY}
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    service.CHATS_DIR = config.DATA_DIR / "chats"
+    r = client.post("/v1/chat", headers=H, json={"message": "a crate", "session_id": "nokey"})
+    assert r.status_code == 503 and "OPENROUTER_API_KEY" in r.json()["detail"]
+    r = client.post("/v1/sessions/nokey-mcp/tool", headers=H, json={"name": "set_brief", "args": {"name": "Crate", "description": "oak crate"}})
+    assert r.status_code == 200 and r.json()["brief"]["name"] == "Crate"
+    for sid in ("nokey", "nokey-mcp"):
+        client.delete("/v1/chats/" + sid, headers=H)

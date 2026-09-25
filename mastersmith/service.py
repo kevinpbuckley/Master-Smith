@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from . import config, pricing, providers
 from .agent import Director
+from .llm import LLMError
 from .pipeline import MESH_EXTENSIONS, seed_of
 from .spec import Spec
 from .store import Store
@@ -557,6 +558,11 @@ def chat(body: ChatIn, who=Depends(auth)):
     text = body.message + _attachment_note(body.attachments)
     try:
         reply = d.turn(text)
+    except LLMError as exc:
+        if not os.environ.get("OPENROUTER_API_KEY"):
+            raise HTTPException(503, "the director needs OPENROUTER_API_KEY in .env (or drive it from Claude Code over MCP: "
+                                     "docs/AGENT_MODE.md); restart the API after adding it")
+        raise HTTPException(502, "director error: %s" % str(exc)[:300])
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, "director error: %s" % str(exc)[:300])
     out = {"reply": reply, "brief": d.spec.to_dict() if d.spec else None, "balance": wallet.balance(who["user"]),
