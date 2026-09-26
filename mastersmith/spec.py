@@ -8,6 +8,8 @@ STYLES = ("realistic", "stylized")
 # Scripted texture repairs the finish can apply on a re-finish of the same seed (no vendor, no spend). The director
 # reaches for these before any repaint or new mesh when the complaint is about the texture, not the shape.
 TEXTURE_FIXES = {
+    "smooth_organic_normals": "opt-in shading-normal repair for a continuous organic mesh: smooth shared-vertex normals on source and LODs before baking; removes intentional hard edges too, so do not use on mechanical parts or mixed assemblies",
+    "preserve_seed_maps": "preserve the original seed normal/AO and skip reference projection; repair finishing-induced artifacts without buying a mesh",
     "delight": "remove baked-in lighting and painted shadows/highlights from the base colour (strong de-light)",
     "clear_glass_highlights": "darken the reflections the vendor painted on the cockpit interior under a clear canopy",
     "dark_canopy": "make the canopy/windows an opaque dark tint instead of clear glass (hides a hollow interior)",
@@ -56,7 +58,8 @@ class Spec:
     repaint: str = None               # with hybrid: "meshy" (retexture vendor) or "pictures" (renders repainted and baked); None -> config
     hybrid: object = None             # True -> Meshy v7 geometry + a retexture pass on our unwrap (clean albedo); None -> config default
     seed_vendor: str = None           # None -> Tripo H3.1; "meshy7mv" (Meshy v7 multi-image, ~$0.035, 3x slower),
-                                      # "hitem3d3" (Hi3D v3, crisper textures, single view), "meshy7", "hitem3d"
+                                      # "hitem3d3" (Hi3D v3, crisper textures, single view), "hitem3d3mv" (Hi3D v3 from every
+                                      # approved angle, same price), "meshy7", "hitem3d"
     reference_job: str = None         # the directory of a finished reference job whose approved pictures this build
                                       # seeds from; the picture stage is skipped
     remove_parts: list = None         # a repair on the existing mesh: parts to delete in Blender, as descriptive phrases
@@ -151,6 +154,12 @@ class Spec:
                           "place": place if place in PLACEMENTS else "inside", "size_m": max(0.0, size), "offset_m": off,
                           "picture": str(p.get("picture") or "").strip() or None,
                           "seed": str(p.get("seed") or "").strip() or None})     # a mesh already bought for this part
+            # A facing repair reuses the bought seed instead of asking vision to guess again.
+            if p.get("yaw_degrees") in (-180, -90, 0, 90, 180) and not isinstance(p.get("yaw_degrees"), bool):
+                added[-1]["yaw_degrees"] = int(p["yaw_degrees"])
+            if isinstance(p.get("provides"), list):
+                from .repair import COMPONENTS
+                added[-1]["provides"] = list(dict.fromkeys(v for v in p["provides"] if isinstance(v, str) and v in COMPONENTS))
         self.add_parts = added[:4]
 
         if self.research is None:

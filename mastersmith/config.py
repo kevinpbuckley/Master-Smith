@@ -69,6 +69,9 @@ SEED_MODEL_ALTERNATIVES = {"hitem3d": "fal-ai/hitem3d/image-to-3d", "meshy7": "f
 # Multiview alternatives: these take the SAME checked view set as Tripo multiview. Meshy v7 multi-image asks only for
 # "1 to 4 images of the same object from different angles" - no fixed [front, left, back, right] order (issue #6).
 SEED_MULTIVIEW_ALTERNATIVES = {"meshy7mv": "fal-ai/meshy/v7/multi-image-to-3d"}
+# Hi3D v3 multi-view (2026-09-25): the same 2048-voxel model fed named front / back / left / right pictures instead of one.
+# Same price as its single-image sibling; every slot is optional, so our [primary, second view, mirror] set fits it.
+SEED_HI3D_MULTIVIEW = "hitem3d/hi3d/v3.0/multi-view-to-3d"
 # Hybrid seed (2026-09-18): Meshy v7 geometry (sharper, ~$0.035) then Meshy retexture on the mesh's own UVs (~$0.30) for
 # a clean albedo instead of Meshy's speckled one. Categories listed here default to it; MASTERSMITH_HYBRID=0|1 overrides.
 _hyb_env = os.environ.get("MASTERSMITH_HYBRID", "").strip()

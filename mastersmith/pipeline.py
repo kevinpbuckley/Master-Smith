@@ -209,7 +209,7 @@ def build(spec, user, wallet, log=print, job_id=None):
         job.stage("review")
         log("4/4 review")
         renders = [os.path.join(result["delivery_dir"], r) for r in report["renders"]]
-        result["review"] = review(job, ref["views"][0], renders)
+        result["review"] = review(job, ref["views"][0], renders, report)
         result["gate"] = gate_check(spec, report, result["review"], result["delivery_dir"])
         if result["gate"]["warnings"]:
             log("gate: " + "; ".join(result["gate"]["warnings"]))
@@ -309,8 +309,7 @@ def rework(seed_path, spec, user, wallet, ref_view=None, mode="refinish", log=pr
             result["rig"] = rig_asset(job, skill, report)
         log("4/4 review")
         renders = [os.path.join(result["delivery_dir"], r) for r in report["renders"]]
-        if ref_view and os.path.exists(ref_view):
-            result["review"] = review(job, ref_view, renders)
+        result["review"] = review(job, ref_view, renders, report)
         result["gate"] = gate_check(spec, report, result.get("review"), result["delivery_dir"])
         if result["gate"]["warnings"]:
             log("gate: " + "; ".join(result["gate"]["warnings"]))

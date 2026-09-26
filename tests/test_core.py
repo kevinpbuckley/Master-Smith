@@ -69,6 +69,22 @@ def test_seed_payload_switches_to_multiview_with_two_views():
     assert seed_payload(tiny, ["u"])[1]["face_limit"] == 150000
 
 
+def test_hi3d_multiview_fills_its_named_slots_from_our_view_list():
+    w = Spec(name="A", description="x", category="weapon", seed_vendor="hitem3d3mv")
+    model, p = seed_payload(w, ["left", "front", "mirror"])          # the weapon skill: profile, muzzle view, mirrored profile
+    assert model == "hitem3d/hi3d/v3.0/multi-view-to-3d"
+    assert (p["front_image_url"], p["left_image_url"], p["right_image_url"]) == ("front", "left", "mirror") and "back_image_url" not in p
+    assert p["resolution"] == "2048quality" and p["enable_pbr"] and p["export_format"] == "glb" and p["face_count"] == 360000
+    v = Spec(name="A", description="x", category="vehicle", seed_vendor="hitem3d3mv")
+    p = seed_payload(v, ["f", "l", "b", "r"])[1]                        # the orthographic set
+    assert (p["front_image_url"], p["left_image_url"], p["back_image_url"], p["right_image_url"]) == ("f", "l", "b", "r")
+    p = seed_payload(v, ["tq", "l"])[1]                                 # no orthographic set: the three-quarter shot stands in for the front
+    assert (p["front_image_url"], p["left_image_url"]) == ("tq", "l")
+    p = seed_payload(Spec(name="A", description="x", category="prop", seed_vendor="hitem3d3mv"), ["tq", "front"])[1]
+    assert p["front_image_url"] == "front" and [k for k in p if k.endswith("_image_url")] == ["front_image_url"]
+    assert seed_payload(w, ["only"])[0] == "hitem3d/hi3d/v3.0/image-to-3d"   # one picture: the single-image sibling
+
+
 def test_wallet_keeps_score_of_spend_and_never_refuses():
     with tempfile.TemporaryDirectory() as d:
         w = Wallet(os.path.join(d, "w.db"))
@@ -146,7 +162,7 @@ def test_gate_and_package_on_a_synthetic_delivery():
         report = {"lods": [{"lod": 0, "triangles": 29990}], "maps": [{"role": "BC"}, {"role": "N"}, {"role": "ORM"}],
                   "dimensions_m": [0.6, 0.4, 0.5], "collision": {"triangles": 72}, "files": ["SM_Crate.fbx", "T_Crate_BC.png"],
                   "roughness_mean": 0.55}
-        g = check(spec, report, {"score": 7, "issues": []}, d)
+        g = check(spec, report, {"score": 7, "verdict": "ship", "issues": []}, d)
         assert g["ok"], g
         bad = check(spec, {**report, "maps": [{"role": "BC"}], "dimensions_m": [1.2, 0.4, 0.5]}, {"score": 3, "issues": ["melted"]}, d)
         assert not bad["ok"] and any("normal map" in w for w in bad["warnings"]) and any("size" in w for w in bad["warnings"])
@@ -354,11 +370,13 @@ def test_remove_parts_are_normalised_phrases():
 
 def test_estimate_prices_the_chosen_mesh_vendor():
     cat = {v["key"]: v for v in pricing.vendor_catalogue()}
-    assert cat["tripo"]["usd"] == 0.6 and cat["hitem3d3"]["usd"] == 2.1
+    assert cat["tripo"]["usd"] == 0.6 and cat["hitem3d3"]["usd"] == 2.1 and cat["hitem3d3mv"]["usd"] == 2.1 and cat["hitem3d3mv"]["multiview"]
     default = pricing.estimate(Spec(name="R", description="rifle", category="weapon"))
     dear = pricing.estimate(Spec(name="R", description="rifle", category="weapon", seed_vendor="hitem3d3"))
     assert any(n.startswith("3D seed (Tripo") for n, _ in default["steps"])
     assert any(n == "3D seed (Hitem3D v3 (2048))" for n, _ in dear["steps"]) and dear["usd"] > default["usd"]
+    mv = pricing.estimate(Spec(name="R", description="rifle", category="weapon", seed_vendor="hitem3d3mv"))
+    assert any(n == "3D seed (Hitem3D v3 multi-view (2048))" for n, _ in mv["steps"]) and mv["usd"] == dear["usd"]
     assert pricing.seed_vendor(Spec(name="R", description="r", seed_vendor="nonsense"))["key"] == "tripo"
 
 
@@ -396,7 +414,7 @@ def test_texture_fixes_are_a_known_catalogue():
     s = Spec(name="Jet", description="grey jet", category="aircraft", texture_fixes=["delight", " Dark_Canopy ", "nonsense", "delight"])
     assert s.texture_fixes == ["delight", "dark_canopy"]
     assert Spec(name="Jet", description="grey jet").texture_fixes == []
-    assert set(TEXTURE_FIXES) == {"delight", "clear_glass_highlights", "dark_canopy", "kill_highlights"}
+    assert set(TEXTURE_FIXES) == {"delight", "clear_glass_highlights", "dark_canopy", "kill_highlights", "preserve_seed_maps"}
 
 
 def test_director_ask_records_the_question_and_options():

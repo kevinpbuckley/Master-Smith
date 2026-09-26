@@ -6,6 +6,7 @@ Deterministic where it can be; the only judgement calls are the two vision answe
 import json
 import os
 import subprocess
+import shutil
 
 from .. import config
 from .cockpit import make_cockpit
@@ -125,6 +126,12 @@ def run_finish(job, skill, seed_glb, reference=None, retexture_maps=None, recolo
     with open(report_path) as f:
         report = json.load(f)
     report["decision"] = decision
+    source_preview = os.path.join(job.work_dir, "probe_iso.png")
+    if os.path.exists(source_preview):
+        shutil.copy2(source_preview, os.path.join(common["out_dir"], "preview_seed_iso.png"))
+        report["source_renders"] = ["preview_seed_iso.png"]
+        with open(report_path, "w") as f:
+            json.dump(report, f, indent=1)
     if spec.category == "environment" and spec.style == "realistic" and reference and os.path.exists(reference):
         try:
             job.log("  tiling PBR material from the reference (Patina)")

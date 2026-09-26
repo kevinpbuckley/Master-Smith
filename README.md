@@ -127,7 +127,8 @@ own when Docker restarts after a reboot; stopped ones stay stopped until you sta
    photograph of the real thing found on the web when you name it (an F-150, a Glock 17). A vision model checks
    it: one object, plain background, right view. Weapons and vehicles get extra views for multiview seeding.
 2. **3D seed.** Tripo H3.1 with detailed geometry and HD textures by default; Meshy v7 and Hitem3D are wired in as
-   alternatives (`MASTERSMITH_SEED_MODEL`). The vendor mesh is the asset; nothing sculpts it afterwards.
+   alternatives (`MASTERSMITH_SEED_MODEL`). Hitem3D v3 comes in two flavours at the same price: one picture
+   (`hitem3d3`) or every approved angle in its named front / left / back / right slots (`hitem3d3mv`). The vendor mesh is the asset; nothing sculpts it afterwards.
 3. **Blender finish** (headless, free) in two passes around a decision step:
    - *prepare*: join, long axis to +X (or +Z up for characters), scale to real metres, origin, probe renders;
    - *decide*: the vision model says which probe shows the front; SAM 3 returns masks for glass, wheels and

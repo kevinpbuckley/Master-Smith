@@ -8,6 +8,8 @@ from . import config, pricing, providers, skills
 from .llm import LLM
 from .pipeline import build
 from .spec import CATEGORIES, ENGINES, STYLES, TEXTURE_FIXES, Spec
+from .quality import assess
+from .repair import assembly_conflicts, plan_repair
 
 SYSTEM = """You are Master Smith, a 3D asset director. A customer describes a game asset; you turn it into a build brief,
 quote the credits, and run the build when they confirm. You are concise and concrete.
@@ -59,7 +61,8 @@ How a job goes:
    - a TEXTURE complaint (baked-in lighting or painted shadows, reflections or white blobs on the glass, a milky or
      hollow-looking canopy, blurry highlights) is a job for a script, never for a new mesh: put the matching
      texture_fixes on the brief and build - a free re-finish applies them. Only if the scripts cannot fix it, a
-     repaint (retexture=true, about $1.20). Reviewer notes about "painted", "baked" or "blurry" textures mean delight;
+     repaint (retexture=true, about $1.20). First use plan_repair to separate source texture defects from damage
+     introduced by finishing; a clean seed damaged by the finish needs preserve_seed_maps, not automatic delight;
    - colour, finish or material changes go through retexture=true: the mesh is repainted, nothing moves;
    - only a change of shape or proportions buys a new mesh: keep the description, put the change in edit_instructions,
      call make_reference so the customer approves the edited picture, then build.
@@ -75,6 +78,28 @@ How a job goes:
 
 Skills you can read for guidance on a category: {categories}. Use read_skill when unsure how a category is handled.
 Categories: {cats}. Styles: {styles}. Engines: {engines}.
+Repair discipline (especially cabins and other assemblies):
+- A complaint that a repair still looks wrong means the repair is unresolved. Call job_status before proposing another
+  build. Read summary.quality, the actual review verdict, assembly checks and fitting records, not just the last log.
+- "done" means files were produced; a technical gate pass means packaging checks passed. Neither means it looks right.
+  A rebuild verdict ALWAYS wins over a numeric score. Never call 5/10 "usable" when the verdict is rebuild. Missing or
+  obscured close-up evidence is UNVERIFIED, not fixed. Do not claim you saw an image: use the review's actual evidence.
+- Plan an assembly, not a pile of separately generated objects. Inventory what each purchased module already contains
+  before adding another seat, floor, console or flight stick. A cockpit module with a stick plus a separate joystick is
+  a possible duplicate. Explicitly describe each module's exclusions; changing a phrase may purchase a new seed, so quote
+  that cost. Do not blindly keep adding parts. Keep the original body and purchased seeds unless a defect requires replacement.
+- Separate geometry/placement failures from texture problems. Check forward orientation, relative size, floor contact,
+  panel/seat spacing, leg room, control reach and intersections. Never offer dark_canopy as a fix for a requested visible cabin.
+- Before another rework, state the observed defect, the specific brief/placement change, and what the next close-ups must
+  show to count as success. If the previous remedy failed, do not repeat it unchanged or invent better results from logs.
+  If the available tools cannot resolve the geometry, say so and ask for a targeted modelling repair, not another blind spend.
+- Call plan_repair on a failed job: it returns concrete set_brief changes, evidence needed and whether an action requires
+  only a re-finish. Compare the seed preview with the final render. If the seed was clean and the finish became faceted,
+  use preserve_seed_maps on the SAME seed; do not switch vendors or buy a new body. Do not apply delight to everything.
+- Give each added module a truthful provides inventory matching its phrase/geometry. A full cockpit and a standalone
+  stick cannot both own the same control by accident. To omit a redundant added part, remove its entry from add_parts;
+  do not use remove_parts segmentation to delete it from the aircraft. Do not regenerate a purchased part just to change
+  its placement. A hidden control needs an inspection view, not an invented offset or a replacement mesh.
 Never invent file paths or results; only report what tools return. {pricing}"""
 
 TOOLS = [
@@ -96,10 +121,12 @@ TOOLS = [
             "single_picture": {"type": "boolean", "description": "ONLY when the customer explicitly asks for a single picture / "
                                "one view. Leave it out otherwise: every build draws and seeds from several angles by default."},
             "premium": {"type": "boolean", "description": "Dearer picture model for hard briefs"},
-            "seed_vendor": {"type": "string", "enum": ["tripo", "hitem3d3", "meshy7mv", "meshy7", "hitem3d"],
+            "seed_vendor": {"type": "string", "enum": ["tripo", "hitem3d3mv", "hitem3d3", "meshy7mv", "meshy7", "hitem3d"],
                             "description": "The mesh vendor. Leave unset for the default (Tripo). hitem3d3 = Hitem3D v3 at 2048 voxels, the "
                                            "crispest hard-surface geometry (about $2.10 a seed): the answer to melted rails, fused trigger "
-                                           "guards and blobby detail. A change of vendor seeds again from the approved pictures."},
+                                           "guards and blobby detail; hitem3d3mv = the same model fed every approved angle (front, side, mirrored "
+                                           "side, back when drawn) for the same price, the better pick whenever more than one view was "
+                                           "approved. A change of vendor seeds again from the approved pictures."},
             "glass": {"type": "boolean", "description": "Give windows/lenses a glass material slot (default for vehicles, weapons, buildings)"},
             "rig": {"type": "boolean", "description": "Rig it: characters get a UE5-named humanoid skeleton with walk/run clips; vehicles get wheel bones; weapons get Muzzle/Grip/Sight socket bones"},
             "notes": {"type": "string"},
@@ -132,7 +159,13 @@ TOOLS = [
                               "size_m": {"type": "number", "description": "the part's longest dimension in metres; 0 = fit the anchor"},
                               "offset_m": {"type": "array", "items": {"type": "number"}, "description": "[forward, left, up] metres to "
                                            "move it from where the placement puts it (a joystick 0.3 m ahead of the seat: [0.3, 0, 0])"},
-                              "picture": {"type": "string", "description": "an attached picture of the part, if the customer gave one"}},
+                              "yaw_degrees": {"type": "integer", "enum": [-180, -90, 0, 90, 180],
+                                              "description": "Optional absolute yaw of the prepared part, overriding automatic facing. "
+                                                             "Use the previous job's yaw and observed direction to correct a backward "
+                                                             "seat/panel/pedals without buying another seed; omit for automatic facing."},
+                              "picture": {"type": "string", "description": "an attached picture of the part, if the customer gave one"},
+                              "provides": {"type": "array", "items": {"type": "string", "enum": ["seat", "panel", "consoles", "stick", "pedals", "floor", "walls", "bulkhead"]},
+                                           "description": "Components actually included by this module. Must match its phrase and geometry; prevents duplicate controls/shells."}},
                               "required": ["name", "phrase", "anchor", "place"]},
                           "description": "Model these parts separately and fit them onto the BUILT model on a re-finish (about $0.70 a part: "
                                          "one picture + one small seed). The body is not reseeded. A cockpit interior under the canopy, a scope "
@@ -183,6 +216,9 @@ TOOLS = [
     {"type": "function", "function": {
         "name": "job_status", "description": "Status, log tail and results of a queued or finished build.",
         "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}, "required": ["job_id"]}}},
+    {"type": "function", "function": {
+        "name": "plan_repair", "description": "Inspect the last failed job and return targeted brief changes without spending or building.",
+        "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}}}},
     {"type": "function", "function": {
         "name": "read_skill", "description": "Read the guidance for an asset category.",
         "parameters": {"type": "object", "properties": {"category": {"type": "string"}}, "required": ["category"]}}},
@@ -286,7 +322,34 @@ class Director:
     def _build(self, a):
         if not self.spec:
             return {"error": "no brief yet; call set_brief first"}
+        conflicts = assembly_conflicts(self.spec.add_parts)
+        if conflicts:
+            return {"error": "assembly plan duplicates components; call plan_repair and resolve ownership before spending",
+                    "conflicts": conflicts}
         a = a or {}
+        if self.last_job_id and self.job_status and (self.spec.add_parts or self.spec.cockpit):
+            previous = self.job_status(self.last_job_id)
+            if previous.get("status") in ("queued", "running"):
+                return {"error": "the current job is still running; inspect job_status instead of queuing another repair",
+                        "job_id": self.last_job_id}
+            summary = previous.get("summary") or {}
+            old_spec = previous.get("spec")
+            quality = summary.get("quality")
+            if old_spec and previous.get("status") == "done":
+                if quality is None:
+                    quality = assess(Spec.from_dict(old_spec), summary, summary.get("review"))
+                current_spec = self.spec.to_dict()
+                # The service fills provider defaults after submission; that bookkeeping is not a changed repair.
+                for key in ("seed_vendor", "picture_model"):
+                    if not current_spec.get(key):
+                        current_spec[key] = old_spec.get(key)
+                old_parts = {p.get("name"): p for p in old_spec.get("add_parts") or []}
+                new_picture = any(p.get("picture") and p["picture"] != old_parts.get(p["name"], {}).get("picture")
+                                  for p in self.spec.add_parts)
+                if not quality.get("accepted") and not new_picture and self._repair_plan(old_spec) == self._repair_plan(current_spec):
+                    return {"error": "the previous assembly is failed or unverified and the repair plan is unchanged; "
+                                     "inspect job_status, identify a specific defect and change its fit/geometry before "
+                                     "spending on another rework", "job_id": self.last_job_id, "quality": quality}
         approved = bool(self.reference and self.reference.get("for") == self._design())
         reworking = bool(self.last_job_id) and (self.spec.retexture or self.spec.remove_parts or self.spec.texture_fixes
                                                 or self.spec.add_parts)
@@ -310,6 +373,18 @@ class Director:
         return self._summary(self.last_result)
 
     @staticmethod
+    def _repair_plan(spec):
+        """Ignore bookkeeping/cache paths when detecting the Havoc-style unchanged rework loop."""
+        d = Spec.from_dict(spec).to_dict()
+        fields = ("description", "category", "style", "tri_budget", "size_m", "glass", "cockpit", "rig",
+                  "edit_instructions", "retexture", "retexture_parts", "protect_parts", "remove_parts",
+                  "texture_fixes", "seed_vendor", "picture_model")
+        plan = {k: d.get(k) for k in fields}
+        plan["seed_vendor"] = plan["seed_vendor"] or "tripo"
+        plan["add_parts"] = [{k: v for k, v in p.items() if k not in ("seed", "picture")} for p in d["add_parts"]]
+        return plan
+
+    @staticmethod
     def _summary(r):
         summary = {"status": r["status"], "job_dir": r["dir"], "bill": {k: r["bill"][k] for k in
                    ("usd_cost", "credits_charged", "balance")}}
@@ -324,6 +399,10 @@ class Director:
             summary["review"] = r["review"]
         if r.get("gate"):
             summary["gate"] = r["gate"]
+        if r.get("spec"):
+            summary["quality"] = assess(Spec.from_dict(r["spec"]), r.get("delivery") or {}, r.get("review"))
+        if r.get("diagnosis"):
+            summary["diagnosis"] = r["diagnosis"]
         if r.get("package"):
             summary["package"] = r["package"]
         return summary
@@ -356,6 +435,10 @@ class Director:
 
     def _job_status(self, a):
         jid = a.get("job_id") or self.last_job_id
+        if not self.job_status and self.last_result:
+            r = self.last_result
+            return {"id": r.get("job_id"), "status": r.get("status"), "spec": r.get("spec"),
+                    "summary": {**(r.get("delivery") or {}), "review": r.get("review"), "gate": r.get("gate")}}
         if not jid:
             return {"error": "no job yet"}
         if self.job_status:
@@ -364,11 +447,19 @@ class Director:
             st.pop("files", None)
             st["log"] = (st.get("log") or [])[-12:]
             return st
-        return {"job_id": jid, "status": "done" if self.last_result else "unknown"}
+        return {"job_id": jid, "status": "unknown"}
 
     def _read_skill(self, a):
         s = skills.load(a.get("category", "prop"))
         return {"category": s["category"], "guidance": s["body"][:2500]}
+
+    def _plan_repair(self, a):
+        status = self._job_status(a or {})
+        if status.get("error"):
+            return status
+        if status.get("status") != "done":
+            return {"error": "wait for the job's completed report before planning a visual repair"}
+        return plan_repair(status)
 
     def _balance(self, _a):
         return self._money()
@@ -395,7 +486,8 @@ class Director:
                     a = {}
                 fn = {"set_brief": self._set_brief, "build": self._build, "read_skill": self._read_skill,
                       "balance": self._balance, "job_status": self._job_status, "import_model": self._import_model,
-                      "make_reference": self._make_reference, "ask_customer": self._ask}.get(name)
+                      "make_reference": self._make_reference, "ask_customer": self._ask,
+                      "plan_repair": self._plan_repair}.get(name)
                 out = fn(a) if fn else {"error": "unknown tool %s" % name}
                 self.last_tools.append({"name": name, "args": a, "result": json.dumps(out, default=str)[:400]})
                 self.messages.append({"role": "tool", "tool_call_id": call["id"], "name": name,

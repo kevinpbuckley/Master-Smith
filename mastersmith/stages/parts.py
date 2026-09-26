@@ -85,6 +85,10 @@ def orient_added_part(job, spec, part, glb):
                                  "origin": "center", "probe_size": 448, "keep_upright": True}, "part_%s_prepare" % name)
     if not os.path.exists(os.path.join(part_dir, "work.blend")):
         return None
+    if part.get("yaw_degrees") is not None:
+        yaw = int(part["yaw_degrees"])
+        job.log("  add %s facing: explicit repair -> yaw %d (reusing the part geometry)" % (name, yaw))
+        return {"blend": os.path.join(part_dir, "work.blend"), "yaw": yaw, "facing_source": "explicit"}
     views = ["posx", "negx", "posy", "negy"]
     files = [os.path.join(part_dir, "probe_%s.png" % v) for v in views]
     if not all(os.path.exists(f) for f in files):
@@ -126,8 +130,7 @@ def make_added_part(job, spec, part, reference_path):
                 # a part that lives inside is not on the exterior reference: it is drawn from the words. The first Havoc
                 # interior came as a whole nose module with engines round it, so the seat was toy-sized once the module
                 # was scaled to the cockpit (2026-09-24): no bodywork, ever.
-                what = ("the loose fittings of %s: the seat, panel, consoles, controls and floor pan as one open assembly"
-                        % phrase) if whole_interior else phrase
+                what = phrase  # never append a floor/seat/controls that the requested module explicitly excludes
                 prompt = ("ONLY %s, of a %s, as one object with nothing around it, NO fuselage, NO hull, NO engines, "
                           "NO canopy, NO exterior bodywork, seen from a three-quarter front angle slightly above, whole "
                           "and complete, isolated on a plain pure white background, nothing else in frame, "

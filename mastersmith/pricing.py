@@ -8,6 +8,7 @@ from . import config
 FAL_PRICES = {
     "fal-ai/patina": 0.12,                       # $0.01 + $0.01 per megapixel per map; 5 maps at 2K ~ $0.21 (issue #7)
     "hitem3d/hi3d/v3.0/image-to-3d": 2.10,       # fal: $0.02/credit, 2048quality geometry + texture 10 + pbr 5 = $2.10 (master $9.10)
+    "hitem3d/hi3d/v3.0/multi-view-to-3d": 2.10,  # fal: same credits as the single-image endpoint (2026-09-25)
     "fal-ai/hitem3d/image-to-3d": 0.50,          # CALIBRATE: fal shows no fixed price; Hitem3D 1536pro list price (issue #6)
     "fal-ai/meshy/v7/image-to-3d": 0.05,         # inferred from wave 17's measured spend (2026-09-18): the whole wave
                                                  # came in $2.63 UNDER the table with five of these rows at 0.40; the
@@ -140,6 +141,8 @@ SEED_VENDORS = [
      "note": "1536-voxel geometry from one picture"},
     {"key": "hitem3d3", "label": "Hitem3D v3 (2048)", "model": "hitem3d/hi3d/v3.0/image-to-3d", "multiview": False,
      "note": "crispest geometry, the best high-poly source for baking, one picture, dear"},
+    {"key": "hitem3d3mv", "label": "Hitem3D v3 multi-view (2048)", "model": config.SEED_HI3D_MULTIVIEW, "multiview": True,
+     "note": "the same crisp geometry seeded from every approved angle (front, sides, back), same price"},
 ]
 
 

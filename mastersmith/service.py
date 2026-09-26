@@ -238,8 +238,25 @@ def submit_import(user, path, spec_dict):
 
 
 def job_view(row, user):
+    from .quality import assess
+    from .diagnose import diagnose
     r = row.get("result") or {}
     delivery = r.get("delivery") or {}
+    quality = assess(Spec.from_dict(row["spec"]), delivery, r.get("review"))
+    # Older jobs stored "usable" even when their reviewer said rebuild. Do not feed that stale conclusion
+    # back to the director after an upgrade; preserve the historical files, correct the live status view.
+    diagnosis = diagnose(r, os.path.join(r.get("dir") or "", "work"), Spec.from_dict(row["spec"])) if r else []
+    if not quality["accepted"]:
+        diagnosis = [d for d in diagnosis if not d.get("finding", "").startswith("reviewer ")]
+        diagnosis.insert(0, {"finding": "not accepted: " + "; ".join(quality["issues"]),
+                             "remedy": "inspect the requested repair; technical completion is not visual acceptance",
+                             "fix": None})
+    gate = dict(r.get("gate") or {})
+    if gate:
+        gate["technical_ok"] = gate.get("technical_ok", bool(gate.get("ok")))
+        gate["quality"] = quality
+        gate["warnings"] = list(dict.fromkeys((gate.get("warnings") or []) + quality["issues"]))
+        gate["ok"] = bool(gate.get("ok")) and quality["accepted"]
     files = []
     if r.get("delivery_dir") and os.path.isdir(r["delivery_dir"]):
         files = sorted(os.listdir(r["delivery_dir"]))
@@ -248,8 +265,12 @@ def job_view(row, user):
             "log": row["log"].splitlines()[-40:],
             "summary": {"lods": delivery.get("lods"), "dimensions_m": delivery.get("dimensions_m"),
                         "glass": delivery.get("glass"), "materials": delivery.get("materials"),
-                        "review": r.get("review"), "gate": r.get("gate"), "package": r.get("package"),
-                        "diagnosis": r.get("diagnosis"),
+                        "review": r.get("review"), "gate": gate or None, "package": r.get("package"),
+                        "diagnosis": diagnosis, "quality": quality,
+                        "added_parts": delivery.get("added_parts"), "cockpit": delivery.get("cockpit"),
+                        "cabin_lining": delivery.get("cabin_lining"), "review_renders": delivery.get("review_renders"),
+                        "source_renders": delivery.get("source_renders"), "inspection_renders": delivery.get("inspection_renders"),
+                        "bake": delivery.get("bake"),
                         "rig": {k: v for k, v in (r.get("rig") or {}).items() if k != "notes"},
                         "bill": {k: v for k, v in (r.get("bill") or {}).items() if k not in ("fal_calls", "llm_calls", "image_calls")}},
             "files": ["/v1/jobs/%s/files/%s" % (row["id"], f) for f in files],
@@ -801,7 +822,7 @@ def run_tool(session_id: str, body: ToolIn, who=Depends(auth)):
     d = sess["director"]
     fn = {"set_brief": d._set_brief, "build": d._build, "read_skill": d._read_skill, "balance": d._balance,
           "job_status": d._job_status, "import_model": d._import_model, "make_reference": d._make_reference,
-          "ask_customer": d._ask}.get(body.name)
+          "ask_customer": d._ask, "plan_repair": d._plan_repair}.get(body.name)
     if not fn:
         raise HTTPException(404, "no such tool: %s" % body.name)
     try:

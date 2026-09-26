@@ -17,6 +17,8 @@ from mathutils import Matrix, Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blib  # noqa: E402
+from finish_policy import detail_bake_skip_reason  # noqa: E402
+from surface_normals import smooth_organic_normals  # noqa: E402
 
 args = json.load(open(sys.argv[sys.argv.index("--") + 1]))
 # Scripted texture repairs the brief asked for (Spec.texture_fixes): deterministic, free, applied on a re-finish of
@@ -1200,7 +1202,7 @@ def material_pass(found, mat, profile, reference_path):
             matched = np.interp(src_l, s_q, t_q)
             gap = float(np.abs(matched - src_l).mean())
             out["basecolor_tone_gap"] = round(gap, 3)
-            if gap > 0.06:
+            if gap > 0.06 and profile.get("tone_match", 0.6) is not None:
                 # the further off the atlas is, the harder it is pulled (a 0.5 pull left the Havoc light blue against
                 # a slate-grey reference, 2026-09-18); the profile value is the floor
                 strength = float(min(0.85, profile.get("tone_match", 0.6) + max(0.0, gap - 0.06) * 2.0))
@@ -1623,6 +1625,12 @@ for slot in ob.material_slots:
         # the brief asked for the baked shading to go: full-strength de-light whatever the category profile says
         profile = {**(profile or {}), "delight": True, "delight_strength": 0.95}
         log("texture fix: strong de-light requested")
+    if "preserve_seed_maps" in TEXTURE_FIXES:
+        # the seed's colour IS the asset: no tone pull towards the reference and no de-light. On the Hi3D bullpup
+        # (2026-09-25) the pull lifted the atlas from 0.27 to 0.35 and cut saturation to 0.73, turning the black grip,
+        # magazine and barrel light grey and the olive panels chalky; roughness and metallic are still rebuilt.
+        profile = {**(profile or {}), "delight": False, "tone_match": None}
+        log("texture fix: preserve_seed_maps keeps the seed's base colour (no tone pull, no de-light)")
     # a seed with colour but no roughness / metallic maps (Hi3D v3 ships BC + N only) gets a flat ORM-style map so the
     # material pass, the families and the recolour have something to write into and the delivery has an ORM
     if "BC" in found and ("R" not in found or "M" not in found) and profile:
@@ -2444,6 +2452,10 @@ for _pi, ap in enumerate(args.get("add_parts") or []):
             f = None
     if f is not None and len(f) != len(ob.data.polygons):
         f = np.concatenate([f, np.zeros(max(0, len(ob.data.polygons) - len(f)), bool)])[:len(ob.data.polygons)]
+    if ap.get("place", "inside") == "inside" and ap.get("anchor") != "body" and (f is None or f.sum() < 3):
+        log("WARNING: add %s skipped: interior anchor '%s' not found; refusing to fit against the whole body" %
+            (ap.get("name"), ap.get("anchor")))
+        continue
     if not os.path.exists(ap.get("glb") or "") and not os.path.exists(ap.get("blend") or ""):
         log("add %s: no seed mesh" % ap.get("name"))
         continue
@@ -2501,6 +2513,13 @@ def decimate_copy(src, ratio, name, protect=True):
     return o
 
 
+# Use the same tangent basis for baking and delivery. Smoothing only AFTER the bake encodes flat
+# triangle normals into a texture and then displays that texture on a smooth mesh.
+if "smooth_organic_normals" in TEXTURE_FIXES:
+    report.setdefault("normal_repairs", []).append(smooth_organic_normals(ob))
+for polygon in ob.data.polygons:
+    polygon.use_smooth = True
+ob.data.update()
 budget = int(args["tri_budget"])
 lod0 = decimate_copy(ob, min(1.0, budget / float(max(raw_tris, 1))), "SM_%s_LOD0" % NAME)
 # collapse decimation counts faces, and n-gons triangulate to more than one; and it refuses non-manifold edges, of which a
@@ -2527,6 +2546,10 @@ for _pass in range(3):
     blib.select_only([lod0])
     bpy.ops.object.modifier_apply(modifier="dec2")
     log("LOD0 decimated again: %d -> %d triangles for a budget of %d" % (have, blib.tri_count(lod0), budget))
+
+
+if "smooth_organic_normals" in TEXTURE_FIXES:
+    report.setdefault("normal_repairs", []).append(smooth_organic_normals(lod0))
 
 
 def bake_detail(high, low):
@@ -2698,7 +2721,14 @@ def apply_bake(low, baked):
     return stats
 
 
-if args.get("bake_detail", True):
+_used_slots = {p.material_index for p in lod0.data.polygons}
+_material_domains = [lod0.material_slots[i].material.name for i in _used_slots
+                     if i < len(lod0.material_slots) and lod0.material_slots[i].material]
+_bake_skip = detail_bake_skip_reason(_material_domains, "preserve_seed_maps" in TEXTURE_FIXES)
+if args.get("bake_detail", True) and _bake_skip:
+    report["bake"] = {"status": "skipped", "reason": _bake_skip, "material_domains": _material_domains}
+    log("detail bake skipped: " + _bake_skip + "; preserving source texture maps")
+elif args.get("bake_detail", True):
     try:
         baked = bake_detail(ob, lod0)
         if baked:
@@ -2748,7 +2778,7 @@ def harmonise_second_model(obj):
     return {"gain": [round(float(g), 3) for g in gain], "applied": True}
 
 
-if args.get("reproject") and args.get("reference"):
+if args.get("reproject") and args.get("reference") and "preserve_seed_maps" not in TEXTURE_FIXES:
     try:
         import reproject as reproject_mod
         rp = reproject_mod.run_with_work(lod0, probe, decision, args["reference"], PROBE_TO_NOW, WORK, log)
@@ -2773,6 +2803,8 @@ lod1 = decimate_copy(lod0, 0.5, "SM_%s_LOD1" % NAME, protect=False)
 lod2 = decimate_copy(lod1, 0.5, "SM_%s_LOD2" % NAME, protect=False)
 bpy.data.objects.remove(ob, do_unlink=True)
 for i, o in enumerate((lod0, lod1, lod2)):
+    if i > 0 and "smooth_organic_normals" in TEXTURE_FIXES:
+        report.setdefault("normal_repairs", []).append(smooth_organic_normals(o))
     for p in o.data.polygons:
         p.use_smooth = True
     report["lods"].append({"lod": i, "triangles": blib.tri_count(o)})
@@ -2875,6 +2907,55 @@ blib.setup_render(int(args.get("render_size", 768)), 48, look="preview")
 stage = blib.Stage(lod0, extra_hidden=[hull] + sk_objects)
 report["renders"] = [stage.render(v, os.path.join(OUT, "preview_%s.png" % v))["file"] for v in ("iso", "side", "front")]
 stage.close()
+
+# Havoc's 2 m cockpit disappeared in the 12.5 m aircraft's review thumbnails. Review the delivered LOD0
+# close-up, with its real glass/hull intact: occlusion must be reported as unverified, not hidden for a pass.
+if (args.get("spec") or {}).get("add_parts") or (args.get("spec") or {}).get("cockpit") or args.get("add_parts"):
+    try:
+        slots = {i for i, slot in enumerate(lod0.material_slots) if slot.material and (
+            slot.material.name in ADDED_MATERIALS or slot.material.name.startswith("MI_%s_Cockpit" % NAME))}
+        indices = {vi for poly in lod0.data.polygons if poly.material_index in slots for vi in poly.vertices}
+        if not indices:
+            log("WARNING: no requested assembly geometry remains on LOD0 for focused review")
+        else:
+            points = [lod0.matrix_world @ lod0.data.vertices[i].co for i in indices]
+            lo = Vector(tuple(min(p[i] for p in points) for i in range(3)))
+            hi = Vector(tuple(max(p[i] for p in points) for i in range(3)))
+            margin = max((hi - lo).length * 0.08, 0.02)
+            pad = Vector((margin, margin, margin))
+            focus = blib.Stage(lod0, extra_hidden=[hull] + sk_objects, focus_bounds=(lo - pad, hi + pad))
+            try:
+                report["review_renders"] = [focus.render(v, os.path.join(OUT, "preview_assembly_%s.png" % v))["file"]
+                                           for v in ("iso", "top")]
+                report["renders"].extend(report["review_renders"])
+            finally:
+                focus.close()
+            # Diagnostic view only: glass is removed from a disposable copy, never the exported asset.
+            inspect = lod0.copy()
+            inspect.data = lod0.data.copy()
+            bpy.context.collection.objects.link(inspect)
+            try:
+                glass_slots = {i for i, s in enumerate(inspect.material_slots)
+                               if s.material and s.material.name.startswith("MI_%s_Glass" % NAME)}
+                bm = bmesh.new()
+                try:
+                    bm.from_mesh(inspect.data)
+                    bmesh.ops.delete(bm, geom=[f for f in bm.faces if f.material_index in glass_slots], context="FACES")
+                    bm.to_mesh(inspect.data)
+                finally:
+                    bm.free()
+                inspection_stage = blib.Stage(inspect, focus_bounds=(lo - pad, hi + pad))
+                try:
+                    report["inspection_renders"] = [inspection_stage.render(
+                        "top", os.path.join(OUT, "preview_inspection_canopy_hidden.png"))["file"]]
+                finally:
+                    inspection_stage.close()
+            finally:
+                inspect_mesh = inspect.data
+                bpy.data.objects.remove(inspect, do_unlink=True)
+                bpy.data.meshes.remove(inspect_mesh)
+    except Exception as exc:  # a missing review view blocks acceptance, not delivery of the files
+        log("WARNING: focused assembly renders failed: %s" % str(exc)[:200])
 
 # ---------------------------------------------------------------- exports
 fbx_kw = dict(use_selection=True, apply_unit_scale=True, apply_scale_options="FBX_SCALE_NONE", axis_forward="-Z",
