@@ -2,6 +2,7 @@
 reference_view: perfect left-side profile, camera level with the weapon, muzzle pointing right
 second_view: seen from the muzzle end looking straight down the barrel, camera far ahead of the muzzle and exactly level with it, strictly orthographic with no perspective and no foreshortening, the barrel a straight line pointing at the camera, the muzzle centred
 mirror_as_third_view: true
+back_view: seen from the butt end looking straight along the gun towards the muzzle, camera far behind the butt plate and exactly level with it, strictly orthographic with no perspective and no foreshortening, the butt plate centred
 forward_axis: long
 origin: center
 default_tris: 60000

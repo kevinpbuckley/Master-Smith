@@ -25,6 +25,30 @@ def corner_normal_splits(mesh, threshold_degrees=1.0):
             "max_split_degrees": round(float(angles.max()), 3) if len(angles) else 0.0}
 
 
+def mark_hard_edges(obj, angle_degrees):
+    """Hard-surface shading: smooth faces, with the edges whose faces meet at more than `angle_degrees` marked sharp,
+    so flat panels stay flat and creases stay crisp instead of one smooth fan melting across them (the "gooey" bullpup,
+    2026-09-26: every polygon smooth, no sharp edge anywhere). Only manifold edges are judged; nothing is moved,
+    welded or re-wound. Run it BEFORE the tangent-normal bake so the bake and the delivery share one basis."""
+    import bmesh
+    import math
+    mesh = obj.data
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    limit = math.radians(float(angle_degrees))
+    for face in bm.faces:
+        face.smooth = True
+    sharp = 0
+    for edge in bm.edges:
+        hard = edge.is_manifold and edge.calc_face_angle(0.0) > limit
+        edge.smooth = not hard
+        sharp += int(hard)
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
+    return {"object": obj.name, "angle": float(angle_degrees), "sharp_edges": sharp, "edges": len(mesh.edges)}
+
+
 def smooth_organic_normals(obj):
     """Use only on explicitly selected organic geometry without intentional hard edges.
 

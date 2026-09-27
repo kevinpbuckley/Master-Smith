@@ -28,13 +28,14 @@ def quad_wanted(spec):
 # Which of Hi3D's named slots each of our views fills, by category, for the skill's [primary, second view, mirrored
 # primary] list (an orthographic set is always [front, left, back, right]). None = a three-quarter primary with no
 # slot of its own; it fills the front only when nothing else does.
-HI3D_ROLES = {"weapon": ("left", "front", "right"), "character": ("front", "back"),
+HI3D_ROLES = {"weapon": ("left", "front", "right", "back"), "character": ("front", "back"),
               "prop": (None, "front"), "environment": (None, "front"),
               "vehicle": (None, "left"), "aircraft": (None, "left"), "helicopter": (None, "left")}
 
 
 def hi3d_views(spec, urls):
-    roles = ("front", "left", "back", "right") if len(urls) >= 4 else HI3D_ROLES.get(spec.category, (None, "front"))
+    ortho = len(urls) >= 4 and spec.category in ("vehicle", "aircraft", "helicopter")      # the orthographic set
+    roles = ("front", "left", "back", "right") if ortho else HI3D_ROLES.get(spec.category, (None, "front"))
     slots = {}
     for url, role in zip(urls, roles):
         if role and role not in slots:
@@ -81,6 +82,8 @@ def seed_payload(spec, urls):
     quad = quad_wanted(spec)
     if quad:
         payload["quad"] = True                      # +$0.05: quad loops decimate and bake cleaner on hard surfaces
+    if spec.category == "weapon":
+        urls = urls[:3]                 # a weapon's fourth picture is its butt end, drawn for Hi3D; Tripo's slot 4 is "right"
     if len(urls) >= 2:
         # Tripo's order is [front, left, back, right] around the object; our list is
         # [primary, second view, mirrored primary], which is exactly front / left / back.

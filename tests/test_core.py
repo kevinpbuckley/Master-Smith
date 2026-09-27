@@ -125,6 +125,22 @@ def test_hi3d_multiview_fills_its_named_slots_from_our_view_list():
     p = seed_payload(Spec(name="A", description="x", category="prop", seed_vendor="hitem3d3mv"), ["tq", "front"])[1]
     assert p["front_image_url"] == "front" and [k for k in p if k.endswith("_image_url")] == ["front_image_url"]
     assert seed_payload(w, ["only"])[0] == "hitem3d/hi3d/v3.0/image-to-3d"   # one picture: the single-image sibling
+    p = seed_payload(w, ["left", "front", "mirror", "butt"])[1]                # with the butt-end view: all four slots
+    assert (p["front_image_url"], p["left_image_url"], p["right_image_url"], p["back_image_url"]) == ("front", "left", "mirror", "butt")
+    tripo = Spec(name="A", description="x", category="weapon")
+    assert seed_payload(tripo, ["left", "front", "mirror", "butt"])[1]["image_urls"] == ["left", "front", "mirror"]
+
+
+def test_hard_edges_by_category_and_skill():
+    import importlib.util
+    path = os.path.join(os.path.dirname(__file__), "..", "mastersmith", "blender", "finish_policy.py")
+    spec_ = importlib.util.spec_from_file_location("finish_policy", path)
+    fp = importlib.util.module_from_spec(spec_)
+    spec_.loader.exec_module(fp)
+    assert fp.hard_edge_angle("weapon") is None and fp.hard_edge_angle("character") is None   # off unless a skill opts in
+    assert fp.hard_edge_angle("prop", override=30) == 30.0 and fp.hard_edge_angle("weapon", override=0) is None
+    assert fp.hard_edge_angle("prop", ["smooth_organic_normals"], override=30) is None      # the organic repair wins
+    assert fp.hard_edge_angle("weapon", override="nonsense") is None and fp.hard_edge_angle("weapon", override=120) is None
 
 
 def test_wallet_keeps_score_of_spend_and_never_refuses():

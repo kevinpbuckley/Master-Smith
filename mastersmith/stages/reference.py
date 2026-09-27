@@ -143,6 +143,9 @@ ORTHO_VIEWS = (("front", "the direct FRONT view: camera exactly ahead of the nos
                         "with no perspective, the object centred"))
 
 
+BACK_VIEW_VENDORS = ("hitem3d3mv",)      # vendors with a named back slot for the skill's `back_view`
+
+
 def _foreground_aspect(path):
     """Width / height of the object's silhouette (border-median backdrop)."""
     import numpy as np
@@ -251,6 +254,23 @@ def make_reference(job, skill):
                 third = os.path.join(job.dir, "ref_view3_mirror.png")
                 ImageOps.mirror(Image.open(primary).convert("RGB")).save(third)
                 views.append(third)
+            # a vendor with a named back slot (Hi3D multi-view) gets the far end too; Tripo's fixed four-slot order
+            # has no place for it, so it is drawn only when the brief's vendor can use it
+            back_text = skill["meta"].get("back_view")
+            if back_text and skill["meta"].get("mirror_as_third_view") and pricing.seed_vendor(spec)["key"] in BACK_VIEW_VENDORS:
+                back = os.path.join(job.dir, "ref_view4_back.png")
+                job.log("  extra view: %s" % back_text)
+                try:
+                    job.images.generate("Show this exact same object %s. Same object, same colours and materials, same lighting, "
+                                        "plain pure white background, sharp focus." % back_text,
+                                        back, model=pricing.edit_model(spec), references=[primary], aspect_ratio="1:1")
+                    ok4, j4 = _check(job, back, back_text)
+                    checks.append(j4)
+                    if ok4:
+                        views.append(back)
+                        pictures.append({"label": back_text, "path": back})
+                except ImageRefused:
+                    job.log("  the picture editor refused the back view; seeding from three pictures")
     urls = [job.fal.upload(p) for p in views]
     seed_urls = [job.fal.upload(p) for p in seed_views] if seed_views else None
     result = {"views": views, "urls": urls, "seed_urls": seed_urls, "seed_views": seed_views, "pictures": pictures, "checks": checks,

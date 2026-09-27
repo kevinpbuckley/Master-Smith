@@ -114,6 +114,7 @@ def run_finish(job, skill, seed_glb, reference=None, retexture_maps=None, recolo
                                 "bake_detail": True,
                                 "reproject": bool(skill["meta"].get("reproject", False)) and reference_source in (None, "concept"),
                                 "repair_cylinders": skill["meta"].get("repair_cylinders") if isinstance(skill["meta"].get("repair_cylinders"), list) else None,
+                                "hard_edge_angle": skill["meta"].get("hard_edge_angle"),
                                 "part_seeds": part_seeds or None, "add_parts": added or None}, "finish")
     report_path = os.path.join(common["out_dir"], "report.json")
     if not os.path.exists(report_path):

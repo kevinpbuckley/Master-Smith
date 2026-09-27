@@ -17,8 +17,8 @@ from mathutils import Matrix, Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blib  # noqa: E402
-from finish_policy import detail_bake_skip_reason  # noqa: E402
-from surface_normals import smooth_organic_normals  # noqa: E402
+from finish_policy import detail_bake_skip_reason, hard_edge_angle  # noqa: E402
+from surface_normals import mark_hard_edges, smooth_organic_normals  # noqa: E402
 
 args = json.load(open(sys.argv[sys.argv.index("--") + 1]))
 # Scripted texture repairs the brief asked for (Spec.texture_fixes): deterministic, free, applied on a re-finish of
@@ -1180,6 +1180,22 @@ def material_pass(found, mat, profile, reference_path):
         out["metallic_mean"] = round(float(m_raw.mean()), 3)
         out["metallic_rebuilt_mean"] = round(float(m_clean.mean()), 3)
         out["metallic_speckle_removed"] = round(float(np.abs(m_clean - m_raw).mean()), 3)
+        # a seed with no metal of its own (Hi3D v3 ships colour + normal only, so the map above is the flat one the
+        # finish made): on a weapon the near-black, colourless paint is the steel - barrel, brake, rail, sights, pins.
+        # Every surface of the Hi3D bullpup came out one chalky dielectric and its barrel read as plastic (2026-09-26).
+        if profile.get("dark_is_metal") and float(m_raw.max()) < 0.05 and "BC" in found:
+            bc = pixels(found["BC"][0].image)
+            if bc.shape[:2] == m_raw.shape:
+                lum_c = 0.2126 * bc[:, :, 0] + 0.7152 * bc[:, :, 1] + 0.0722 * bc[:, :, 2]
+                chroma_c = bc[:, :, :3].max(axis=2) - bc[:, :, :3].min(axis=2)
+                used_c = lum_c > 0.005
+                dark = (lum_c < float(profile.get("dark_metal_lum", 0.16))) & (chroma_c < 0.06) & used_c
+                if 0.01 < dark.sum() / max(used_c.sum(), 1) < 0.6:       # a mostly-black gun stays as it was
+                    m_clean = (gauss(dark.astype(np.float32), 3) * 0.9).astype(np.float32)
+                    out["metal_from_colour"] = round(float(dark.sum() / max(used_c.sum(), 1)), 3)
+                    out["metallic_rebuilt_mean"] = round(float(m_clean.mean()), 3)
+                    log("metal from colour: %.0f%% of the used atlas is near-black and colourless -> metal" % (
+                        out["metal_from_colour"] * 100))
     else:
         m_clean = None
     # ---- base colour tones follow the reference when they are far off (washed or over-lit vendor atlas)
@@ -1568,7 +1584,8 @@ def recolor_part(obj, faces, part):
 
 MATERIAL_PROFILES = {   # per category: roughness targets for metal / dielectric, tone-match strength
     # satin gunmetal, not polished: a Glock's nDLC slide and a parkerized barrel sit near 0.6 (reviewer, wave 7)
-    "weapon": {"roughness_metal": 0.58, "roughness_dielectric": 0.75, "tone_match": 0.6, "metallic_scale": 1.0},
+    "weapon": {"roughness_metal": 0.5, "roughness_dielectric": 0.72, "tone_match": 0.6, "metallic_scale": 1.0,
+               "dark_is_metal": True},
     "vehicle": {"roughness_metal": 0.45, "roughness_dielectric": 0.35, "tone_match": 0.5, "metallic_scale": 0.3},   # car paint has a clearcoat: 0.55 read as matte plastic
     "aircraft": {"roughness_metal": 0.45, "roughness_dielectric": 0.5, "tone_match": 0.5, "metallic_scale": 0.2},
     "helicopter": {"roughness_metal": 0.45, "roughness_dielectric": 0.55, "tone_match": 0.5, "metallic_scale": 0.25},
@@ -1931,7 +1948,7 @@ def repair_cylinder(obj, faces, spec_part, colours):
     desc = ((args.get("spec") or {}).get("description") or "").lower() + " " + ((args.get("spec") or {}).get("name") or "").lower()
     lo0, hi0 = blib.dims(obj)
     aspect = (hi0.x - lo0.x) / max(hi0.z - lo0.z, 1e-6)
-    is_pistol = any(w in desc for w in PISTOL_WORDS if w != "pistol") or re.search(r"pistol(?!\s*grip)", desc) is not None
+    is_pistol = any(w in desc for w in PISTOL_WORDS if w != "pistol") or re.search(r"\bpistol\b(?!\s*grip)", desc) is not None
     if is_pistol or aspect < 2.2:      # "pistol grip" on a carbine is not a pistol (M4A1 wave 19 skipped for that word)
         return {"skipped": "not a long gun (aspect %.1f): the barrel is inside the slide, nothing to replace" % aspect}
     n = len(me.polygons)
@@ -2581,6 +2598,16 @@ try:
 except Exception as exc:  # noqa: BLE001 - a speck is not worth a failed build
     log("LOD0 floater pass skipped: %s" % str(exc)[:120])
 
+# hard-surface shading: hard edges on LOD0 before the bake, so the baked normals and the delivered mesh agree
+HARD_EDGE_ANGLE = hard_edge_angle((args.get("spec") or {}).get("category"), TEXTURE_FIXES, args.get("hard_edge_angle"))
+if HARD_EDGE_ANGLE:
+    try:
+        _hard = mark_hard_edges(lod0, HARD_EDGE_ANGLE)
+        report.setdefault("hard_edges", []).append(_hard)
+        log("hard edges: %d of %d edges sharp at %.0f deg on LOD0" % (_hard["sharp_edges"], _hard["edges"], HARD_EDGE_ANGLE))
+    except Exception as exc:  # noqa: BLE001 - smooth shading is the old behaviour, not a failed build
+        log("hard edges skipped: %s" % str(exc)[:160])
+
 
 def bake_detail(high, low):
     """Tangent normal + AO of the high-poly seed baked onto LOD0 (issue #1). The vendor's normal map is flat, so
@@ -2854,6 +2881,11 @@ bpy.data.objects.remove(ob, do_unlink=True)
 for i, o in enumerate((lod0, lod1, lod2)):
     if i > 0 and "smooth_organic_normals" in TEXTURE_FIXES:
         report.setdefault("normal_repairs", []).append(smooth_organic_normals(o))
+    if i > 0 and HARD_EDGE_ANGLE:
+        try:
+            report.setdefault("hard_edges", []).append(mark_hard_edges(o, HARD_EDGE_ANGLE))   # re-judged after the collapse
+        except Exception as exc:  # noqa: BLE001
+            log("hard edges on LOD%d skipped: %s" % (i, str(exc)[:120]))
     for p in o.data.polygons:
         p.use_smooth = True
     report["lods"].append({"lod": i, "triangles": blib.tri_count(o)})
@@ -2956,6 +2988,24 @@ blib.setup_render(int(args.get("render_size", 768)), 48, look="preview")
 stage = blib.Stage(lod0, extra_hidden=[hull] + sk_objects)
 report["renders"] = [stage.render(v, os.path.join(OUT, "preview_%s.png" % v))["file"] for v in ("iso", "side", "front")]
 stage.close()
+
+# hard surfaces: the two ends up close, where soft edges, melted ports and fused parts show (a full-length 0.68 m rifle
+# is a few hundred pixels long; the reviewer could not see the muzzle brake or the cheek rest)
+if spec_cat in ("weapon", "vehicle", "aircraft", "helicopter"):
+    try:
+        lo_d, hi_d = blib.dims(lod0)
+        span = hi_d.x - lo_d.x
+        detail = []
+        for tag, x0, x1 in (("front", hi_d.x - span * 0.4, hi_d.x), ("rear", lo_d.x, lo_d.x + span * 0.4)):
+            focus = blib.Stage(lod0, extra_hidden=[hull] + sk_objects,
+                               focus_bounds=(Vector((x0, lo_d.y, lo_d.z)), Vector((x1, hi_d.y, hi_d.z))))
+            name = "preview_detail_%s.png" % tag
+            focus.render("iso", os.path.join(OUT, name))
+            focus.close()
+            detail.append(name)
+        report["detail_renders"] = detail
+    except Exception as exc:  # noqa: BLE001 - the full views are still there
+        log("detail views skipped: %s" % str(exc)[:160])
 
 # Havoc's 2 m cockpit disappeared in the 12.5 m aircraft's review thumbnails. Review the delivered LOD0
 # close-up, with its real glass/hull intact: occlusion must be reported as unverified, not hidden for a pass.

@@ -53,6 +53,11 @@ def review(job, reference_path, renders, report=None):
         if os.path.exists(path) and path not in files:
             files.append(path)
             labels.append("delivered assembly close-up " + os.path.basename(path))
+    for name in (report.get("detail_renders") or [])[:2]:      # "detail view", never "close-up": not assembly evidence
+        path = os.path.join(job.dir, "delivery", name)
+        if os.path.exists(path) and path not in files:
+            files.append(path)
+            labels.append("delivered detail view of one end " + os.path.basename(path))
     for field, label in (("source_renders", "SOURCE SEED before finishing"),
                          ("inspection_renders", "CANOPY-HIDDEN diagnostic cutaway, NOT delivered appearance")):
         for name in (report.get(field) or [])[:1]:
