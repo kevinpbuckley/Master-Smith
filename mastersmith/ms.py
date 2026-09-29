@@ -701,7 +701,10 @@ def cmd_assemble(a):
     job = Job(a.job)
     plan = _plan(job)
     want = [p.strip().lower() for p in a.parts.split(",")] if a.parts else None
-    largest = max(plan["parts"], key=lambda q: q["box_max"][0] - q["box_min"][0])
+    # the body is the biggest box by volume: by length alone an all-diffused rifle's barrel (334 mm, 17 mm across) was
+    # taken for the body, kept in its short seed's proportions and vanished inside the handguard (2026-09-29)
+    largest = max(plan["parts"], key=lambda q: (q["box_max"][0] - q["box_min"][0]) * (q["box_max"][1] - q["box_min"][1])
+                  * (q["box_max"][2] - q["box_min"][2]))
     parts = []
     for p in plan["parts"]:
         if want and p["name"].lower() not in want:
