@@ -877,7 +877,8 @@ def cmd_assemble(a):
         parts.append({"name": p["name"], "kind": "vendor", "box_min": p["box_min"], "box_max": p["box_max"], "material": p["material"],
                       "fitted": os.path.exists(os.path.join(d, "fit_report.json")), "interior": bool(p.get("interior")), "body": is_largest,
                       "centreline": bool(p.get("centreline")), "zones": p.get("zones") or [], "blend": blend, "yaw": 0,
-                      "keep_depth": bool(fit.get("keep_depth")) and is_largest, "fill_box": not is_largest})
+                      "keep_depth": bool(fit.get("keep_depth")) and is_largest, "fill_box": not is_largest,
+                      "lettering": p.get("lettering") or []})
     if not parts:
         sys.exit("nothing to assemble")
     delivery = job.path("delivery")
@@ -921,7 +922,7 @@ PREVIEW_HTML = """<!doctype html><html><head><meta charset="utf-8"><meta name="v
  body{margin:0;font:14px/1.4 system-ui,sans-serif;background:#1c1d20;color:#ddd}
  h1{font-size:20px;margin:0 0 4px} h2{font-size:15px;margin:24px 0 8px;color:#9ab} small{color:#999}
  header,section{padding:16px 24px} header{background:#26272b;border-bottom:1px solid #333}
- model-viewer{width:100%%;height:70vh;background:#3a3b40;border-radius:6px}
+ model-viewer{width:100%%;height:70vh;background:#5d6066;border-radius:6px}
  .row{display:flex;flex-wrap:wrap;gap:12px} .row img{max-width:360px;background:#fff;border-radius:4px}
  .sheet{width:100%%;max-width:1536px}
  table{border-collapse:collapse;width:100%%} td,th{padding:6px 8px;border-bottom:1px solid #333;vertical-align:top;text-align:left}
@@ -929,7 +930,7 @@ PREVIEW_HTML = """<!doctype html><html><head><meta charset="utf-8"><meta name="v
 </style></head><body>
 %(nav)s<header><h1>%(name)s</h1><small>%(desc)s</small><br><small>%(dims)s m &middot; LOD0 %(tris)s tris &middot; %(nparts)d parts &middot; %(engine)s</small></header>
 <section>
-<model-viewer id="mv" src="%(glb)s" camera-controls camera-orbit="-35deg 78deg 110%%" exposure="1.1" shadow-intensity="0.6" environment-image="neutral" alt="%(name)s"></model-viewer>
+<model-viewer id="mv" src="%(glb)s" camera-controls camera-orbit="-35deg 78deg 110%%" exposure="1.3" shadow-intensity="0.6" environment-image="neutral" alt="%(name)s"></model-viewer>
 <div class="lod" style="margin-top:8px">%(lods)s <button onclick="mv.autoRotate=!mv.autoRotate">rotate</button></div>
 </section>
 <section><h2>Six views</h2>%(sheet)s</section>

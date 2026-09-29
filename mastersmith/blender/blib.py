@@ -84,13 +84,15 @@ def setup_render(size, samples, look="probe"):
         env = nt.nodes.new("ShaderNodeTexEnvironment")
         env.image = bpy.data.images.load(hdri, check_existing=True)
         # calibrated 2026-09-28: at 1.2 (with the key and rim at 50/40) a mid grey of sRGB 96 in the reference rendered
-        # at 151-165, and every review called the models pale; 0.45 puts it near the reference
-        env_bg.inputs[1].default_value = 0.45
+        # at 151-165, and every review called the models pale; 0.45 put it near the reference. Recalibrated 2026-09-29
+        # with the key and rim at 20/16: at 0.45 the Havoc's body (texture sRGB 72, reference 81) rendered at 55 and
+        # blue - "dim"; 0.8 with the warmer tint below renders it at 82, on the reference
+        env_bg.inputs[1].default_value = 0.8
         flat_bg.inputs[0].default_value = backdrop
         warm = nt.nodes.new("ShaderNodeMixRGB")          # the studio HDRI is cool: a mid grey rendered 86/96/97
         warm.blend_type = "MULTIPLY"
         warm.inputs[0].default_value = 1.0
-        warm.inputs[2].default_value = (1.12, 1.0, 0.94, 1.0)
+        warm.inputs[2].default_value = (1.22, 1.0, 0.86, 1.0)   # 1.12/0.94 still rendered the Havoc bluer than its texture
         nt.links.new(env.outputs[0], warm.inputs[1])
         nt.links.new(warm.outputs[0], env_bg.inputs[0])
         nt.links.new(lp.outputs["Is Camera Ray"], mix.inputs[0])

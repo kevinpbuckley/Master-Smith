@@ -50,3 +50,11 @@ def test_glass_zone_pale_auto_and_fill_pass_through():
     z = validate_plan(raw, [14.0, 5.0, 6.0])["parts"][0]["zones"]
     assert z[0]["pick"] == "pale" and z[0]["fill"] is False
     assert z[1]["pick"] == "auto" and "fill" not in z[1]
+
+
+def test_lettering_boxes_pass_through():
+    # 2026-09-29: painted words print whole and read the right way on the far side
+    raw = {"parts": [{"name": "Body", "method": "vendor", "side_box": [0, 100, 0, 100], "front_span": [0, 100],
+                      "lettering": [[74, 84, 67, 74], [80, 70, 10, 20], "junk", [1, 2, 3]]}]}
+    part = validate_plan(raw, [14.0, 5.0, 6.0])["parts"][0]
+    assert part["lettering"] == [[74.0, 84.0, 67.0, 74.0]]

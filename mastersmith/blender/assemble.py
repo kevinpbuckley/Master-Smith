@@ -1196,6 +1196,130 @@ def lift_roughness(mats, floor=0.35, trigger=0.40):
     return found
 
 
+def paint_not_chrome(mats, finish, metal_max=0.12, rough_min=0.30):
+    """A kept texture on a painted or polymer part keeps its colours but not the mesher's chrome: Tripo mapped the
+    Havoc's canopy hood as roughness 0.04, metallic 0.82 (the rest of the hull 0.36 / 0.03), and it rendered as black
+    mirror where the reference has grey-blue paint (2026-09-29). Metallic is squeezed to [0, metal_max] and roughness
+    lifted to at least rough_min; bare metal belongs in a metal zone. -> what it changed"""
+    if finish in ("metal", "glass", "emissive"):
+        return None
+    done = []
+    for m in mats:
+        t = m.node_tree
+        b = next((n for n in t.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if b is None:
+            continue
+        for sock, lo, hi in (("Metallic", 0.0, metal_max), ("Roughness", rough_min, 1.0)):
+            inp = b.inputs[sock]
+            if not inp.is_linked:
+                inp.default_value = min(max(inp.default_value, lo), hi)
+                continue
+            src = inp.links[0].from_socket
+            mr = t.nodes.new("ShaderNodeMapRange")
+            mr.clamp = True
+            t.links.new(src, mr.inputs["Value"])
+            if sock == "Metallic":
+                mr.inputs["To Max"].default_value = hi
+            else:
+                mr.inputs["To Min"].default_value = lo
+            t.links.new(mr.outputs["Result"], inp)
+            done.append(sock.lower())
+    return {"metallic_max": metal_max, "roughness_min": rough_min, "maps": sorted(set(done))}
+
+
+def flatten_lettering(o, boxes, lo, hi, relief=0.012, planar=0.004):
+    """A painted word is paint, never geometry (materials.md): Tripo embossed the Havoc's POLICE as garbled relief
+    ("TNALT") on both sides, and the projected word printed beside its ghost (2026-09-29). In each lettering box
+    (percent of the side grid, the asset's `lo`..`hi`), on each side, a gently curved surface (a quadric over the
+    panel's plane; the nose curves in under POLICE) is fitted to the panel (the farthest 30% dropped twice, so the
+    letters do not pull it) and the vertices within `relief` of it (of the asset's diagonal) are laid onto it, the
+    box's edge faded in. A box the surface does not fit (off by more than `planar`) is left alone: smoothing a
+    sill left it lumpy. Seam copies of a vertex move together.
+    -> {box: vertices moved, or "curved"}"""
+    if not boxes:
+        return {}
+    me = o.data
+    co = np.empty(len(me.vertices) * 3, np.float64)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    nv = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("normal", nv)
+    nv = nv.reshape(-1, 3)
+    lo, hi = np.asarray(lo, np.float64), np.asarray(hi, np.float64)
+    diag = float(np.linalg.norm(hi - lo))
+    xp = (co[:, 0] - lo[0]) / max(hi[0] - lo[0], 1e-9) * 100.0
+    zp = (hi[2] - co[:, 2]) / max(hi[2] - lo[2], 1e-9) * 100.0
+    weld = max(diag * 1e-5, 1e-9)
+    _, gid = np.unique(np.round(co / weld).astype(np.int64), axis=0, return_inverse=True)
+    gid = gid.ravel()
+    out = {}
+    moved = np.zeros(len(co), bool)
+    for k, (x0, x1, z0, z1) in enumerate(boxes):
+        inside = (xp >= x0) & (xp <= x1) & (zp >= z0) & (zp <= z1)
+        for side, sign in (("near", -1.0), ("far", 1.0)):
+            facing = np.nonzero(inside & (nv[:, 1] * sign > 0.5))[0]
+            if len(facing) < 30:
+                continue
+            # the skin the word is painted on, found by the faces that look out to this side; then every vertex of it
+            # whatever its normal (the letters' walls face along the length: left out, they folded), but not a
+            # rocket pod further out at the same place
+            skin_y = np.median(co[facing, 1])
+            sel = np.nonzero(inside & (np.abs(co[:, 1] - skin_y) < 0.06 * (hi[1] - lo[1])))[0]
+            if len(sel) < 30:
+                continue
+            pts = co[sel]
+            c = pts.mean(axis=0)
+            frame = np.linalg.svd(pts - c, full_matrices=False)[2]
+            n = frame[2]
+            a_, b_ = (pts - c) @ frame[0], (pts - c) @ frame[1]
+            h = (pts - c) @ n
+            basis = np.stack([np.ones_like(a_), a_, b_, a_ * a_, a_ * b_, b_ * b_], axis=1)
+            keep = np.ones(len(sel), bool)
+            for _ in range(3):
+                coef = np.linalg.lstsq(basis[keep], h[keep], rcond=None)[0]
+                d = h - basis @ coef                  # the relief above the panel's own gentle curve
+                if _ < 2:
+                    keep = np.abs(d) <= np.percentile(np.abs(d), 70)
+            if np.percentile(np.abs(d[keep]), 70) > planar * diag:
+                out["%d_%s" % (k, side)] = "curved"
+                continue
+            edge = np.minimum.reduce([xp[sel] - x0, x1 - xp[sel], (zp[sel] - z0) * 2, (z1 - zp[sel]) * 2]) / max(0.15 * (x1 - x0), 1e-9)
+            w = np.clip(edge, 0.0, 1.0) * (np.abs(d) <= relief * diag)
+            move = -(d * w)[:, None] * n[None, :]
+            # the copies of a seam vertex share the move of the one inside the box
+            shift = np.zeros((gid.max() + 1, 3))
+            shift[gid[sel]] = move
+            touched = np.isin(gid, gid[sel])
+            co[touched] += shift[gid[touched]]
+            out["%d_%s" % (k, side)] = int((w > 0).sum())
+            moved[touched] = True
+    me.vertices.foreach_set("co", co.astype(np.float32).ravel())
+    me.update()
+    if moved.any() and me.has_custom_normals:
+        # a glTF seed carries its own normals: moved vertices keep the letters in their shading unless they take
+        # the flattened surface's. Area-weighted, across seams: the letters' collapsed walls are slivers, and
+        # Blender's angle-weighted vertex normals turned 50-120 degrees off the panel on them
+        me.calc_loop_triangles()
+        tri = np.empty(len(me.loop_triangles) * 3, np.int64)
+        me.loop_triangles.foreach_get("vertices", tri)
+        tri = tri.reshape(-1, 3)
+        cross = np.cross(co[tri[:, 1]] - co[tri[:, 0]], co[tri[:, 2]] - co[tri[:, 0]])
+        acc = np.zeros((gid.max() + 1, 3))
+        for k in range(3):
+            np.add.at(acc, gid[tri[:, k]], cross)
+        acc /= np.maximum(np.linalg.norm(acc, axis=1, keepdims=True), 1e-12)
+        lv = np.empty(len(me.loops), np.int64)
+        me.loops.foreach_get("vertex_index", lv)
+        corner = np.empty(len(me.loops) * 3, np.float32)
+        me.corner_normals.foreach_get("vector", corner)
+        corner = corner.reshape(-1, 3)
+        redo = moved[lv]
+        corner[redo] = acc[gid[lv[redo]]]
+        me.normals_split_custom_set(corner.tolist())
+        me.update()
+    return out
+
+
 def island_report(o, drop=False):
     """Loose pieces, open edges and non-manifold edges of a seed, measured (Tonetta: vendor geometry is measured, not
     policed). With `drop`, only the far, small islands (under 0.5% of the faces and more than 2% of the length away
@@ -1238,10 +1362,15 @@ def island_report(o, drop=False):
 # ---------------------------------------------------------------- parts in their boxes
 bpy.ops.wm.read_factory_settings(use_empty=True)
 parts, glass_parts = [], []
+# the whole object's box, from the plan: the frame the side grid's percents (lettering boxes) are read in
+ASSET_LO = [min(q["box_min"][i] for q in args["parts"]) for i in range(3)]
+ASSET_HI = [max(q["box_max"][i] for q in args["parts"]) for i in range(3)]
 for p in args["parts"]:
     o = import_part(p)
     rec = {"name": p["name"], "kind": p["kind"], "box_min": p["box_min"], "box_max": p["box_max"], **fit(o, p)}
     glass = bool((p.get("material") or {}).get("glass"))
+    if p.get("lettering"):
+        rec["lettering_flattened"] = flatten_lettering(o, p["lettering"], ASSET_LO, ASSET_HI)
     if p["kind"] == "code" and not glass:
         if args.get("edge_break_m") and p.get("edge_break", True):
             rec["edge_break_mm"] = edge_break(o, args["edge_break_m"])
@@ -1295,6 +1424,7 @@ for p in args["parts"]:
             rec["surface_planned"] = surface_to_plan(o, pm, rest)
         else:
             rec["roughness_lift"] = lift_roughness(rest)
+            rec["paint_not_chrome"] = paint_not_chrome(rest, pm.get("finish") or ("metal" if pm.get("metal") else "painted"))
         rec["kept_texture"] = keep
         if args.get("surface_detail", True):
             rec["surface_detail"] = surface_detail(o, pm, mats=rest, vendor=True)
@@ -1793,6 +1923,7 @@ def project_pictures(o, p, proj):
         return {}
     views = []
     skipped = []
+    letter_frame = False           # lettering boxes are percents of the whole object's side grid: its frame only
     own = p.get("projection") or {}
     if own.get("picture") and os.path.exists(own["picture"]):
         if own.get("frame") == "asset":
@@ -1805,12 +1936,14 @@ def project_pictures(o, p, proj):
         # other parts were, so only its coverage counts
         if (own.get("frame") == "asset" and cover >= 0.75) or (own.get("frame") != "asset" and iou >= 0.6):
             views.append(("side", own["picture"], own.get("detail"), fr, None))
+            letter_frame = own.get("frame") == "asset"
         else:
             skipped.append("own side picture (IoU %.2f, covers %.2f)" % (iou, cover))
     elif proj.get("side") and os.path.exists(proj["side"]):
         iou, cover = side_agreement(o, proj["side"], proj["asset_frame"])
         if cover >= 0.8:
             views.append(("side", proj["side"], proj.get("side_detail"), proj["asset_frame"], "ms_vis_side"))
+            letter_frame = True
         else:
             skipped.append("approved side view (covers %.2f)" % cover)
     if skipped:
@@ -1875,14 +2008,23 @@ def project_pictures(o, p, proj):
                 v = op("ADD", op("DIVIDE", op("SUBTRACT", pos.outputs["Z"], cz), H_), 0.5)
                 # the far side takes the picture at the SAME place along the length (a symmetric part looks the same
                 # there), with its own occlusion test towards +Y. Sampling it end to end reversed (1 - u) put the
-                # sword's grip brown near its tip and whitened the tank's far wheels (2026-09-29).
+                # sword's grip brown near its tip and whitened the tank's far wheels (2026-09-29). Words would read
+                # backwards there, so inside each lettering box the far side reads the box mirrored back.
+                u_far, letters = u, None
+                for x0, x1, z0, z1 in (p.get("lettering") or []) if letter_frame else []:
+                    a_, b_, vb, vt = x0 / 100.0, x1 / 100.0, 1.0 - z1 / 100.0, 1.0 - z0 / 100.0
+                    inside = op("MULTIPLY", op("MULTIPLY", op("GREATER_THAN", u, a_), op("LESS_THAN", u, b_)),
+                                op("MULTIPLY", op("GREATER_THAN", v, vb), op("LESS_THAN", v, vt)))
+                    u_far = op("ADD", u_far, op("MULTIPLY", inside, op("SUBTRACT", a_ + b_, op("MULTIPLY", u, 2.0))))
+                    letters = inside if letters is None else op("MAXIMUM", letters, inside)
                 sides = ((u, op("MULTIPLY", face_y.outputs["Fac"], -1.0), vis_attr),                # near side, from -Y
-                         (u, face_y.outputs["Fac"], vis_attr and vis_attr + "_far"))                  # far side, from +Y
+                         (u_far, face_y.outputs["Fac"], vis_attr and vis_attr + "_far"))              # far side, from +Y
             else:
                 cy, cz, W_, H_ = fr
                 u = op("ADD", op("DIVIDE", op("SUBTRACT", pos.outputs["Y"], cy), W_), 0.5)
                 v = op("ADD", op("DIVIDE", op("SUBTRACT", pos.outputs["Z"], cz), H_), 0.5)
                 sides = ((u, face_x.outputs["Fac"], vis_attr),)
+                letters = None
             for uu, face_dot, side_vis in sides:
                 uv = N.new("ShaderNodeCombineXYZ")
                 K.new(uu, uv.inputs[0])
@@ -1895,6 +2037,9 @@ def project_pictures(o, p, proj):
                     w = op("MULTIPLY", facing(face_dot, 0.6, 0.85), op("MULTIPLY", tex.outputs["Alpha"], strength * 0.7))
                 else:
                     w = op("MULTIPLY", facing(face_dot), op("MULTIPLY", tex.outputs["Alpha"], strength))
+                    if letters is not None:
+                        # a painted word prints whole over the mesher's own blurred copy of it: no ghost letters
+                        w = op("MAXIMUM", w, op("MULTIPLY", letters, op("MULTIPLY", facing(face_dot, 0.1, 0.3), tex.outputs["Alpha"])))
                 if side_vis:
                     at = N.new("ShaderNodeAttribute")
                     at.attribute_name = side_vis

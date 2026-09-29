@@ -359,6 +359,18 @@ def validate_plan(raw, dims, max_parts=None):
         for key in ("skin", "edge_break", "interior", "centreline"):
             if key in p:
                 part[key] = bool(p[key])
+        # 2026-09-29: "lettering", side boxes (percent of the side grid) around painted words: the picture prints
+        # there at full strength over the mesher's own copy, and reads the right way round on the far side
+        boxes = []
+        for b in (p.get("lettering") or [])[:12]:
+            try:
+                x0, x1, z0, z1 = (pct(v) for v in b)
+            except (TypeError, ValueError):
+                continue
+            if None not in (x0, x1, z0, z1) and x1 > x0 and z1 > z0:
+                boxes.append([x0, x1, z0, z1])
+        if boxes:
+            part["lettering"] = boxes
         if part["method"] == "vendor":
             zones = []
             for z in (p.get("zones") or [])[:12]:
