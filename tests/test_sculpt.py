@@ -91,3 +91,37 @@ def test_mask_sdf_is_signed_and_zero_at_the_edge():
     sdf, gx, gy = sculpt.mask_sdf(m)
     assert sdf[10, 15] < -3 and sdf[0, 0] > 5 and abs(sdf[5, 15]) <= 1.0
     assert gx[10, 25] > 0 and gx[10, 3] < 0                       # the gradient points away from the object
+
+
+def test_lattice_fit_bends_a_sphere_to_a_taller_outline_without_crumpling():
+    # 2026-09-29: the free per-vertex fit crumpled a Tripo fuselage by up to 1 m; the lattice bend keeps the surface
+    v, f = sphere_mesh(voxel=0.003)
+    h, w = 130, 100
+    yy, xx = np.mgrid[0:h, 0:w]
+    mask = ((xx - 49.5) / 50.0) ** 2 + ((yy - 64.5) / 65.0) ** 2 <= 1.0     # an ellipse 30% taller than wide
+    view = sculpt.make_view(v, 0, 0, mask)
+    view["uv_box"] = (-0.05, 0.05, -0.065, 0.065)                        # the mask spans 10 x 13 cm around the sphere
+    before = sculpt.silhouette_iou(v, f, view, size=100)
+    out = sculpt.fit_lattice(v, f, [view], iters=12, step=0.7)
+    after = sculpt.silhouette_iou(out, f, view, size=100)
+    assert after > before + 0.1, (before, after)
+    assert np.ptp(out[:, 2]) > 1.15 * np.ptp(v[:, 2])
+    assert sculpt.normal_change_deg(v, out, f) < 12.0
+
+
+def test_normal_change_is_zero_for_a_move_and_large_for_noise():
+    v, f = sphere_mesh()
+    assert sculpt.normal_change_deg(v, v + 0.01, f) < 1e-6
+    noisy = v + np.random.default_rng(1).normal(0, 0.002, v.shape)
+    assert sculpt.normal_change_deg(v, noisy, f) > 20.0
+
+
+def test_lattice_weights_reproduce_the_points():
+    rng = np.random.default_rng(3)
+    pts = rng.random((50, 3))
+    lo, hi = np.zeros(3), np.ones(3)
+    shape = (4, 3, 5)
+    idx, w = sculpt.lattice_weights(pts, lo, hi, shape)
+    grid = np.stack(np.meshgrid(*[np.linspace(0, 1, s) for s in shape], indexing="ij"), axis=-1).reshape(-1, 3)
+    assert np.allclose((w[:, :, None] * grid[idx]).sum(axis=1), pts)
+    assert np.allclose(w.sum(axis=1), 1.0)

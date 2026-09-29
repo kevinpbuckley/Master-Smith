@@ -353,6 +353,12 @@ def validate_plan(raw, dims, max_parts=None):
                 # 2026-09-28: a code part whose shape is not the drawn one (the bullpup's folding sights) opts out of the
                 # reference detail projection: the picture's hood interior printed a pale patch on the code sight
                 "reference_detail": bool(p.get("reference_detail", True))}
+        # 2026-09-29: "skin" (a code part dressed in its own diffused mesh's texture), "edge_break" (false keeps a code
+        # part's edges razor sharp), "interior" (a cockpit or cabin inside the body, checked to fit in it) and an
+        # explicit "centreline" pass through to the assembler
+        for key in ("skin", "edge_break", "interior", "centreline"):
+            if key in p:
+                part[key] = bool(p[key])
         if part["method"] == "vendor":
             zones = []
             for z in (p.get("zones") or [])[:12]:

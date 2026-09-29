@@ -20,6 +20,7 @@ deterministic thing and writes into a job folder under out/<Name>/:
     python -m mastersmith.ms fit out/BullpupCarbine Magazine [--quarter]           (outline sculpted onto its pictures)
     python -m mastersmith.ms brush out/BullpupCarbine Grip --op inflate --at back+0,0,-0.02 --radius 12 --strength 2
     python -m mastersmith.ms sdf out/BullpupCarbine Barrel [sdf.py]                 (an exact part from a distance function)
+    python -m mastersmith.ms cabin out/HavocGunship Cockpit [--hull Hull]           (the cockpit well measured: the interior's box, fit card)
     python -m mastersmith.ms assemble out/BullpupCarbine [--parts A,B] [--no-sharpen]
     python -m mastersmith.ms sheet path/to/any.glb [--out sheet.png]
     python -m mastersmith.ms refs out/BullpupCarbine out/Other [--no-open]  (reference pictures to approve, ref/review.json)
@@ -40,7 +41,7 @@ import webbrowser
 
 from PIL import Image, ImageOps
 
-from . import config, pricing, refs_review, results_page
+from . import config, picturecheck, pricing, refs_review, results_page
 from .fal import Fal, first_url
 from .images import Images
 from .spec import Spec
@@ -254,22 +255,47 @@ def cmd_part_pictures(a):
         others = [q["name"] for q in plan["parts"] if q["name"] != part["name"]
                   and all(min(q["box_max"][i], part["box_max"][i]) - max(q["box_min"][i], part["box_min"][i]) > 0 for i in range(3))]
         leave = (" Leave out, they are separate parts: %s." % ", ".join(others)) if others else ""
-        job.images.generate("Show ONLY %s from this exact object, whole and complete, exactly as it looks here (same shape, "
-                            "colours and materials), seen from exactly the same side angle as this picture with the forward "
-                            "end to the right, isolated on a plain pure white background, nothing else in frame, sharp product "
-                            "photograph.%s %s" % (part["what"], leave, a.fixes or ""), side, model=model,
-                            references=[plan["side"]], aspect_ratio="1:1")
+        if part.get("interior"):
+            # a cockpit is drawn as the insert that fills its measured box (ms cabin), from the side view and the hero
+            mm = [round((part["box_max"][i] - part["box_min"][i]) * 1000) for i in range(3)]
+            hero = job.path("ref", "ref_0.png")
+            job.images.generate((INTERIOR_SIDE_PROMPT % (part["what"], mm[0], mm[1], mm[2])) + " " + (a.fixes or ""), side,
+                                model=model, references=[plan["side"]] + ([hero] if os.path.exists(hero) else []), aspect_ratio="4:3")
+        else:
+            job.images.generate("Show ONLY %s from this exact object, whole and complete, exactly as it looks here (same shape, "
+                                "colours and materials), seen from exactly the same side angle as this picture with the forward "
+                                "end to the right, isolated on a plain pure white background, nothing else in frame, sharp product "
+                                "photograph.%s %s" % (part["what"], leave, a.fixes or ""), side, model=model,
+                                references=[plan["side"]], aspect_ratio="1:1")
         print("side picture:", side)
+        facing = picturecheck.side_facing(plan["side"], part["side_box"], side)
+        if facing["mirrored"]:
+            # the M4A1's grip was drawn facing backwards and assembled backwards (2026-09-29): turned round here
+            os.makedirs(os.path.join(d, "unused"), exist_ok=True)
+            shutil.copy2(side, os.path.join(d, "unused", "side_drawn_mirrored.png"))
+            ImageOps.mirror(Image.open(side).convert("RGB")).save(side)
+            print("  the side picture was drawn facing the other way (match %.2f, mirrored %.2f): turned round; the "
+                  "drawing is kept in unused/side_drawn_mirrored.png" % (facing["ncc"], facing["ncc_mirrored"]))
     quarter = os.path.join(d, "quarter.png")
     if not a.no_quarter and not keep_existing(quarter, a.redraw):
-        # 2026-09-28: the whole-object front view makes the model draw the whole object round a part (8 of 13 carbine
-        # parts came back as the whole rifle); --no-front drops it and --fixes reaches this prompt too.
-        front = plan.get("front") if not a.no_front else None
+        # The whole-object front view makes the model draw the whole object round a part (8 of 13 carbine parts came
+        # back as the whole rifle, 2026-09-28; the tank's hull came back with its turret, 2026-09-29): only the body
+        # gets it, unless --with-front; and the prompt names the part and says it is drawn alone.
+        body = is_body(part, plan)
+        front = plan.get("front") if ((body and not a.no_front) or a.with_front) else None
         refs = [side] + ([front] if front else [])
-        job.images.generate(THREE_QUARTER_PROMPT % ((" Picture 2 shows its front end." if front else "")
+        alone = "" if body else (" Picture 1 shows ONE PART of a larger object, drawn alone: %s. Draw only this part, "
+                                 "exactly as picture 1 shows it, and nothing of the object it belongs to (no body, hull, "
+                                 "frame, barrel or neighbouring part), its forward end still towards the right." % part["what"])
+        job.images.generate(THREE_QUARTER_PROMPT % (alone + (" Picture 2 shows its front end." if front else "")
                                                     + (" " + a.fixes if a.fixes else "")), quarter,
                             model=model, references=refs, aspect_ratio="4:3")
         print("three-quarter picture:", quarter)
+    if part.get("interior"):
+        box = (part["box_min"], part["box_max"])
+        mm = [round((box[1][i] - box[0][i]) * 1000) for i in range(3)]
+        print("fit card: %s" % fit_card(plan, part, box, os.path.join(d, "fit_card.png"),
+                                        "%s: %d x %d x %d mm (L x W x H) in its box" % (part["name"], mm[0], mm[1], mm[2])))
     print("Look at both (Read them). Redraw with --redraw --fixes '...' if the design drifted (ask the owner first).")
 
 
@@ -370,13 +396,129 @@ def cmd_fit(a):
     out_json = os.path.join(d, "fit_report.json")
     box_size = [part["box_max"][i] - part["box_min"][i] for i in range(3)]
     _blender(job, "fit_part.py", {"blend": blend, "views": views, "iters": a.iters, "step": a.step, "out_blend": blend, "box_size": box_size,
+                                  "mode": "free" if a.free else "lattice",
                                   "out_render": os.path.join(d, "seed_render.png"), "out_json": out_json},
              "fit_%s" % part["name"], timeout=1800)
     rep = json.load(open(out_json))
     for name in rep["iou_before"]:
         print("  %s silhouette overlap %.3f -> %.3f" % (name, rep["iou_before"][name], rep["iou_after"][name]))
-    print("fitted %s: moved up to %.1f mm (mean %.2f); render: %s" % (part["name"], rep["max_move_mm"], rep["mean_move_mm"], os.path.join(d, "seed_render.png")))
+    if rep.get("refused"):
+        print("fit REFUSED for %s: the surface would turn %.1f deg on average or the outline got no better; the mesh is "
+              "unchanged. Re-register, or redraw and re-mesh the part instead." % (part["name"], rep["normal_change_deg"]))
+        return
+    print("fitted %s (%s): moved up to %.1f mm (mean %.2f), surface turned %.1f deg; render: %s" % (
+        part["name"], rep["mode"], rep["max_move_mm"], rep["mean_move_mm"], rep["normal_change_deg"], os.path.join(d, "seed_render.png")))
     print("Look at seed_render.png; registered_unfitted.blend is the mesh before (copy it back to undo).")
+
+
+def _pct_box(lo, hi, dims):
+    """A box in metres -> the plan's percent side_box [x0, x1, z_top, z_bottom] and front_span [y0, y1]."""
+    L, W, H = dims
+    return ([round((lo[0] + L / 2) / L * 100, 1), round((hi[0] + L / 2) / L * 100, 1),
+             round((H / 2 - hi[2]) / H * 100, 1), round((H / 2 - lo[2]) / H * 100, 1)],
+            [round((lo[1] + W / 2) / W * 100, 1), round((hi[1] + W / 2) / W * 100, 1)])
+
+
+def fit_card(plan, part, box, dst, title):
+    """The interior's box drawn on the approved side and front views with its size in mm, beside the part's own
+    picture: what the cabin looks like and that it fits (owner, 2026-09-29)."""
+    from PIL import ImageDraw
+    lo, hi = box
+    side_box, span = _pct_box(lo, hi, plan["dims_m"])
+    mm = [round((hi[i] - lo[i]) * 1000) for i in range(3)]
+    panels = []
+    for pic, rect, label in ((plan["side"], (side_box[0], side_box[2], side_box[1], side_box[3]), "side: %d x %d mm (L x H)" % (mm[0], mm[2])),
+                             (plan.get("front"), (span[0], side_box[2], span[1], side_box[3]), "front: %d x %d mm (W x H)" % (mm[1], mm[2]))):
+        if not pic or not os.path.exists(pic):
+            continue
+        im = Image.open(pic).convert("RGB")
+        im.thumbnail((720, 480))
+        w, h = im.size
+        d = ImageDraw.Draw(im)
+        x0, y0, x1, y1 = (rect[0] / 100 * w, rect[1] / 100 * h, rect[2] / 100 * w, rect[3] / 100 * h)
+        for k in range(3):
+            d.rectangle((x0 - k, y0 - k, x1 + k, y1 + k), outline=(220, 30, 30))
+        d.rectangle((0, h - 22, w, h), fill=(255, 255, 255))
+        d.text((6, h - 18), label, fill=(160, 0, 0))
+        panels.append(im)
+    own = os.path.join(os.path.dirname(dst), "side.png")
+    if os.path.exists(own):
+        im = Image.open(own).convert("RGB")
+        im.thumbnail((480, 480))
+        d = ImageDraw.Draw(im)
+        d.rectangle((0, im.size[1] - 22, im.size[0], im.size[1]), fill=(255, 255, 255))
+        d.text((6, im.size[1] - 18), "%s as drawn" % part["name"], fill=(0, 0, 0))
+        panels.append(im)
+    width = sum(q.size[0] for q in panels) + 10 * (len(panels) + 1)
+    height = max(q.size[1] for q in panels) + 50
+    card = Image.new("RGB", (width, height), (245, 246, 248))
+    ImageDraw.Draw(card).text((10, 12), title, fill=(0, 0, 0))
+    x = 10
+    for q in panels:
+        card.paste(q, (x, 40))
+        x += q.size[0] + 10
+    card.save(dst)
+    return dst
+
+
+def cmd_cabin(a):
+    """Measure the body's open cockpit well and give the interior part the box that fits it: floor, side walls and
+    sill found by rays on the body's registered seed placed as the assembler places it (blender/cabin.py). Prints the
+    box in mm and in plan percents and draws parts/<Part>/fit_card.png (owner, 2026-09-29: the cabin's pictures and
+    dimensions, so we know it fits)."""
+    job = Job(a.job)
+    plan = _plan(job)
+    part = _part(plan, a.part)
+    vendors = [q for q in plan["parts"] if q.get("method") == "vendor" and not q.get("interior")]
+    hull = _part(plan, a.hull) if a.hull else max(vendors, key=lambda q: q["box_max"][0] - q["box_min"][0])
+    blend = job.path("parts", hull["name"], "registered.blend")
+    if not os.path.exists(blend):
+        sys.exit("the body %s is not meshed yet (ms mesh %s %s)" % (hull["name"], a.job, hull["name"]))
+    fitj = job.path("parts", hull["name"], "fit.json")
+    fit = json.load(open(fitj)) if os.path.exists(fitj) else {}
+    d = job.path("parts", part["name"])
+    os.makedirs(d, exist_ok=True)
+    out = os.path.join(d, "cabin.json")
+    _blender(job, "cabin.py", {"hull_blend": blend, "box_min": hull["box_min"], "box_max": hull["box_max"],
+                               "keep_depth": bool(fit.get("keep_depth")), "x_range": [part["box_min"][0], part["box_max"][0]],
+                               "out_json": out}, "cabin_%s" % part["name"])
+    res = json.load(open(out))
+    well = res.get("well")
+    if not well:
+        sys.exit("no open cockpit well found in %s between x %.2f and %.2f m: the body was meshed closed (redraw its "
+                 "picture with the cockpit open) or the interior's box is not over the cockpit"
+                 % (hull["name"], part["box_min"][0], part["box_max"][0]))
+    glass = [q for q in plan["parts"] if (q.get("material") or {}).get("glass")
+             and q["box_min"][0] < well["x"][1] and q["box_max"][0] > well["x"][0]]
+    depth = well["sill_z"] - well["floor_z"]
+    # seat backs and panel hoods rise above the sill under the glass: the planned top (read off the picture, where the
+    # seats show) is kept when it is higher; the rays only know the floor, the walls and the sill
+    top = max(well["sill_z"] + 0.6 * depth, part["box_max"][2])
+    if glass:
+        top = min(top, max(q["box_max"][2] for q in glass) - 0.03 * plan["dims_m"][2])
+    margin = 0.04 * well["half_width"]
+    lo = [well["x"][0], -well["half_width"] + margin, well["floor_z"] + 0.005 * plan["dims_m"][2]]
+    hi = [well["x"][1], well["half_width"] - margin, top]
+    side_box, span = _pct_box(lo, hi, plan["dims_m"])
+    mm = [round((hi[i] - lo[i]) * 1000) for i in range(3)]
+    res["suggested"] = {"box_min": [round(v, 4) for v in lo], "box_max": [round(v, 4) for v in hi], "side_box": side_box,
+                        "front_span": span, "size_mm": mm}
+    json.dump(res, open(out, "w"), indent=1)
+    print("cockpit well in %s: %d mm long, %d mm wide between the walls, %d mm deep (floor to sill)" % (
+        hull["name"], round((well["x"][1] - well["x"][0]) * 1000), round(2 * well["half_width"] * 1000), round(depth * 1000)))
+    print('%s fits a box of %d x %d x %d mm (L x W x H): "side_box": %s, "front_span": %s' % (part["name"], mm[0], mm[1], mm[2], side_box, span))
+    print("  (now: side_box %s, front_span %s). Put the suggested box in plan_draft.json, ms plan, then draw the part." % (
+        part["side_box"], part["front_span"]))
+    card = fit_card(plan, part, (lo, hi), os.path.join(d, "fit_card.png"),
+                    "%s: fits the %s cockpit well, %d x %d x %d mm (L x W x H)" % (part["name"], hull["name"], mm[0], mm[1], mm[2]))
+    print("fit card: %s" % card)
+
+
+INTERIOR_SIDE_PROMPT = ("Show ONLY the cockpit interior of this object as one separate insert: %s. Everything around it - the "
+                        "hull, the canopy and its glass and frame - is removed. Draw the tub floor, the seats, the instrument "
+                        "panels, the side consoles and the control sticks exactly where they sit in this picture, seen from "
+                        "exactly the same side angle with the forward end to the right, isolated on a plain pure white "
+                        "background, sharp product photograph. It fills a space %d mm long, %d mm wide and %d mm high.")
 
 
 ANCHORS = {"centre": (0, 0, 0), "center": (0, 0, 0), "front": (0.5, 0, 0), "back": (-0.5, 0, 0), "top": (0, 0, 0.5),
@@ -480,9 +622,25 @@ def cmd_sdf(a):
     print("Look at seed_render.png next to side.png; edit sdf.py and run again if it is off.")
 
 
+def fill_small_holes(fg, max_frac=0.002):
+    """An object mask with its specks of noise filled but its real openings kept: every enclosed background region
+    bigger than `max_frac` of the object stays a hole. Filling every hole printed the picture's white background as a
+    pale patch inside a trigger guard and a front-sight window (the shotgun, the M4A1, 2026-09-29)."""
+    import numpy as np
+    from scipy import ndimage
+    fg = np.asarray(fg, bool)
+    holes = ndimage.binary_fill_holes(fg) & ~fg
+    lab, n = ndimage.label(holes)
+    if not n:
+        return fg
+    sizes = ndimage.sum(holes, lab, np.arange(1, n + 1))
+    small = np.concatenate([[False], sizes <= max_frac * max(int(fg.sum()), 1)])
+    return fg | small[lab]
+
+
 def _proj_picture(src, dst, crop=True):
     """A picture as the projection wants it: cropped to its object (unless it already is), its alpha the object's
-    mask (holes filled, a pixel eroded so the white fringe never lands on the mesh). -> (dst, (w, h)) or None"""
+    mask (specks filled, openings kept, a pixel eroded so the white fringe never lands on the mesh). -> (dst, (w, h)) or None"""
     import numpy as np
     from scipy import ndimage
     a = np.asarray(Image.open(src).convert("RGB")).astype(np.float32) / 255.0
@@ -490,7 +648,7 @@ def _proj_picture(src, dst, crop=True):
     fg = np.abs(a - np.median(border, axis=0)).max(axis=2) > 0.1
     if fg.mean() < 0.005:
         return None
-    fg = ndimage.binary_fill_holes(fg)
+    fg = fill_small_holes(fg)
     if crop:
         ys, xs = np.nonzero(fg)
         y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
@@ -554,9 +712,13 @@ def cmd_assemble(a):
             if not os.path.exists(blend):
                 print("  %s: not built yet (ms build), left out" % p["name"])
                 continue
+            skin = os.path.join(d, "registered.blend")
+            if p.get("skin") and not os.path.exists(skin):
+                print("  %s: \"skin\" asked for but not meshed yet (ms part-pictures, then ms mesh); built as is" % p["name"])
             parts.append({"name": p["name"], "kind": "code", "box_min": p["box_min"], "box_max": p["box_max"], "material": p["material"],
                           "centreline": bool(p.get("centreline")), "zones": [], "blend": blend, "yaw": 0,
-                          "reference_detail": bool(p.get("reference_detail", True))})
+                          "reference_detail": bool(p.get("reference_detail", True)), "edge_break": bool(p.get("edge_break", True)),
+                          "skin": skin if p.get("skin") and os.path.exists(skin) else None})
             continue
         blend = os.path.join(d, "registered.blend")
         if not os.path.exists(blend):
@@ -565,7 +727,7 @@ def cmd_assemble(a):
         fit = json.load(open(os.path.join(d, "fit.json"))) if os.path.exists(os.path.join(d, "fit.json")) else {}
         is_largest = p["name"] == largest["name"]
         parts.append({"name": p["name"], "kind": "vendor", "box_min": p["box_min"], "box_max": p["box_max"], "material": p["material"],
-                      "fitted": os.path.exists(os.path.join(d, "fit_report.json")),
+                      "fitted": os.path.exists(os.path.join(d, "fit_report.json")), "interior": bool(p.get("interior")), "body": is_largest,
                       "centreline": bool(p.get("centreline")), "zones": p.get("zones") or [], "blend": blend, "yaw": 0,
                       "keep_depth": bool(fit.get("keep_depth")) and is_largest, "fill_box": not is_largest})
     if not parts:
@@ -588,7 +750,9 @@ def cmd_assemble(a):
     args = {"name": job.spec.name, "out_dir": delivery, "tri_budget": job.spec.tri_budget or 100000, "engine": job.spec.engine,
             "projection": projection, "pbr_library": pbr_library, "length_m": plan["dims_m"][0],
             "atlas_size": 4096 if (job.spec.tri_budget or 0) >= 100000 else 2048, "render_size": 768, "spec": job.spec.to_dict(),
-            "reference": ref if os.path.exists(ref) else None, "parts": parts, "detail": det, "sharpen": not a.no_sharpen}
+            "reference": ref if os.path.exists(ref) else None, "parts": parts, "detail": det, "sharpen": not a.no_sharpen,
+            # a machined edge's break: 0.08% of the asset's length (0.7 mm on a rifle, 12 mm on a helicopter), capped per part
+            "edge_break_m": 0.0 if a.no_edge_break else 0.0008 * float(plan["dims_m"][0])}
     _blender(job, "assemble.py", args, "assemble")
     rep = json.load(open(os.path.join(delivery, "report.json")))
     sheet = six_view_sheet(job, delivery)
@@ -793,7 +957,8 @@ def main(argv=None):
     s = sub.add_parser("part-pictures"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--fixes"); s.add_argument("--erased", action="store_true")
     s.add_argument("--drawn", action="store_true", help="draw the body alone instead of erasing the approved picture")
     s.add_argument("--no-quarter", action="store_true"); s.add_argument("--no-side", action="store_true", help="keep the side picture")
-    s.add_argument("--no-front", action="store_true", help="three-quarter picture without the front-view reference")
+    s.add_argument("--no-front", action="store_true", help="the body's three-quarter picture without the front-view reference")
+    s.add_argument("--with-front", action="store_true", help="give a non-body part's three-quarter picture the front view too")
     s.add_argument("--model", default="nano"); s.add_argument("--redraw", action="store_true", help="draw over existing pictures (ask the owner first)")
     s.set_defaults(fn=cmd_part_pictures)
     s = sub.add_parser("mesh"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--vendor", default="local")
@@ -801,17 +966,21 @@ def main(argv=None):
     s = sub.add_parser("register"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--from", dest="src", default="quarter", choices=("quarter", "side"))
     s.add_argument("--yaw", type=float, default=0.0); s.add_argument("--pitch", type=float, default=0.0); s.set_defaults(fn=cmd_register)
     s = sub.add_parser("fit"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--quarter", action="store_true")
-    s.add_argument("--iters", type=int, default=8); s.add_argument("--step", type=float, default=0.6); s.add_argument("--no-backup", action="store_true"); s.set_defaults(fn=cmd_fit)
+    s.add_argument("--iters", type=int, default=8); s.add_argument("--step", type=float, default=0.6); s.add_argument("--no-backup", action="store_true")
+    s.add_argument("--free", action="store_true", help="move vertices one by one (the old fit) instead of bending a lattice"); s.set_defaults(fn=cmd_fit)
     s = sub.add_parser("brush"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--op", choices=("inflate", "move", "smooth", "flatten", "crease"))
     s.add_argument("--at", default="centre", help="x,y,z metres in the part frame, or front/back/top/bottom/left/right/centre[+dx,dy,dz]")
     s.add_argument("--radius", type=float, default=10.0, help="mm"); s.add_argument("--strength", type=float, default=1.0, help="inflate: mm at the centre; others: 0-1")
     s.add_argument("--delta", help="move: dx,dy,dz in mm"); s.add_argument("--to", help="crease: the line's other end"); s.add_argument("--normal", help="flatten: nx,ny,nz")
     s.add_argument("--replay", action="store_true", help="re-apply brush_log.json to a fresh mesh"); s.set_defaults(fn=cmd_brush)
+    s = sub.add_parser("cabin"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--hull", help="the body part (default: the longest vendor part)")
+    s.set_defaults(fn=cmd_cabin)
     s = sub.add_parser("sdf"); s.add_argument("job"); s.add_argument("part"); s.add_argument("script", nargs="?"); s.add_argument("--voxel", type=float, help="mm")
     s.set_defaults(fn=cmd_sdf)
     s = sub.add_parser("assemble"); s.add_argument("job"); s.add_argument("--parts"); s.add_argument("--no-sharpen", action="store_true")
     s.add_argument("--no-projection", action="store_true", help="skip the picture projection (#14), for comparison")
-    s.add_argument("--no-materials", action="store_true", help="skip the CC0 smart-material pass (#15), for comparison"); s.set_defaults(fn=cmd_assemble)
+    s.add_argument("--no-materials", action="store_true", help="skip the CC0 smart-material pass (#15), for comparison")
+    s.add_argument("--no-edge-break", action="store_true", help="leave code parts' edges razor sharp (no small round)"); s.set_defaults(fn=cmd_assemble)
     s = sub.add_parser("sheet"); s.add_argument("glb"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
     s = sub.add_parser("refs"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_refs)
     s = sub.add_parser("results"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_results)

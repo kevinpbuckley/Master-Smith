@@ -600,7 +600,7 @@ def _register(job, name, glb, picture, out_dir, yaw_sweep=False, extra_yaw=0.0, 
         res_path = os.path.join(out_dir, "registration.json")
         blend = os.path.join(out_dir, "registered.blend")
         render = os.path.join(out_dir, "seed_render.png")
-        _blender(job, "register_part.py", {"glb": glb, "mask": mask, "out_blend": blend, "out_json": res_path,
+        _blender(job, "register_part.py", {"glb": glb, "mask": mask, "picture": picture, "out_blend": blend, "out_json": res_path,
                                            "yaw_sweep": bool(yaw_sweep), "out_render": render,
                                            "extra_yaw": extra_yaw, "extra_pitch": extra_pitch},
                  "register_%s" % name, timeout=600)

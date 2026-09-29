@@ -222,7 +222,7 @@ def image_mean_luminance(img):
     return float(used.mean()) if len(used) > 100 else float(lum.mean())
 
 
-def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False):
+def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False, force=False):
     """A vendor part takes its planned colour, keeping its own light and dark variation: base colour = planned colour x
     (texel luminance / the texture's mean luminance), clamped. Tripo keeps a washed-out grey where the plan says matte
     black (the pistol frame, 2026-09-27); this is the part's material being set as planned while it is assembled, the
@@ -275,7 +275,7 @@ def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False):
             t.nodes.remove(rgb)
             done = True
             continue
-        if 0.7 <= mean / max(want, 1e-4) <= 1.4:
+        if not force and 0.7 <= mean / max(want, 1e-4) <= 1.4:
             # the vendor's texture is already about the planned tone: keep it, with its own colour separation (the
             # TRELLIS pistol's black slide against its frame, its stippled grip) - the tint is for washed-out seeds
             # like Tripo's grey frame
@@ -668,14 +668,128 @@ def surface_to_plan(o, mat, mats=None):
     return True
 
 
+def edge_break(o, width):
+    """A machined part's edges broken the way a real one's are: a small two-segment round on every edge sharper than
+    30 degrees, the flat faces kept flat (hardened normals). A code part's razor edges and flat shading read as
+    CG next to the diffused parts (owner, 2026-09-29: "too rigid ... too sharp edges"). -> width in mm, or None"""
+    lo, hi = blib.dims(o)
+    thin = min(v for v in (hi - lo) if v > 1e-9) if max(hi - lo) > 1e-9 else 0.0
+    w = min(float(width), 0.06 * thin)
+    if w <= 1e-6 or not o.data.polygons:
+        return None
+    o.data.polygons.foreach_set("use_smooth", [True] * len(o.data.polygons))
+    m = o.modifiers.new("edge_break", "BEVEL")
+    m.width = w
+    m.segments = 2
+    m.profile = 0.6
+    m.limit_method = "ANGLE"
+    m.angle_limit = math.radians(30)
+    m.use_clamp_overlap = True
+    m.harden_normals = True
+    m.miter_outer = "MITER_ARC"
+    blib.select_only([o])
+    try:
+        bpy.ops.object.modifier_apply(modifier=m.name)
+    except RuntimeError as exc:
+        o.modifiers.remove(m)
+        log("%s: edge break skipped (%s)" % (o.name, str(exc)[:80]))
+        return None
+    return round(w * 1000, 2)
+
+
+def skin_from_seed(o, p, res=1024):
+    """A code part dressed in a diffusion texture: the part's own picture meshed by the vendor (parts/<Part>/
+    registered.blend, `ms mesh`), fitted to the same box, and its colour baked onto the code geometry, which keeps its
+    exact shape. The assembly then reads as one kind of surface instead of textured vendor parts beside flat code
+    parts (owner, 2026-09-29). Texels no ray reached take the mean colour; the colour is then tinted to the plan like
+    a vendor part's. -> {"coverage"} or None"""
+    sp = dict(p, kind="vendor", fill_box=True, keep_depth=False, yaw=0, blend=p["skin"], centreline=False)
+    s = import_part(sp)
+    s.name = "Skin_" + p["name"]
+    fit(s, sp)
+    while o.data.uv_layers:
+        o.data.uv_layers.remove(o.data.uv_layers[0])
+    blib.select_only([o])
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.02)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    o.data.uv_layers[0].name = "UVMap"
+    img = bpy.data.images.new("T_skin_%s" % p["name"], res, res, alpha=False, float_buffer=False)
+    mats = [sl.material for sl in o.material_slots if sl.material and sl.material.node_tree]
+    if not mats:
+        bpy.data.objects.remove(s, do_unlink=True)
+        return None
+    nodes = []
+    for m in mats:
+        n = m.node_tree.nodes.new("ShaderNodeTexImage")
+        n.image = img
+        m.node_tree.nodes.active = n
+        nodes.append((m, n))
+    for sl in s.material_slots:                         # the seed's base colour, emitted, is what the bake reads
+        m = sl.material
+        if not m or not m.node_tree:
+            continue
+        t = m.node_tree
+        b = next((n for n in t.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        out = next((n for n in t.nodes if n.type == "OUTPUT_MATERIAL"), None)
+        if b is None or out is None:
+            continue
+        em = t.nodes.new("ShaderNodeEmission")
+        base = b.inputs["Base Color"]
+        if base.is_linked:
+            t.links.new(base.links[0].from_socket, em.inputs["Color"])
+        else:
+            em.inputs["Color"].default_value = base.default_value
+        t.links.new(em.outputs[0], out.inputs["Surface"])
+    scn = bpy.context.scene
+    scn.render.engine = "CYCLES"
+    scn.cycles.device = "CPU"
+    scn.cycles.samples = 1
+    lo, hi = blib.dims(o)
+    diag = (hi - lo).length
+    blib.select_only([s, o])
+    bpy.context.view_layer.objects.active = o
+    bpy.ops.object.bake(type="EMIT", use_selected_to_active=True, cage_extrusion=diag * 0.03, max_ray_distance=diag * 0.08,
+                        margin=8, use_clear=True, target="IMAGE_TEXTURES")
+    bpy.data.objects.remove(s, do_unlink=True)
+    px = np.empty(res * res * 4, np.float32)
+    img.pixels.foreach_get(px)
+    px = px.reshape(-1, 4)
+    hit = px[:, :3].max(axis=1) > 1e-4
+    if hit.mean() < 0.01:
+        for m, n in nodes:
+            m.node_tree.nodes.remove(n)
+        log("%s: skin bake reached nothing; left as built" % p["name"])
+        return None
+    px[~hit, :3] = px[hit, :3].mean(axis=0)
+    img.pixels.foreach_set(px.ravel())
+    img.pack()
+    for m, n in nodes:
+        b = next((x for x in m.node_tree.nodes if x.type == "BSDF_PRINCIPLED"), None)
+        if b is not None:
+            for l in list(b.inputs["Base Color"].links):
+                m.node_tree.links.remove(l)
+            m.node_tree.links.new(n.outputs["Color"], b.inputs["Base Color"])
+    pm = p.get("material") or {}
+    tint_to_plan(o, pm.get("color"), set(mats), metal=bool(pm.get("metal")), force=True)
+    return {"coverage": round(float(hit.mean()), 3)}
+
+
 # ---------------------------------------------------------------- parts in their boxes
 bpy.ops.wm.read_factory_settings(use_empty=True)
 parts, glass_parts = [], []
 for p in args["parts"]:
     o = import_part(p)
     rec = {"name": p["name"], "kind": p["kind"], "box_min": p["box_min"], "box_max": p["box_max"], **fit(o, p)}
-    # code parts carry the reference's fine detail; vendor parts already have their own texture
-    if p["kind"] == "code" and args.get("detail") and p.get("reference_detail", True) and not (p.get("material") or {}).get("glass"):
+    glass = bool((p.get("material") or {}).get("glass"))
+    if p["kind"] == "code" and not glass:
+        if args.get("edge_break_m") and p.get("edge_break", True):
+            rec["edge_break_mm"] = edge_break(o, args["edge_break_m"])
+        if p.get("skin") and os.path.exists(p["skin"]):
+            rec["skin"] = skin_from_seed(o, p)
+    # code parts carry the reference's fine detail; vendor parts (and skinned code parts) already have their own texture
+    if p["kind"] == "code" and args.get("detail") and p.get("reference_detail", True) and not glass and not rec.get("skin"):
         rec["reference_detail"] = add_reference_detail(o, args["detail"])
     if p["kind"] == "vendor" and not (p.get("material") or {}).get("glass") and args.get("tint_vendor", True):
         zoned = split_zones(o, p.get("zones") or [])
@@ -685,7 +799,9 @@ for p in args["parts"]:
         # a multi-coloured body (grey with an olive panel) keeps the vendor's colours; its surface is still the plan's
         # the sampled colour with the texture's own light and dark: the brightness-only path left a receiver near-white
         # twice (2026-09-28); zones carry any second colour, so nothing is lost by tinting the rest
-        rec["tinted"] = tint_to_plan(o, pm.get("color"), rest, metal=bool(pm.get("metal")))
+        # a locked colour is the planned colour, whatever tone the vendor's texture has (the M4A1 receiver's green cast
+        # survived because its texture was already about as dark as planned, 2026-09-29)
+        rec["tinted"] = tint_to_plan(o, pm.get("color"), rest, metal=bool(pm.get("metal")), force=bool(pm.get("color_lock")))
         rec["surface_planned"] = surface_to_plan(o, pm, rest)
         if args.get("surface_detail", True):
             rec["surface_detail"] = surface_detail(o, pm, mats=rest, vendor=True)
@@ -974,6 +1090,48 @@ def align_to_body(parts, specs):
 for name, dy, dz, how in align_to_body(parts, {p["name"]: p for p in args["parts"]}):
     log("%s: moved %.1f mm sideways and %.1f mm up %s" % (name, dy * 1000, dz * 1000, how))
 
+
+def poke_fraction(o, body, samples=3000):
+    """The share of `o`'s vertices that sit inside `body`'s material (odd number of crossings along a ray): an
+    interior that fits its well pokes into the hull nowhere."""
+    from mathutils.bvhtree import BVHTree
+    bm = body.data
+    bm.calc_loop_triangles()
+    co = np.empty(len(bm.vertices) * 3, np.float32)
+    bm.vertices.foreach_get("co", co)
+    tri = np.empty(len(bm.loop_triangles) * 3, np.int32)
+    bm.loop_triangles.foreach_get("vertices", tri)
+    tree = BVHTree.FromPolygons([Vector(v) for v in co.reshape(-1, 3)], tri.reshape(-1, 3).tolist())
+    pts = np.empty(len(o.data.vertices) * 3, np.float32)
+    o.data.vertices.foreach_get("co", pts)
+    pts = pts.reshape(-1, 3)
+    if len(pts) > samples:
+        pts = pts[np.linspace(0, len(pts) - 1, samples).astype(int)]
+    d = Vector((0.31, 0.17, 0.935)).normalized()           # skewed, so no ray runs along a face
+    lo, hi = blib.dims(body)
+    eps = (hi - lo).length * 1e-5
+    inside = 0
+    for p_ in pts:
+        origin, crossings = Vector(p_), 0
+        for _ in range(24):
+            hit = tree.ray_cast(origin, d)[0]
+            if hit is None:
+                break
+            crossings += 1
+            origin = hit + d * eps
+        inside += crossings % 2
+    return inside / float(max(len(pts), 1))
+
+
+# an interior (a cockpit, a cabin) must sit in the body's well, not in its walls (owner, 2026-09-29: "so we know it fits")
+body_obj = next((o for o, r in parts if (next((p for p in args["parts"] if p["name"] == r["name"]), {})).get("body")), None)
+for o, r in parts:
+    spec = next((p for p in args["parts"] if p["name"] == r["name"]), {})
+    if spec.get("interior") and body_obj is not None:
+        f = poke_fraction(o, body_obj)
+        r["pokes_into_body"] = round(f, 4)
+        log("%s: %.1f%% of it pokes into the body%s" % (r["name"], f * 100, " - it does NOT fit its well; ms cabin gives the box that does" if f > 0.03 else " (fits)"))
+
 # ---------------------------------------------------------------- the triangle budget: code parts as built, vendor parts share the rest
 budget = int(args["tri_budget"])
 vendor = [(o, r) for o, r in parts if r["kind"] == "vendor"]
@@ -1079,6 +1237,41 @@ def facing_attributes(o, iters=4):
         attr.data.foreach_set("value", n[:, col].astype(np.float32))
 
 
+def side_agreement(o, picture, frame, size=96):
+    """How well a picture's object mask lines up with the part as it now sits, seen from the side in `frame`
+    (cx, cz, L, H): (IoU, coverage = the share of the part's outline that the picture covers). A part whose picture
+    does not line up with its mesh gets the wrong colours in the wrong places (the Apache's blades reach past the
+    drawing, 2026-09-29), so the projection is skipped below a floor."""
+    probe = o.copy()
+    probe.data = o.data.copy()
+    bpy.context.collection.objects.link(probe)
+    if blib.tri_count(probe) > 3000:
+        m = probe.modifiers.new("dec", "DECIMATE")
+        m.ratio = 3000.0 / blib.tri_count(probe)
+        blib.select_only([probe])
+        bpy.ops.object.modifier_apply(modifier="dec")
+    me = probe.data
+    me.calc_loop_triangles()
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3) @ np.array(probe.matrix_world)[:3, :3].T + np.array(probe.matrix_world)[:3, 3]
+    tri = np.empty(len(me.loop_triangles) * 3, np.int32)
+    me.loop_triangles.foreach_get("vertices", tri)
+    bpy.data.objects.remove(probe, do_unlink=True)
+    cx, cz, L_, H_ = frame
+    uv = np.stack([((co[:, 0] - cx) / L_ + 0.5) * size, (0.5 - (co[:, 2] - cz) / H_) * size], axis=1)
+    got = sculpt.raster(uv, tri.reshape(-1, 3), size)
+    img = bpy.data.images.load(os.path.abspath(picture), check_existing=True)
+    w, h = img.size
+    px = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(px)
+    alpha = px.reshape(h, w, 4)[::-1, :, 3] > 0.5
+    want = alpha[(np.arange(size) * h / size).astype(int)][:, (np.arange(size) * w / size).astype(int)]
+    iou = float((got & want).sum()) / max(float((got | want).sum()), 1.0)
+    cover = float((got & want).sum()) / max(float(got.sum()), 1.0)
+    return iou, cover
+
+
 def project_pictures(o, p, proj):
     """Base colour from the pictures (issue #14): the part's own side picture (drawn alone, cropped to the part) on
     the faces that look sideways - mirrored onto the far side - and the approved front picture on the faces that look
@@ -1090,6 +1283,7 @@ def project_pictures(o, p, proj):
     if not mats:
         return {}
     views = []
+    skipped = []
     own = p.get("projection") or {}
     if own.get("picture") and os.path.exists(own["picture"]):
         if own.get("frame") == "asset":
@@ -1097,13 +1291,25 @@ def project_pictures(o, p, proj):
         else:
             lo, hi = blib.dims(o)
             fr = [(lo.x + hi.x) / 2, (lo.z + hi.z) / 2, max(hi.x - lo.x, 1e-6), max(hi.z - lo.z, 1e-6)]
-        views.append(("side", own["picture"], own.get("detail"), fr, None))
+        iou, cover = side_agreement(o, own["picture"], fr)
+        # its own picture must outline the part it is printed on; the erased body picture carries holes where the
+        # other parts were, so only its coverage counts
+        if (own.get("frame") == "asset" and cover >= 0.75) or (own.get("frame") != "asset" and iou >= 0.6):
+            views.append(("side", own["picture"], own.get("detail"), fr, None))
+        else:
+            skipped.append("own side picture (IoU %.2f, covers %.2f)" % (iou, cover))
     elif proj.get("side") and os.path.exists(proj["side"]):
-        views.append(("side", proj["side"], proj.get("side_detail"), proj["asset_frame"], "ms_vis_side"))
+        iou, cover = side_agreement(o, proj["side"], proj["asset_frame"])
+        if cover >= 0.8:
+            views.append(("side", proj["side"], proj.get("side_detail"), proj["asset_frame"], "ms_vis_side"))
+        else:
+            skipped.append("approved side view (covers %.2f)" % cover)
+    if skipped:
+        log("%s: projection skipped for the %s - the picture does not line up with the part" % (p.get("name"), ", ".join(skipped)))
     if proj.get("front") and os.path.exists(proj["front"]) and p.get("front_part"):
         views.append(("front", proj["front"], proj.get("front_detail"), proj["asset_frame_front"], "ms_vis_front"))
     if not views:
-        return {}
+        return {"skipped": skipped} if skipped else {}
     done = []
     for m in mats:
         t = m.node_tree
@@ -1158,14 +1364,17 @@ def project_pictures(o, p, proj):
                 cx, cz, L_, H_ = fr
                 u = op("ADD", op("DIVIDE", op("SUBTRACT", pos.outputs["X"], cx), L_), 0.5)
                 v = op("ADD", op("DIVIDE", op("SUBTRACT", pos.outputs["Z"], cz), H_), 0.5)
-                sides = ((u, op("MULTIPLY", face_y.outputs["Fac"], -1.0)),          # the near side, seen from -Y
-                         (op("SUBTRACT", 1.0, u), face_y.outputs["Fac"]))            # the far side: the picture mirrored
+                # the far side takes the picture at the SAME place along the length (a symmetric part looks the same
+                # there), with its own occlusion test towards +Y. Sampling it end to end reversed (1 - u) put the
+                # sword's grip brown near its tip and whitened the tank's far wheels (2026-09-29).
+                sides = ((u, op("MULTIPLY", face_y.outputs["Fac"], -1.0), vis_attr),                # near side, from -Y
+                         (u, face_y.outputs["Fac"], vis_attr and vis_attr + "_far"))                  # far side, from +Y
             else:
                 cy, cz, W_, H_ = fr
                 u = op("ADD", op("DIVIDE", op("SUBTRACT", pos.outputs["Y"], cy), W_), 0.5)
                 v = op("ADD", op("DIVIDE", op("SUBTRACT", pos.outputs["Z"], cz), H_), 0.5)
-                sides = ((u, face_x.outputs["Fac"]),)
-            for uu, face_dot in sides:
+                sides = ((u, face_x.outputs["Fac"], vis_attr),)
+            for uu, face_dot, side_vis in sides:
                 uv = N.new("ShaderNodeCombineXYZ")
                 K.new(uu, uv.inputs[0])
                 K.new(v, uv.inputs[1])
@@ -1177,9 +1386,9 @@ def project_pictures(o, p, proj):
                     w = op("MULTIPLY", facing(face_dot, 0.6, 0.85), op("MULTIPLY", tex.outputs["Alpha"], strength * 0.7))
                 else:
                     w = op("MULTIPLY", facing(face_dot), op("MULTIPLY", tex.outputs["Alpha"], strength))
-                if vis_attr:
+                if side_vis:
                     at = N.new("ShaderNodeAttribute")
-                    at.attribute_name = vis_attr
+                    at.attribute_name = side_vis
                     w = op("MULTIPLY", w, at.outputs["Fac"])
                 mix = N.new("ShaderNodeMix")
                 mix.data_type = "RGBA"
@@ -1205,7 +1414,7 @@ def project_pictures(o, p, proj):
             K.new(bump_h, bump.inputs["Height"])
             K.new(bump.outputs["Normal"], b.inputs["Normal"])
         done.append(m.name)
-    return {"views": [v[0] for v in views], "materials": len(done)}
+    return {"views": [v[0] for v in views], "materials": len(done), "skipped": skipped}
 
 
 if args.get("projection"):
@@ -1231,9 +1440,10 @@ if args.get("projection"):
             attr = o.data.attributes.get("ms_vis_front") or o.data.attributes.new("ms_vis_front", "FLOAT", "FACE")
             attr.data.foreach_set("value", vis.astype(np.float32))
         if not spec.get("projection") and proj.get("side"):
-            vis = face_visibility(o, all_objs, (0.0, -1.0, 0.0), eps)
-            attr = o.data.attributes.get("ms_vis_side") or o.data.attributes.new("ms_vis_side", "FLOAT", "FACE")
-            attr.data.foreach_set("value", vis.astype(np.float32))
+            for name, direction in (("ms_vis_side", (0.0, -1.0, 0.0)), ("ms_vis_side_far", (0.0, 1.0, 0.0))):
+                vis = face_visibility(o, all_objs, direction, eps)
+                attr = o.data.attributes.get(name) or o.data.attributes.new(name, "FLOAT", "FACE")
+                attr.data.foreach_set("value", vis.astype(np.float32))
         r["projection"] = project_pictures(o, spec, proj)
     log("pictures projected: " + ", ".join("%s (%s)" % (r["name"], "+".join(r["projection"].get("views", []))) for _o, r in parts if r.get("projection")))
 

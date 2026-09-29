@@ -50,3 +50,15 @@ def test_page_lists_top_level_pictures_with_photos_marked(tmp_path):
         ("customer_ref_0.png", True), ("ref_0.png", False), ("ref_front.png", False)]
     page = open(refs_review.write_page(str(tmp_path), ["Rifle"]), encoding="utf-8").read()
     assert "__DATA__" not in page and "Rifle/ref/ref_0.png?v=" in page
+
+
+def test_projection_mask_keeps_openings_and_fills_specks():
+    # 2026-09-29: filling every hole printed the white inside a trigger guard onto the part
+    import numpy as np
+    from mastersmith import ms
+    fg = np.zeros((100, 100), bool)
+    fg[10:90, 10:90] = True
+    fg[30:60, 30:60] = False                   # a trigger-guard opening: stays open
+    fg[80, 80] = False                         # a speck of noise: filled
+    out = ms.fill_small_holes(fg)
+    assert not out[45, 45] and out[80, 80]

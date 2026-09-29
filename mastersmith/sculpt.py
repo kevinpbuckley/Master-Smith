@@ -252,6 +252,100 @@ def fit_silhouette(verts, faces, views, iters=8, step=0.6, diffuse_iters=6, max_
     return verts
 
 
+def lattice_shape(ext, most=8):
+    """Control points per axis for a part of extents `ext`: more along the long axis, 2 to `most` each."""
+    ext = np.asarray(ext, np.float64)
+    return tuple(int(np.clip(round(2 + (most - 2) * e / max(ext.max(), 1e-12)), 2, most)) for e in ext)
+
+
+def lattice_weights(verts, lo, hi, shape):
+    """Trilinear weights of each vertex in a lattice of `shape` control points spanning [lo, hi]:
+    (index (n, 8) into the flattened lattice, weight (n, 8))."""
+    shape_a = np.asarray(shape)
+    t = (verts - lo) / np.maximum(hi - lo, 1e-12) * (shape_a - 1)
+    t = np.clip(t, 0.0, shape_a - 1 - 1e-9)
+    i0 = np.floor(t).astype(np.int64)
+    f = t - i0
+    idx, w = [], []
+    for dx in (0, 1):
+        for dy in (0, 1):
+            for dz in (0, 1):
+                ii = i0 + np.array([dx, dy, dz])
+                idx.append(np.ravel_multi_index((ii[:, 0], ii[:, 1], ii[:, 2]), shape))
+                w.append((f[:, 0] if dx else 1 - f[:, 0]) * (f[:, 1] if dy else 1 - f[:, 1]) * (f[:, 2] if dz else 1 - f[:, 2]))
+    return np.stack(idx, axis=1), np.stack(w, axis=1)
+
+
+def lattice_laplacian(shape):
+    """The graph Laplacian of a lattice (each control point tied to its axis neighbours)."""
+    n = int(np.prod(shape))
+    L = np.zeros((n, n))
+    for i in range(n):
+        c = np.unravel_index(i, shape)
+        for ax in range(3):
+            for s in (-1, 1):
+                d = list(c)
+                d[ax] += s
+                if 0 <= d[ax] < shape[ax]:
+                    j = np.ravel_multi_index(tuple(d), shape)
+                    L[i, i] += 1.0
+                    L[i, j] -= 1.0
+    return L
+
+
+def fit_lattice(verts, faces, views, iters=8, step=0.6, shape=None, smooth=0.05, max_step=None):
+    """Bend the mesh so its outline in every view lies on that view's mask, through a coarse lattice (free-form
+    deformation) instead of moving vertices one by one: every vertex follows the smooth field of a few dozen control
+    points, so the surface keeps its shape and detail. Moving vertices freely crumpled a Tripo fuselage by up to 1 m
+    and a shotgun stock (2026-09-29). Each round the control displacements are the regularised least-squares answer
+    to the outline vertices' targets. -> new verts"""
+    verts = verts.astype(np.float64).copy()
+    rest = verts.copy()
+    lo, hi = verts.min(axis=0), verts.max(axis=0)
+    pad = 0.05 * (hi - lo) + 1e-9
+    lo, hi = lo - pad, hi + pad
+    shape = tuple(shape or lattice_shape(hi - lo))
+    idx, w = lattice_weights(rest, lo, hi, shape)
+    n = int(np.prod(shape))
+    L = lattice_laplacian(shape)
+    reg = smooth * (L.T @ L) + 1e-4 * np.eye(n)
+    ctrl = np.zeros((n, 3))
+    cap = max_step if max_step is not None else 0.03 * float(np.linalg.norm(hi - lo))
+    for _ in range(iters):
+        normals = vertex_normals(verts, faces)
+        total = np.zeros_like(verts)
+        keep = np.zeros(len(verts), bool)
+        for v in views:
+            disp, constrained = silhouette_targets(verts, normals, v)
+            total += disp * v["weight"]
+            keep |= constrained
+        rows = np.nonzero(keep)[0]
+        if not len(rows):
+            break
+        A = np.zeros((len(rows), n))
+        np.add.at(A, (np.repeat(np.arange(len(rows)), idx.shape[1]), idx[rows].ravel()), w[rows].ravel())
+        scale = 1.0 / len(rows)
+        d_ctrl = np.linalg.solve(A.T @ A * scale + reg, A.T @ total[rows] * scale)
+        big = np.linalg.norm(d_ctrl, axis=1, keepdims=True)
+        d_ctrl = np.where(big > cap, d_ctrl * (cap / np.maximum(big, 1e-12)), d_ctrl)
+        ctrl += step * d_ctrl
+        verts = rest + (w[:, :, None] * ctrl[idx]).sum(axis=1)
+    return verts
+
+
+def normal_change_deg(verts_a, verts_b, faces):
+    """Area-weighted mean angle (degrees) between each face's normal before and after a deformation: near 0 for a
+    smooth bend, large when the surface crumpled."""
+    def fn(v):
+        n = np.cross(v[faces[:, 1]] - v[faces[:, 0]], v[faces[:, 2]] - v[faces[:, 0]])
+        a = np.linalg.norm(n, axis=1)
+        return n / np.maximum(a[:, None], 1e-15), a
+    na, area = fn(np.asarray(verts_a, np.float64))
+    nb, _ = fn(np.asarray(verts_b, np.float64))
+    ang = np.degrees(np.arccos(np.clip((na * nb).sum(axis=1), -1.0, 1.0)))
+    return float((ang * area).sum() / max(area.sum(), 1e-15))
+
+
 def raster(verts2d, faces, size):
     """Fill the projected triangles (pixel coords, rows top-down) into a (size, size) mask. Meant for a few thousand
     faces (a decimated probe): a Python loop per triangle."""
