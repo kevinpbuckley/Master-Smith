@@ -40,3 +40,13 @@ def test_zone_pick_keep_and_strength_pass_through():
     z = validate_plan(raw, [14.0, 5.0, 6.0])["parts"][0]["zones"]
     assert z[0]["pick"] == "dark" and z[0]["keep"] == 2
     assert z[1]["strength"] == 9 and "pick" not in z[1]
+
+
+def test_glass_zone_pale_auto_and_fill_pass_through():
+    # 2026-09-29: a Tripo canopy is painted pale on its panes; "auto" picks the style, "fill" shells the holes
+    raw = {"parts": [{"name": "Body", "method": "vendor", "side_box": [0, 100, 0, 100], "front_span": [0, 100],
+                      "zones": [{"name": "Canopy", "side_box": [60, 90, 10, 50], "pick": "pale", "fill": False, "material": {"finish": "glass"}},
+                                {"name": "Visor", "side_box": [60, 70, 10, 20], "pick": "auto", "fill": "yes", "material": {"finish": "glass"}}]}]}
+    z = validate_plan(raw, [14.0, 5.0, 6.0])["parts"][0]["zones"]
+    assert z[0]["pick"] == "pale" and z[0]["fill"] is False
+    assert z[1]["pick"] == "auto" and "fill" not in z[1]

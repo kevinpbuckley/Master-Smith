@@ -106,17 +106,21 @@ object's full width, centred parts symmetric about 50.
    "material": {"color": "#rrggbb", "finish": "metal|polymer|rubber|painted|glass|wood|fabric|concrete|emissive",
                 "metal": true, "roughness": 0.35, "glass": false, "keep_texture": false},
    "zones": [{"name": "Pad", "side_box": [...], "front_span": [...], "material": {...}},
-             {"name": "Canopy", "side_box": [...], "front_span": [...], "pick": "dark", "material": {"finish": "glass"}},
+             {"name": "Canopy", "side_box": [...], "front_span": [...], "material": {"finish": "glass"}},
              {"name": "Lamp", "side_box": [...], "front_span": [...], "material": {"finish": "emissive", "strength": 8}}]}
  ],
  "notes": "anything the assembly must respect"}
 ```
 `zones` are areas of a part in a different material (rubber pad on a polymer stock, glass lens on a scope); on a
 whole-object seed they carry every material that is not the seed's own texture. A glass zone is cut out into a real
-see-through part: its faces are picked by the seed's texture colour inside the box (`"pick": "dark"`, the default on
-a kept-texture seed; `"lit"` for a light-painted pane; `"box"`, the default otherwise, takes every face), grown across
-seams, small runs dropped, holes closed; the report checks at most 8 glass islands with the largest holding at least
-60% (a box test alone is never enough, Tonetta: "never assign glass face by face from a normal or a box test"). An
+see-through part: its faces are picked by the seed's texture colour inside the box (`"pick": "auto"`, the default on
+a kept-texture seed, takes whichever of `"dark"` (near-black, blue-grey) and `"pale"` (light unsaturated grey, a pane
+painted with the sky in it) covers more of the outside skin; `"lit"` for a glowing window; `"box"`, the default
+otherwise, takes every face), grown across seams, small runs dropped, holes closed, up to 8 panes kept. Only the
+OUTSIDE skin is glass: a face whose rays all hit the model (seats, panels, the cockpit lump) stays opaque. Holes that
+go straight through a canopy frame get a glass shell (the canopy's convex hull, set just inside the frame; `"fill":
+false` turns it off). The report checks the kept panes hold 60% of the pick, at most 40 islands, at most 8% of the
+part (a box test alone is never enough, Tonetta: "never assign glass face by face from a normal or a box test"). An
 `emissive` zone glows at `"strength"` 6-12 and is baked into T_<Name>_E. `metal`
 is true only for bare metal. A dark metal is lifted to 7% reflectance by adding grey (`mastersmith/blender/colour.py`), but a tinted colour
 still renders more saturated on large flat faces: give blued or black steel a near-neutral colour (the shotgun's #283446 came out navy,

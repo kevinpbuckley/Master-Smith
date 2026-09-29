@@ -18,7 +18,8 @@ C-130J) and draw it from the owner's photos of the real thing (ask for them; not
 background, no people, no ground equipment, wings and tail fully in frame, weapons on the pylons only when the brief
 names them.
 
-The canopy is the glass: in the vendor mesh it is a painted dark surface; its faces are picked by colour and cut out
+The canopy is the glass: in the vendor mesh it is a painted surface (dark, or pale grey with the sky in it); its
+outside faces are picked by colour and cut out
 into a real see-through part (a `glass` zone, materials.md). Glass that is see-through shows the cockpit, so the
 cockpit is modelled when the canopy is: a dark tub that hides the shell's inside, a seat, an instrument panel with
 a couple of raised screens, a stick and a HUD frame, a pilot only if the brief has one (200-800 triangles, matte

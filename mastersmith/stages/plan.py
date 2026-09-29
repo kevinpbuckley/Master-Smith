@@ -370,13 +370,15 @@ def validate_plan(raw, dims, max_parts=None):
                     continue
                 zone = {"name": clean_name(z.get("name"), set()), "box_min": zmin, "box_max": zmax,
                         "side_box": [pct(v) for v in z["side_box"]], "material": clean_material(z.get("material"))}
-                # 2026-09-29: how a glass zone's faces are picked (dark / lit / box / atlas), how many patches it keeps,
-                # and an emissive zone's strength
-                if z.get("pick") in ("dark", "lit", "box", "atlas"):
+                # 2026-09-29: how a glass zone's faces are picked (auto / dark / pale / lit / box / atlas), how many
+                # patches it keeps, whether holes in its frame get a glass shell, and an emissive zone's strength
+                if z.get("pick") in ("auto", "dark", "pale", "lit", "box", "atlas"):
                     zone["pick"] = z["pick"]
                 for key in ("keep", "strength"):
                     if isinstance(z.get(key), (int, float)):
                         zone[key] = z[key]
+                if isinstance(z.get("fill"), bool):
+                    zone["fill"] = z["fill"]
                 zones.append(zone)
             part["zones"] = zones
         parts.append(part)

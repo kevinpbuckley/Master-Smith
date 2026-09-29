@@ -74,11 +74,14 @@ different, smaller change. Look at the six views after each pass and keep only w
   sights, bolts), glass (canopy, windows, lenses, lamp covers), rubber (tyres, pads), `emissive` lights and screens
   (`"strength": 8`, 6-12), painted panels. The body keeps the seed's texture (`keep_texture`, its roughness lifted
   when it is glaze); a zone takes its planned colour and finish. `$PY plan out/<Name> plan/plan_draft.json`.
-- **Glass is cut out**: a glass zone's faces are picked by the seed's texture colour inside the box (`"pick": "dark"`
-  on a kept-texture seed, `"lit"` for a light-painted pane, `"box"` for every face in the box), grown across seams,
-  small runs dropped, holes closed, and cut into a real see-through part (alpha 0.3, specular 0.45, no normal). The
-  report checks it: at most 8 glass islands, the largest holding at least 60% of the glass faces; a canopy on a 50k-
-  face seed is 300-3,000 faces. For one render, show the picked faces bright to check the pick.
+- **Glass is cut out**: a glass zone's faces are picked by the seed's texture colour inside the box (`"pick": "auto"`
+  on a kept-texture seed: dark or pale paint, whichever covers more of the outside skin; `"dark"`, `"pale"`, `"lit"`
+  to force one, `"box"` for every face in the box), only on the outside skin (the cockpit under it stays opaque:
+  owner, 2026-09-29, "we also rendered the inside of the cockpit as glass"), grown across seams, small runs dropped,
+  holes closed, up to 8 panes, and cut into a real see-through part (alpha 0.3, specular 0.45, no normal). Holes
+  straight through the frame get a glass shell. The report checks it (`glass_zones` in report.json: mode, faces,
+  coverage, `pane_faces` of shell); a canopy is 1-6% of the seed's faces. For one render, show the picked faces
+  bright (red) and LOOK: a Tripo canopy is painted pale on its panes and dark on its roof and cockpit.
 - **Whatever the glass shows has to exist**: a fighter or gunship cockpit (a dark tub hiding the shell, a seat, an
   instrument panel with screens, a stick, a HUD frame), a car cab (floor, two seats, a dash, a wheel, door cards):
   200-800 triangles, matte 0.7-0.9, nothing poking through, built LAST once the outside reads. A cockpit is about
