@@ -9,8 +9,10 @@ container, no paid model API: the service, the chat app and the one-seed finish 
 history before commit "Delete the service" has them).
 
 Run everything from this folder with the venv: `.venv/Scripts/python.exe -m mastersmith.ms <command>`.
-The step-by-step recipe is `.claude/skills/forge/SKILL.md` (Claude Code invokes it as `/forge`; any other agent
-reads the file). Read it before a build. Agent-specific notes live in that agent's own file (`CLAUDE.md`, ...).
+The step-by-step recipe is `.claude/skills/forge/SKILL.md` (Claude Code invokes it as `/forge`; Codex as `$forge`
+through the `.agents/skills` link). Run `./scripts/setup-skills.ps1` once on Windows to create the link.
+Keep shared skills in `.claude/skills`; both agents use the same files. Read the recipe before a build.
+Agent-specific notes live in that agent's own file (`CLAUDE.md`, ...).
 
 ## Where things live
 

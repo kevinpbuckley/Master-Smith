@@ -1,6 +1,6 @@
 ---
 name: forge
-description: Build a game-ready hard-surface asset (weapon, vehicle, aircraft, prop) as an assembly of parts from this Claude Code session with the ms tools - reference pictures, gridded plan, per-part pictures, TRELLIS meshes, registration, assembly, six-view review, package. Use when the owner asks to build, rebuild, fix or re-mesh a model.
+description: Build a game-ready hard-surface asset (weapon, vehicle, aircraft, prop) as an assembly of parts with the ms tools - reference pictures, gridded plan, per-part pictures, TRELLIS meshes, registration, assembly, six-view review, package. Use when the owner asks to build, rebuild, fix or re-mesh a model.
 ---
 
 # Build an asset with `ms`
@@ -34,7 +34,7 @@ Sizes: a rifle 0.65-1.0 m, a pistol 0.2 m, a truck 5-6 m, a gunship 12-18 m. `--
 ## 3. Grid and plan
 - `$PY grid out/<Name> --side ref/ref_side.png --front ref/ref_front.png` -> `plan/side_grid.png`,
   `plan/front_grid.png`, dims. Read both grids.
-- Write `out/<Name>/plan/plan_draft.json` (shape in CLAUDE.md): split the object the way a modeller would, one
+- Write `out/<Name>/plan/plan_draft.json` (shape in AGENTS.md): split the object the way a modeller would, one
   part per shape, percent boxes read off the grids, touching boxes overlapping 1-2 %, boxes covering the whole
   silhouette, real materials per part, zones for pads/lenses/bare metal. Every part `"method": "vendor"`.
 - `$PY plan out/<Name> plan/plan_draft.json` -> prints the parts with their mm sizes, snapped heights and sampled

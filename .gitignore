@@ -21,3 +21,4 @@ web/next-env.d.ts
 web/*.tsbuildinfo
 chats/
 .claude/worktrees/
+/.agents/skills

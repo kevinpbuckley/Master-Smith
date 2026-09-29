@@ -28,8 +28,19 @@ cd Master-Smith
 python -m venv .venv && . .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env                                  # put FAL_KEY in it
-claude                                                # or codex; then: /forge a modern bullpup carbine, 0.68 m
+claude                                                # or codex after linking shared skills below
 ```
+
+Link shared skills once per checkout before starting Codex. On Windows, run
+`./scripts/setup-skills.ps1` in PowerShell. It creates a directory junction without administrator rights.
+On macOS/Linux, run `mkdir -p .agents && ln -s ../.claude/skills .agents/skills` instead.
+The local link is ignored by Git; `.claude/skills` is the tracked source for both agents, including future skills.
+Run setup again if you move the Windows checkout. Setup leaves any existing unrelated directory intact;
+remove only the old junction before recreating it at the new location.
+
+In Claude Code, use `/forge a modern bullpup carbine, 0.68 m`. In Codex, use
+`$forge a modern bullpup carbine, 0.68 m` or select `forge` with `/skills`.
+Restart Codex if an already-open session does not show the skill.
 
 The agent reads [AGENTS.md](AGENTS.md) (the rules, the costs, the plan format) and follows the recipe in
 [.claude/skills/forge/SKILL.md](.claude/skills/forge/SKILL.md): it draws the reference pictures and shows them to
@@ -64,7 +75,9 @@ the previews and the six orthographic views the review is judged on.
 
 ```
 AGENTS.md                  the rules any coding agent follows here; CLAUDE.md imports it
-.claude/skills/forge/      the build recipe (/forge in Claude Code)
+.claude/skills/forge/      the shared build recipe (/forge in Claude Code, $forge in Codex)
+.agents/skills            local link to .claude/skills for Codex discovery
+scripts/setup-skills.ps1   creates the shared skill link on Windows
 mastersmith/ms.py          the tools: new, picture, view, grid, plan, part-pictures, mesh, register, fit, brush, sdf, assemble, sheet, preview, package, status
 mastersmith/sculpt.py      headless sculpting in numpy: brushes (inflate, move, smooth, flatten, crease) and silhouette fitting
 mastersmith/sdfkit.py      exact parts as signed distance functions (primitives, CSG, smooth blends, repeat) meshed by marching cubes
