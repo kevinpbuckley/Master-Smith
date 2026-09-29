@@ -375,8 +375,9 @@ def validate_plan(raw, dims, max_parts=None):
     if len(parts) > max_parts:
         dropped += [{"name": p["name"], "reason": "over the %d-part limit" % max_parts} for p in parts[max_parts:]]
         parts = parts[:max_parts]
-    if len(parts) < 2:
-        raise ValueError("the plan has %d usable part(s); an assembly needs at least two" % len(parts))
+    # one part is the whole-object seed, the default since 2026-09-29 (ms seed); its zones carry the other materials
+    if len(parts) < 1:
+        raise ValueError("the plan has no usable part")
     return {"parts": parts, "dropped": dropped, "notes": str((raw or {}).get("notes") or "")[:800],
             "dims_m": [round(v, 4) for v in dims]}
 

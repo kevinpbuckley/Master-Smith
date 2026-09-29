@@ -108,8 +108,9 @@ def test_plan_validation_cleans_names_methods_and_materials():
     assert plan["parts"][1]["method"] == "code" and plan["parts"][2]["method"] == "vendor"
     assert plan["parts"][1]["material"]["color"] == "#808080" and plan["parts"][0]["material"]["metal"] is True
     assert [d["name"] for d in plan["dropped"]] == ["Broken"]
+    assert len(validate_plan({"parts": raw["parts"][:1]}, dims)["parts"]) == 1    # the whole-object seed (2026-09-29)
     with pytest.raises(ValueError):
-        validate_plan({"parts": raw["parts"][:1]}, dims)
+        validate_plan({"parts": raw["parts"][3:]}, dims)                            # nothing usable
 
 
 BLENDER = pytest.mark.skipif(os.environ.get("MASTERSMITH_BLENDER_TESTS") != "1" or not os.path.exists(config.BLENDER_BIN),

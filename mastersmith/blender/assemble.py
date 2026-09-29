@@ -800,9 +800,14 @@ for p in args["parts"]:
         # the sampled colour with the texture's own light and dark: the brightness-only path left a receiver near-white
         # twice (2026-09-28); zones carry any second colour, so nothing is lost by tinting the rest
         # a locked colour is the planned colour, whatever tone the vendor's texture has (the M4A1 receiver's green cast
-        # survived because its texture was already about as dark as planned, 2026-09-29)
-        rec["tinted"] = tint_to_plan(o, pm.get("color"), rest, metal=bool(pm.get("metal")), force=bool(pm.get("color_lock")))
-        rec["surface_planned"] = surface_to_plan(o, pm, rest)
+        # survived because its texture was already about as dark as planned, 2026-09-29). A kept texture (a whole-object
+        # seed: its camouflage, markings and its own material split) is left as the model made it; its zones still
+        # take their planned materials.
+        keep = bool(pm.get("keep_texture")) and not pm.get("color_lock")
+        if not keep:
+            rec["tinted"] = tint_to_plan(o, pm.get("color"), rest, metal=bool(pm.get("metal")), force=bool(pm.get("color_lock")))
+            rec["surface_planned"] = surface_to_plan(o, pm, rest)
+        rec["kept_texture"] = keep
         if args.get("surface_detail", True):
             rec["surface_detail"] = surface_detail(o, pm, mats=rest, vendor=True)
         for z, mats in zoned:
@@ -822,7 +827,8 @@ for p in args["parts"]:
         length_m = float(args.get("length_m") or 1.0)
         sets = []
         if p["kind"] == "vendor" and args.get("tint_vendor", True):
-            sets.append((p.get("pbr_set"), rest))
+            if not rec.get("kept_texture"):
+                sets.append((p.get("pbr_set"), rest))
             for z, mats in zoned:
                 sets.append((z.get("pbr_set"), mats))
         else:

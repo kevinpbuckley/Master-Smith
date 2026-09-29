@@ -12,6 +12,8 @@ deterministic thing and writes into a job folder under out/<Name>/:
     python -m mastersmith.ms picture out/BullpupCarbine --out ref/ref_0.png --prompt "..." [--ref photo.jpg] [--model nano|local]
     python -m mastersmith.ms view out/BullpupCarbine --which side|front|back|left --from ref/ref_0.png [--mirror]
     python -m mastersmith.ms grid out/BullpupCarbine --side ref/side.png [--front ref/front.png] [--mirror]
+    python -m mastersmith.ms seed out/BullpupCarbine --model hi3d-mv            (the whole object in one request: the default)
+    python -m mastersmith.ms models [add <key> --kind seed --command "..." | remove <key>]   (the models, their prices)
     python -m mastersmith.ms plan out/BullpupCarbine plan.json          (plan.json written by hand, see AGENTS.md)
     python -m mastersmith.ms part-pictures out/BullpupCarbine Handguard [--fixes "..."] [--erased] [--no-quarter]
     python -m mastersmith.ms build out/BullpupCarbine TopRail          (a "method": "code" part from parts/TopRail/build.py)
@@ -41,7 +43,7 @@ import webbrowser
 
 from PIL import Image, ImageOps
 
-from . import config, picturecheck, pricing, refs_review, results_page
+from . import config, models, picturecheck, pricing, refs_review, results_page
 from .fal import Fal, first_url
 from .images import Images
 from .spec import Spec
@@ -66,6 +68,38 @@ VIEW_TEXT = {
 }
 
 
+class Pictures:
+    """The picture client, plus the owner's registered local picture commands (ms models add): a model given as a
+    registry entry is run as its command, anything else goes to Images as before."""
+
+    def __init__(self, images, log):
+        self.images, self.log = images, log
+
+    def generate(self, prompt, path, model=None, references=(), aspect_ratio="4:3", **kw):
+        if isinstance(model, dict):
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            refs = [os.path.abspath(r) for r in (references or []) if r]
+            pf = path + ".prompt.txt"
+            open(pf, "w", encoding="utf-8").write(prompt)
+            secs = models.run_command(model, os.path.abspath(path), log=self.log, prompt=prompt, prompt_file=pf, refs=refs,
+                                      image=refs[0] if refs else "", images=refs)
+            os.remove(pf)
+            return secs
+        return self.images.generate(prompt, path, model=model, references=references, aspect_ratio=aspect_ratio, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self.images, name)
+
+
+def _picture_model(key):
+    """A picture model key (ms models) -> the id Images takes, or the registered local command's entry."""
+    try:
+        m = models.resolve(key, kind="picture")
+    except KeyError:
+        return PICTURE_MODELS.get(key, key)
+    return m if m.get("source") == "local command" else m["endpoint"]
+
+
 class Job:
     """What the stage functions need of a job: a folder, a fal client, a picture client, a log."""
 
@@ -73,7 +107,7 @@ class Job:
         self.dir = os.path.abspath(folder)
         self.work_dir = self.dir
         self.fal = Fal(log=self.log)
-        self.images = Images(log=self.log)
+        self.images = Pictures(Images(log=self.log), self.log)
         self.spec = Spec.from_dict(json.load(open(os.path.join(self.dir, "brief.json"))))
 
     def log(self, msg):
@@ -146,7 +180,7 @@ def cmd_picture(a):
         return
     os.makedirs(os.path.dirname(out), exist_ok=True)
     refs = [os.path.abspath(r) if os.path.exists(r) else job.path(r) for r in (a.ref or [])]
-    model = PICTURE_MODELS.get(a.model, a.model)
+    model = _picture_model(a.model)
     job.images.generate(a.prompt, out, model=model, references=refs, aspect_ratio=a.aspect)
     print("picture:", out, "($%.2f)" % job.images.spent() if hasattr(job.images, "spent") else "")
 
@@ -160,7 +194,7 @@ def cmd_view(a):
         return
     prompt = ("Show this exact same object from %s. Same object, same design, same colours, markings and materials, same "
               "lighting, plain pure white background, sharp focus, nothing else in frame. %s" % (VIEW_TEXT[a.which], a.fixes or "")).strip()
-    job.images.generate(prompt, out, model=PICTURE_MODELS.get(a.model, a.model), references=[src], aspect_ratio="1:1")
+    job.images.generate(prompt, out, model=_picture_model(a.model), references=[src], aspect_ratio="1:1")
     if a.mirror:
         ImageOps.mirror(Image.open(out).convert("RGB")).save(out)
     print("view:", out)
@@ -238,6 +272,81 @@ def cmd_build(a):
     print("Look at the renders next to side.png; edit build.py and build again if it is off.")
 
 
+def cmd_models(a):
+    """The models the pipeline can call, with what one call costs; `add` registers a local model by its command line,
+    `remove` drops one (owner, 2026-09-29: the owner picks the seeding and picture models; local ones like TRELLIS.2
+    are registered, not coded)."""
+    if a.action == "add":
+        if not a.key or not a.command:
+            sys.exit('usage: ms models add <key> --kind seed|picture --command "exe {image} {out} ..." [--inputs multiview] [--label ...]')
+        m = models.add(a.key, a.kind, a.command, label=a.label or "", inputs=a.inputs, notes=a.notes or "")
+        print("registered %s (%s, %s): %s -> %s" % (a.key, m["kind"], m["inputs"], m["command"], models.registry_path()))
+        return
+    if a.action == "remove":
+        models.remove(a.key)
+        print("removed %s from %s" % (a.key, models.registry_path()))
+        return
+    rows = sorted(models.all_models().values(), key=lambda m: (m["kind"], m["source"], m["key"]))
+    for kind in ("seed", "picture"):
+        print("%s models (ms %s --model <key>):" % (kind, "seed" if kind == "seed" else "picture/view/part-pictures"))
+        for m in (r for r in rows if r["kind"] == kind):
+            usd = models.price_of(m)
+            print("  %-13s %-30s %-9s %-10s %s" % (m["key"], m["label"], "free" if usd == 0 else ("$%.2f" % usd if usd else "unpriced"),
+                                                   m["inputs"], m.get("notes") or m.get("command", "")))
+    print("aliases: " + ", ".join("%s = %s" % kv for kv in sorted(models.ALIASES.items())))
+    print('register a local model: ms models add <key> --kind seed --command "<exe> {image} {out} ..."')
+
+
+def cmd_seed(a):
+    """The whole object in ONE request (the default since 2026-09-29: one Hi3D v3 multi-view seed of the M4A1 scored
+    6.5 against 4.5 for the same model part by part): the approved views go to the model the owner picked, the mesh
+    is registered to the gridded side view, and a one-part plan is written when there is none. Zones on that part
+    then carry the other materials (glass, bare steel, rubber) and the Blender passes improve it."""
+    job = Job(a.job)
+    if not os.path.exists(job.path("plan", "side.png")) or not os.path.exists(job.path("plan", "dims.json")):
+        sys.exit("grid the approved views first: ms grid %s --side ref/ref_side.png --front ref/ref_front.png" % a.job)
+    m = models.resolve(a.model, kind="seed")
+    d = job.path("parts", a.part)
+    os.makedirs(d, exist_ok=True)
+    glb = os.path.join(d, "seed.glb")
+    if os.path.exists(glb) and not a.reseed:
+        sys.exit("%s already has a seed (%s); --reseed makes a new one (it costs again)" % (a.part, glb))
+    views = models.seed_views(job.spec.category, job.path("ref"), d)
+    primary = a.view or ("left" if job.spec.category == "weapon" else "hero")
+    if m.get("source") == "local command":
+        pics = [views[r] for r in ("hero", "left", "front", "back", "right", "top") if r in views]
+        pics = pics if m["inputs"] == "multiview" else [views.get(primary) or views["hero"]]
+        models.run_command(m, glb, image=pics[0], images=pics)
+        print("seed: %s (%s, free)" % (glb, m["label"]))
+    else:
+        if not str(m["endpoint"]).startswith("local/"):
+            os.environ["MASTERSMITH_NO_SPEND"] = "0"
+            config.NO_SPEND = False
+        urls = {r: job.fal.upload(p) for r, p in views.items()}
+        ep, payload = models.seed_payload(m, urls, primary)
+        used = [k for k in payload if k.endswith("_image_url")] or (["%d views" % len(payload["image_urls"])] if payload.get("image_urls") else [primary])
+        out = job.fal.run(ep, payload)
+        job.fal.download(first_url(out, (".glb",)), glb)
+        print("seed: %s (%s from %s, $%.2f)" % (glb, m["label"], ", ".join(used), job.fal.spent()))
+    plan_path = job.path("plan", "plan.json")
+    if a.replan or not os.path.exists(plan_path):
+        dims = json.load(open(job.path("plan", "dims.json")))["dims_m"]
+        finish = {"weapon": "metal", "prop": "painted"}.get(job.spec.category, "painted")
+        raw = {"parts": [{"name": a.part, "what": job.spec.description[:400], "method": "vendor", "side_box": [0, 100, 0, 100],
+                          "front_span": [0, 100], "material": {"color": "#808080", "finish": finish, "keep_texture": True}}],
+               "notes": "one seed for the whole object (%s)" % m["label"]}
+        json.dump(planmod.validate_plan(raw, dims), open(plan_path, "w"), indent=1)
+        if not os.path.exists(job.path("plan", "plan_draft.json")) or a.replan:
+            json.dump(raw, open(job.path("plan", "plan_draft.json"), "w"), indent=1)
+        print("plan: one part, %s, keeping the seed's own texture (plan/plan_draft.json)" % a.part)
+    shutil.copy2(job.path("plan", "side.png"), os.path.join(d, "side.png"))
+    part = _part(_plan(job), a.part)
+    _do_register(job, part, d, False, 0, 0)
+    json.dump({"keep_depth": True}, open(os.path.join(d, "fit.json"), "w"))       # the model saw the depth from its views
+    print("Next: Read seed_render.png; add zones to plan/plan_draft.json for the regions in another material (glass, "
+          "bare steel, rubber), ms plan, then ms assemble.")
+
+
 def cmd_part_pictures(a):
     job = Job(a.job)
     plan = _plan(job)
@@ -245,7 +354,7 @@ def cmd_part_pictures(a):
     d = job.path("parts", part["name"])
     os.makedirs(d, exist_ok=True)
     side = os.path.join(d, "side.png")
-    model = PICTURE_MODELS.get(a.model, a.model)
+    model = _picture_model(a.model)
     if a.no_side or keep_existing(side, a.redraw):
         print("side picture kept:", side)
     elif a.erased or (is_body(part, plan) and not a.drawn):
@@ -985,6 +1094,15 @@ def main(argv=None):
     s.add_argument("--no-materials", action="store_true", help="skip the CC0 smart-material pass (#15), for comparison")
     s.add_argument("--no-edge-break", action="store_true", help="leave code parts' edges razor sharp (no small round)"); s.set_defaults(fn=cmd_assemble)
     s = sub.add_parser("sheet"); s.add_argument("glb"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
+    s = sub.add_parser("models"); s.add_argument("action", nargs="?", default="list", choices=("list", "add", "remove"))
+    s.add_argument("key", nargs="?"); s.add_argument("--kind", default="seed", choices=("seed", "picture")); s.add_argument("--command")
+    s.add_argument("--inputs", default="single", choices=("single", "multiview")); s.add_argument("--label"); s.add_argument("--notes")
+    s.set_defaults(fn=cmd_models)
+    s = sub.add_parser("seed"); s.add_argument("job"); s.add_argument("--model", required=True, help="a seed model from ms models")
+    s.add_argument("--part", default="Body"); s.add_argument("--view", choices=("hero", "left", "front", "back", "top"),
+                                                             help="the picture a single-image model gets (default: the hero; a weapon's side)")
+    s.add_argument("--replan", action="store_true", help="write the one-part plan again"); s.add_argument("--reseed", action="store_true")
+    s.set_defaults(fn=cmd_seed)
     s = sub.add_parser("refs"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_refs)
     s = sub.add_parser("results"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_results)
     s = sub.add_parser("preview"); s.add_argument("job"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_preview)

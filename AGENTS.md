@@ -1,8 +1,9 @@
 # Master Smith - worked by a coding agent in this folder
 
-Master Smith builds game-ready hard-surface 3D assets (weapons, vehicles, aircraft, props) as ASSEMBLIES of parts:
-every part is drawn alone, meshed alone, registered to its picture and fitted into the box the plan gives it. Since
-2026-09-28 the owner works it from here: the coding agent (Claude Code, Codex, or another that reads this file) is
+Master Smith builds game-ready hard-surface 3D assets (weapons, vehicles, aircraft, props) from ONE whole-object seed
+by default (since 2026-09-29): the approved views go to the seed model the owner picks, and the Blender passes improve
+what comes back (material zones, glass, cockpit, fit, sharpen). An ASSEMBLY of parts - every part drawn alone, meshed
+alone and fitted into its box - only when the owner asks for it. Since 2026-09-28 the owner works it from here: the coding agent (Claude Code, Codex, or another that reads this file) is
 the director, planner and reviewer; the deterministic tools
 in `python -m mastersmith.ms` do the drawing, meshing, registering and assembling. No server, no web page, no
 container, no paid model API: the service, the chat app and the one-seed finish were deleted on 2026-09-28 (git
@@ -27,15 +28,16 @@ Agent-specific notes live in that agent's own file (`CLAUDE.md`, ...).
   `assemble.py` (fit, tint, zones, glass, sharpen, bore alignment, bake, LODs, previews), `six_views.py`.
 - `.env` holds FAL_KEY (git-ignored). NEVER print, echo, cat or grep the keys; never put them in a message.
 - Local models: TRELLIS.2 (`trellis-cli.exe`, E:/local-models) meshes for free; FLUX.2 klein draws locally
-  (`--model local`, weak). ComfyUI at E:/local-models/ComfyUI (Qwen-Image-Edit angles LoRA, unused so far).
+  (`--model local`, weak). Any other model running on this machine is registered by its command line
+  (`ms models add`, kept in the git-ignored `local_models.json`) and then used like a built-in one. ComfyUI at E:/local-models/ComfyUI (Qwen-Image-Edit angles LoRA, unused so far).
 
 ## What costs money
 
-- Nano Banana picture (`--model nano`, the default for `picture`, `view`, `part-pictures`): about $0.08 each,
-  the three-quarter picture too. A 14-part gun is about 28 pictures = ~$2.30. `nano-pro` costs more; use it only
-  for the hero reference picture.
-- TRELLIS local mesh (`mesh --vendor local`): free, ~1 min per part on this PC. Tripo (`--vendor tripo`,
-  tripo3d/h3.1) $0.60 per part (billed 2026-09-28; not $0.30). Hi3D v3 (`--vendor hitem3d3`) $2.10 per part - only when the owner asks for the paid mesher.
+- `ms models` lists every model with its price; the OWNER picks the picture model and the seed model for each job
+  (ask, with a recommendation; never pick silently). Pictures: Nano Banana (`nano`) about $0.08, `nano-pro` $0.15,
+  FLUX.2 klein on this PC free. A whole-object seed: Hi3D v3 multi-view (`hi3d-mv`) $2.10 - the best so far; Tripo
+  $0.60 (billed 2026-09-28; not $0.30); Meshy v7 $0.05; TRELLIS.2 on this PC free. A part build pays per part
+  (a 14-part gun: ~28 pictures, ~$2.30, plus a mesh per part).
 - Blender passes: free. Registration ~30 s, assembly 5-15 min, six views ~2 min.
 Say the estimate before a step that spends, in one line; never spend on a step the owner did not ask for.
 
@@ -51,7 +53,10 @@ Say the estimate before a step that spends, in one line; never spend on a step t
    the picture (`ms plan` samples them per part), not from guesses.
 4. Edges are crisp: the assembler sharpens planar faces; a soft-plastic look means the part picture was soft or the
    seed was bad - redraw or re-mesh, do not accept it.
-5. Hybrid since the evening of 2026-09-28 (the all-TRELLIS carbine came back "a mess": leaning sights, a rail that was
+5. One whole-object seed unless the owner asks for parts (2026-09-29: one Hi3D v3 multi-view M4A1 scored 6.5; the
+   same model part by part 4.5 for 11x the money, Tripo parts 2.5-3). Its other materials come from zones on the one
+   part; weak details are fixed in Blender, or replaced by a part after asking. For a part build (the owner asked),
+   hybrid since the evening of 2026-09-28 (the all-TRELLIS carbine came back "a mess": leaning sights, a rail that was
    an upper receiver, crumpled edges): SCULPTED parts (receiver, grip, handguard, a hull, a tyre) are meshed from their
    own pictures; MACHINED parts (rails, sights, trigger, charging handle, barrel, muzzle device, magazine, selector)
    are `"method": "code"` - built by `parts/<Part>/build.py` with the hard-surface kit (`ms build`), crisp by
@@ -107,6 +112,8 @@ surface detail onto it (for a part whose coded shape is not the drawn one: foldi
 | `picture <job> --out ref/ref_0.png --prompt "..." [--ref file] [--model nano\|nano-pro\|local]` | draws a picture |
 | `view <job> --which side\|front\|back\|top\|quarter --from ref/ref_0.png [--mirror] [--fixes "..."]` | one standard view of the same object |
 | `grid <job> --side ref/ref_side.png [--front ref/ref_front.png] [--mirror]` | crops to the silhouette, draws the percent grids, writes dims.json |
+| `models [add <key> --kind seed\|picture --command "..." [--inputs multiview] \| remove <key>]` | every seed and picture model with its price (built in: Hi3D v3, Tripo, Meshy, TRELLIS.2, FLUX.2, Nano Banana); `add` registers a model that runs on this machine by its command line: `{image}` / `{images}` / `{out}` (seed), `{prompt}` / `{prompt_file}` / `{refs}` / `{out}` (picture) |
+| `seed <job> --model <key> [--view hero\|left\|front] [--part Body] [--replan] [--reseed]` | the whole object in ONE request from the approved views (multi-view models get side, front, back and the mirrored side), registered to the gridded side view, with a one-part plan that keeps the seed's texture when there is none: the default build |
 | `plan <job> plan.json` | validates your plan, snaps thin parts, samples colours, writes plan/plan.json |
 | `part-pictures <job> <Part> [--fixes "..."] [--no-quarter] [--no-front] [--with-front] [--no-side]` | side picture of that part alone + its three-quarter picture. A side picture drawn facing the wrong way is turned round (kept in `unused/`). Only the body's three-quarter picture gets the whole-object front view (it made 8 of 13 parts come back as the whole rifle; `--with-front` for another part). An `interior` part is drawn as the insert that fills its box, with `fit_card.png` |
 | `build <job> <Part>` | a `"method": "code"` part: runs `parts/<Part>/build.py` (`def build(kit, L, W, H)`, kit in `mastersmith/blender/hskit.py`) -> `<Part>.blend` + side/front/iso renders |
