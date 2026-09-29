@@ -88,7 +88,12 @@ different, smaller change. Look at the six views after each pass and keep only w
   0.9 m wide and 1.3-1.4 m tall inside; a canopy 1.5-2.5 m long. The seed needs an open cockpit for it (redraw the
   views with the canopy open, or cut it); then a cockpit part (`"interior": true`, `ms cabin` for its box and fit card,
   its own pictures and seed) under the glass.
-- **Markings are paint**: stencils, numbers, stripes and painted vents stay in the texture, never geometry.
+- **Markings are paint**: stencils, numbers, stripes and painted vents stay in the texture, never geometry. A word
+  the seed blurred, embossed or mirrored gets a `"lettering"` box on the part (percent off the side grid, generous):
+  the picture's word prints whole on both sides and the relief is flattened. Check it in a close-up of each side,
+  lit AND unlit (base colour only): shading ghosts come from the seed's normal map or leftover slivers, not the paint.
+- **Cockpit behind glass**: the walls seen through the canopy are lined from behind (a dark matte inside) so the far
+  panels' backs and their mirrored lettering do not show; a better cockpit than the seed's is an interior part.
 - **Outline**: `$PY fit out/<Name> Body` bends the seed through a lattice onto its side picture and refuses a fit that
   would crumple the surface; `$PY brush` for a local fault you can name (AGENTS.md, "Sculpting without a mouse").
 - **Symmetry**: a seed broken on one side is repaired about the asset's own centre plane (not world Y=0), mirroring the

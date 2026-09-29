@@ -50,7 +50,9 @@ never the emissive part.
 Does it change the silhouette or cast a shadow? Two noes: paint. Stencils, numbers, stripes, roundels and painted
 vents are never modelled. A swappable decal is one flat quad named `Decal_<what>`, offset at most 1 mm from the
 surface. A marking on a whole-object seed lives in its kept texture; recolour a region through a zone, never by
-painting pixels on the atlas's irregular UV islands.
+painting pixels on the atlas's irregular UV islands. A painted word that the mesher blurred, mirrored or embossed
+(Tripo's POLICE came back as raised "TNALT") gets a `lettering` box in the plan (AGENTS.md): the picture's word is
+printed whole on both sides, reading the right way round, over a flattened panel.
 
 ## The seed's own texture (a whole-object seed keeps it)
 The one-part plan of `ms seed` keeps the vendor's texture (`keep_texture`): its camouflage, markings and its own

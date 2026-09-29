@@ -171,9 +171,22 @@ Two passes in `assemble` make the surfaces (both on by default; `--no-projection
   dirt in cavities and at joins, its wear and grain scaled to the asset's length (a rifle's grime was invisible on a
   14 m aircraft). The per-finish rules the plan should follow are in `mastersmith/skills/materials.md`.
 - **A kept texture** (a whole-object seed) keeps its colours and material split; its roughness is lifted to
-  0.35 + 0.65r when its mean is under 0.40 (Tripo seeds measured 0.17-0.27: glaze). Zones override it.
+  0.35 + 0.65r when its mean is under 0.40 (Tripo seeds measured 0.17-0.27: glaze). On a painted or polymer part
+  its metallic is capped at 0.12 and roughness floored at 0.30: Tripo mapped the Havoc's canopy hood as chrome and it
+  rendered black (2026-09-29); bare metal is a metal zone. Zones override it.
+- **Lettering**: `"lettering": [[x0, x1, z0, z1], ...]` on a part (percent boxes off the side grid, around each
+  painted word). Inside them the side picture prints at full strength over the mesher's own blurred copy, the far
+  side reads the box mirrored back so the word is not reversed, the mesher's embossed letters (Tripo's garbled
+  "TNALT") are laid onto the panel, and the seed's normal map gives way to the surface's own normal. Make a box
+  generous: Tripo's own letters ran past the picture's word.
+- **Cockpit lining**: a glass zone lines the walls seen through it from behind (`"line": false` turns it off). A
+  mesher's cockpit walls are one skin thick, and through the canopy the eye met the back of the far side's panels,
+  lettering mirrored. They get a dark matte inner copy of their own material (`MI_<Name>_Interior`, outside the atlas).
 - **Glass** is its own part: alpha 0.3, specular 0.45 (0.8 on grey read opaque), roughness 0.05, no normal map,
   blended, seen from both sides. Lights are `emissive` cores inside glass; glass is never emissive.
+- **Preview light** is calibrated so a matte surface renders near its own texture colour: the studio HDRI at 0.8
+  with a warm tint (2026-09-29: at 0.45 the Havoc rendered 30% darker and bluer than its texture and the reference).
+  Judge a colour against the reference only in these renders.
 - **Bake**: the margin grows with the atlas (max(4, size/128) px) and the gutters are dilated, so mipmaps do not bleed
   dark or gloss into the seams. Markings are paint in the texture, never geometry (materials.md).
 

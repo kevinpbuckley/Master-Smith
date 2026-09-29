@@ -1139,6 +1139,106 @@ def cut_out(o, mask, name):
     return g
 
 
+def line_interior(o, glass_objs, lo, hi, diag, thick=0.0015, name="Liner"):
+    """An inside for a cockpit seen through glass (owner, 2026-09-29: the Havoc's reversed SECURITY): a mesher's
+    cockpit walls are one skin thick, so through the canopy the eye met the BACK of the far side's outer panels, their
+    lettering and Tripo's embossed "TNALT" mirrored. The body's faces in the box (`lo`..`hi`) whose back can be seen
+    through the glass - a ray from just behind the face, straight in, tilted up, or towards the glass, meets glass
+    first - get a copy `thick` (of the diagonal) further in, facing into the cockpit: a dark matte lining, its own
+    material outside the atlas (sharing the skin's UVs would bake over the skin). -> (object or None, faces lined)"""
+    from mathutils.bvhtree import BVHTree
+    me = o.data
+    me.calc_loop_triangles()
+    co = np.empty(len(me.vertices) * 3, np.float64)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    tri = np.empty(len(me.loop_triangles) * 3, np.int64)
+    me.loop_triangles.foreach_get("vertices", tri)
+    tri = tri.reshape(-1, 3)
+    verts, polys, is_glass = [Vector(v) for v in co], tri.tolist(), [False] * len(tri)
+    gsum, gcount = Vector(), 0
+    for g in glass_objs:
+        gm = g.data
+        gm.calc_loop_triangles()
+        mw = g.matrix_world
+        base = len(verts)
+        verts += [mw @ v.co for v in gm.vertices]
+        polys += [[base + i for i in t.vertices] for t in gm.loop_triangles]
+        is_glass += [True] * len(gm.loop_triangles)
+        for v in gm.vertices:
+            gsum += mw @ v.co
+            gcount += 1
+    if not gcount:
+        return None, 0
+    gc = gsum / gcount
+    tree = BVHTree.FromPolygons(verts, polys)
+    n = len(me.polygons)
+    centres = np.empty(n * 3, np.float32)
+    me.polygons.foreach_get("center", centres)
+    centres = centres.reshape(-1, 3)
+    normals = np.empty(n * 3, np.float32)
+    me.polygons.foreach_get("normal", normals)
+    normals = normals.reshape(-1, 3)
+    cand = np.nonzero(np.all((centres >= np.asarray(lo)) & (centres <= np.asarray(hi)), axis=1))[0]
+    eps = diag * 1e-4
+    lined = np.zeros(n, bool)
+    for i in cand:
+        c, nr = Vector(centres[i]), Vector(normals[i])
+        start = c - nr * eps
+        for d in (-nr, (-nr + Vector((0, 0, 0.7))).normalized(), (gc - start).normalized()):
+            if d.length == 0 or d.dot(nr) > 0.2:
+                continue
+            hit = tree.ray_cast(start, d)
+            if hit[0] is not None and is_glass[hit[2]]:
+                lined[i] = True
+                break
+    if lined.sum() < 20:
+        return None, int(lined.sum())
+    # the lining shares welded vertices, pushed in along their area-weighted normals, so it has no cracks
+    weld = max(diag * 1e-5, 1e-9)
+    _, gid = np.unique(np.round(co / weld).astype(np.int64), axis=0, return_inverse=True)
+    gid = gid.ravel()
+    sel_tris = tri[lined[np.asarray([t.polygon_index for t in me.loop_triangles])]]
+    cross = np.cross(co[sel_tris[:, 1]] - co[sel_tris[:, 0]], co[sel_tris[:, 2]] - co[sel_tris[:, 0]])
+    acc = np.zeros((gid.max() + 1, 3))
+    for k in range(3):
+        np.add.at(acc, gid[sel_tris[:, k]], cross)
+    acc /= np.maximum(np.linalg.norm(acc, axis=1, keepdims=True), 1e-12)
+    groups, faces = {}, []
+    for t in sel_tris:
+        ids = []
+        for vi in t[::-1]:                       # reversed winding: the lining faces into the cockpit
+            gk = int(gid[vi])
+            if gk not in groups:
+                groups[gk] = len(groups)
+            ids.append(groups[gk])
+        faces.append(ids)
+    pos = np.zeros((len(groups), 3))
+    for gk, j in groups.items():
+        first = np.nonzero(gid == gk)[0][0]
+        pos[j] = co[first] - acc[gk] * (thick * diag)
+    lm = bpy.data.meshes.new(name)
+    lm.from_pydata(pos.tolist(), [], faces)
+    lm.uv_layers.new(name=me.uv_layers.active.name if me.uv_layers.active else "UVMap")
+    lm.update()
+    for poly in lm.polygons:
+        poly.use_smooth = True
+    lo_obj = bpy.data.objects.new(name, lm)
+    bpy.context.collection.objects.link(lo_obj)
+    lo_obj.matrix_world = o.matrix_world.copy()
+    return lo_obj, int(lined.sum())
+
+
+def interior_material(name, colour=(0.018, 0.02, 0.024), rough=0.8):
+    """The cockpit lining: dark grey, matte (the skills' cockpit: matte 0.7-0.9), no texture."""
+    m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+    b = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    b.inputs["Base Color"].default_value = (*colour, 1.0)
+    b.inputs["Metallic"].default_value = 0.0
+    b.inputs["Roughness"].default_value = rough
+    return m
+
+
 def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05):
     """See-through glass that reads in every viewer (Tonetta's glass skill, 2026-09-29): alpha 0.3 (below 0.2 the pane
     vanishes, above 0.7 it is paint), specular 0.45 (0.8 on grey mirrored the backdrop and read as opaque grey), no
@@ -1295,6 +1395,31 @@ def flatten_lettering(o, boxes, lo, hi, relief=0.012, planar=0.004):
             moved[touched] = True
     me.vertices.foreach_set("co", co.astype(np.float32).ravel())
     me.update()
+    if moved.any():
+        # the letters' walls are now slivers (their tops a few mm over their feet): welded and dissolved, or the
+        # normal bake's bevel traced every letter again as dark smudges (2026-09-29)
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        tag = bm.verts.layers.int.new("ms_moved")
+        bm.verts.ensure_lookup_table()
+        for i in np.nonzero(moved)[0]:
+            bm.verts[i][tag] = 1
+        region = [v for v in bm.verts if v[tag]]
+        bmesh.ops.remove_doubles(bm, verts=region, dist=0.0004 * diag)
+        region_edges = list({e for v in bm.verts if v.is_valid and v[tag] for e in v.link_edges})
+        bmesh.ops.dissolve_degenerate(bm, dist=0.0004 * diag, edges=region_edges)
+        bm.verts.ensure_lookup_table()
+        moved = np.array([bool(v[tag]) for v in bm.verts])
+        bm.verts.layers.int.remove(tag)
+        bm.to_mesh(me)
+        bm.free()
+        me.update()
+        co = np.empty(len(me.vertices) * 3, np.float64)
+        me.vertices.foreach_get("co", co)
+        co = co.reshape(-1, 3)
+        _, gid = np.unique(np.round(co / weld).astype(np.int64), axis=0, return_inverse=True)
+        gid = gid.ravel()
+        out["welded_to"] = int(len(me.vertices))
     if moved.any() and me.has_custom_normals:
         # a glTF seed carries its own normals: moved vertices keep the letters in their shading unless they take
         # the flattened surface's. Area-weighted, across seams: the letters' collapsed walls are slivers, and
@@ -1361,7 +1486,7 @@ def island_report(o, drop=False):
 
 # ---------------------------------------------------------------- parts in their boxes
 bpy.ops.wm.read_factory_settings(use_empty=True)
-parts, glass_parts = [], []
+parts, glass_parts, liner_parts = [], [], []
 # the whole object's box, from the plan: the frame the side grid's percents (lettering boxes) are read in
 ASSET_LO = [min(q["box_min"][i] for q in args["parts"]) for i in range(3)]
 ASSET_HI = [max(q["box_max"][i] for q in args["parts"]) for i in range(3)]
@@ -1402,6 +1527,17 @@ for p in args["parts"]:
                     glass_parts.append((g, {"name": "%s.%s%s" % (p["name"], z.get("name", "glass"), tag), "kind": "glass", **gstats}))
                 if made:
                     report.setdefault("glass_zones", []).append({"part": p["name"], "zone": z.get("name"), **gstats})
+                    if z.get("line", True):
+                        # the cockpit under the glass: its walls are one skin thick; line their backs
+                        lo_o, hi_o = blib.dims(o)
+                        dg = (hi_o - lo_o).length
+                        zlo = [z["box_min"][0] - 0.02 * dg, -1e9, lo_o.z]
+                        zhi = [z["box_max"][0] + 0.02 * dg, 1e9, z["box_max"][2] + 0.02 * dg]
+                        liner, lined = line_interior(o, [g for g, _t in made], zlo, zhi, dg, name="Liner_" + zname)
+                        report["glass_zones"][-1]["lined_faces"] = lined
+                        log("%s: %s lined %d faces seen through the glass from behind" % (p["name"], z.get("name"), lined))
+                        if liner is not None:
+                            liner_parts.append((liner, {"name": "%s.%s.lining" % (p["name"], z.get("name", "glass"))}))
                 continue
             zones_left.append(z)
         if args.get("islands", True):
@@ -1995,6 +2131,7 @@ def project_pictures(o, p, proj):
             rgb.outputs[0].default_value = tuple(base.default_value)
             colour = rgb.outputs[0]
         bump_h = None
+        letters_mask = None
         for view, path, detail, fr, vis_attr in views:
             img = bpy.data.images.load(os.path.abspath(path), check_existing=True)
             img.alpha_mode = "STRAIGHT"
@@ -2019,6 +2156,7 @@ def project_pictures(o, p, proj):
                     letters = inside if letters is None else op("MAXIMUM", letters, inside)
                 sides = ((u, op("MULTIPLY", face_y.outputs["Fac"], -1.0), vis_attr),                # near side, from -Y
                          (u_far, face_y.outputs["Fac"], vis_attr and vis_attr + "_far"))              # far side, from +Y
+                letters_mask = letters if letters is not None else letters_mask
             else:
                 cy, cz, W_, H_ = fr
                 u = op("ADD", op("DIVIDE", op("SUBTRACT", pos.outputs["Y"], cy), W_), 0.5)
@@ -2061,6 +2199,16 @@ def project_pictures(o, p, proj):
         for l in list(base.links):
             K.remove(l)
         K.new(colour, base)
+        if letters_mask is not None and b.inputs["Normal"].is_linked:
+            # the seed's own normal map carries its embossed letters (Tripo's "TNALT" shaded through the flattened
+            # panel and the painted word, 2026-09-29): inside the lettering boxes the surface's own normal wins
+            nmix = N.new("ShaderNodeMix")
+            nmix.data_type = "VECTOR"
+            nmix.clamp_factor = True
+            K.new(letters_mask, nmix.inputs["Factor"])
+            K.new(b.inputs["Normal"].links[0].from_socket, nmix.inputs[4])
+            K.new(geo.outputs["Normal"], nmix.inputs[5])
+            K.new(nmix.outputs[1], b.inputs["Normal"])
         if bump_h is not None and not b.inputs["Normal"].is_linked:
             bump = N.new("ShaderNodeBump")
             bump.inputs["Strength"].default_value = 0.35
@@ -2427,6 +2575,14 @@ for o, r in glass_parts:
     bpy.context.view_layer.objects.active = lod0
     bpy.ops.object.join()
 report["glass"] = {"parts": [r["name"] for _o, r in glass_parts]} if glass_parts else None
+# the cockpit lining keeps a matte slot of its own too
+for o, r in liner_parts:
+    o.data.materials.clear()
+    o.data.materials.append(interior_material("MI_%s_Interior" % NAME))
+    blib.select_only([lod0, o])
+    bpy.context.view_layer.objects.active = lod0
+    bpy.ops.object.join()
+report["lining"] = {"parts": [r["name"] for _o, r in liner_parts]} if liner_parts else None
 log("atlas %d baked: roughness %s, metallic %s, %.0f%% of the atlas used" % (size, report["roughness_mean"], report["metallic_mean"],
                                                                          report["atlas_coverage"] * 100))
 
