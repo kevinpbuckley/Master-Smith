@@ -322,6 +322,9 @@ def surface_detail(o, mat, strength=1.0, mats=None, vendor=False):
     # receiver like grey stone, owner 2026-09-29; white flecks over the pistol's slide, 2026-09-28)
     wear_k = 0.1 if vendor else 1.0
     grime_k = 0.25 if vendor else 1.0
+    # the noise sizes were set on a 0.84 m rifle: on a 14 m aircraft its grime was invisible (Tonetta scales wear with
+    # the asset's length, 2026-09-29), so they grow with the asset
+    size_k = min(1.2, max(0.06, 0.84 / max(float(args.get("length_m") or 0.84), 1e-3)))
     for m in (mats if mats is not None else {sl.material for sl in o.material_slots if sl.material and sl.material.node_tree}):
         t = m.node_tree
         b = next((n for n in t.nodes if n.type == "BSDF_PRINCIPLED"), None)
@@ -341,7 +344,7 @@ def surface_detail(o, mat, strength=1.0, mats=None, vendor=False):
         K.new(geo.outputs["Pointiness"], cavity.inputs["Value"])
         # a broken-up wear mask: edges wear unevenly
         wear_noise = N.new("ShaderNodeTexNoise")
-        wear_noise.inputs["Scale"].default_value = 60.0
+        wear_noise.inputs["Scale"].default_value = 60.0 * size_k
         wear_noise.inputs["Detail"].default_value = 8.0
         K.new(coord.outputs["Object"], wear_noise.inputs["Vector"])
         patches = N.new("ShaderNodeMapRange")           # wear in broken patches, not along every edge
@@ -388,7 +391,7 @@ def surface_detail(o, mat, strength=1.0, mats=None, vendor=False):
         K.new(grime.outputs["Result"], base)
         # fine grain in the normal (polymer texture / cast or machined metal), chained onto any normal map the seed has
         grain = N.new("ShaderNodeTexNoise")
-        grain.inputs["Scale"].default_value = 1600.0 if rubber else 900.0 if not metal else 2500.0
+        grain.inputs["Scale"].default_value = (1600.0 if rubber else 900.0 if not metal else 2500.0) * size_k
         grain.inputs["Detail"].default_value = 4.0
         if metal:
             # brushed: a fine grain drawn out along the part's length, 6x not 20x (20x made 14 mm stripes over a
@@ -776,6 +779,260 @@ def skin_from_seed(o, p, res=1024):
     return {"coverage": round(float(hit.mean()), 3)}
 
 
+LENGTH_M = float(args.get("length_m") or 1.0)
+EMISSIVE = {"strength": 0.0}
+
+
+def base_image(m):
+    """The colour image upstream of a material's base colour (a seed's texture), or None."""
+    if not m or not m.node_tree:
+        return None
+    b = next((n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    todo = [b.inputs["Base Color"].links[0].from_node] if b is not None and b.inputs["Base Color"].is_linked else []
+    seen = set()
+    while todo:
+        n = todo.pop()
+        if n.name in seen:
+            continue
+        seen.add(n.name)
+        if n.type == "TEX_IMAGE" and n.image is not None and n.image.size[0]:
+            return n.image
+        todo.extend(l.from_node for i in n.inputs for l in i.links)
+    return None
+
+
+def face_rgb(o):
+    """Each polygon's seed texture colour, the base-colour image at the polygon's UV centre -> (n, 3) or None.
+    Values are the image's stored colour (sRGB), as the glass predicates expect."""
+    me = o.data
+    img = next((base_image(m) for m in me.materials if base_image(m) is not None), None)
+    if img is None or not me.uv_layers.active:
+        return None
+    w, h = img.size
+    px = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(px)
+    px = px.reshape(h, w, 4)
+    n = len(me.polygons)
+    uv = np.empty(len(me.loops) * 2, np.float32)
+    me.uv_layers.active.data.foreach_get("uv", uv)
+    uv = uv.reshape(-1, 2)
+    start = np.empty(n, np.int64)
+    total = np.empty(n, np.int64)
+    me.polygons.foreach_get("loop_start", start)
+    me.polygons.foreach_get("loop_total", total)
+    c = np.add.reduceat(uv, start, axis=0) / total[:, None]
+    c = c % 1.0
+    return px[np.minimum((c[:, 1] * h).astype(int), h - 1), np.minimum((c[:, 0] * w).astype(int), w - 1), :3]
+
+
+def face_pairs(me, weld):
+    """Faces that share an edge, the vertices welded by position first (a GLB seed is split at every UV seam, so its
+    own edges stop at the seams) -> (face_a, face_b, edge face counts)."""
+    nv = len(me.vertices)
+    co = np.empty(nv * 3, np.float64)
+    me.vertices.foreach_get("co", co)
+    _, vid = np.unique(np.round(co.reshape(-1, 3) / max(weld, 1e-9)).astype(np.int64), axis=0, return_inverse=True)
+    vid = vid.ravel()
+    n = len(me.polygons)
+    lv = np.empty(len(me.loops), np.int64)
+    me.loops.foreach_get("vertex_index", lv)
+    start = np.empty(n, np.int64)
+    total = np.empty(n, np.int64)
+    me.polygons.foreach_get("loop_start", start)
+    me.polygons.foreach_get("loop_total", total)
+    nxt = np.arange(len(lv)) + 1
+    nxt[start + total - 1] = start
+    a, b = vid[lv], vid[lv[nxt]]
+    key = np.minimum(a, b) * (int(vid.max()) + 1) + np.maximum(a, b)
+    face = np.repeat(np.arange(n), total)
+    order = np.argsort(key, kind="stable")
+    ks, fs = key[order], face[order]
+    same = ks[1:] == ks[:-1]
+    _, counts = np.unique(ks, return_counts=True)
+    fa, fb = fs[:-1][same], fs[1:][same]
+    return np.concatenate([fa, fb]), np.concatenate([fb, fa]), counts
+
+
+def components(n, fa, fb, mask=None):
+    """Connected faces (union-find over the edge pairs, only faces in `mask`) -> a root id per face."""
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    sel = (mask[fa] & mask[fb]) if mask is not None else np.ones(len(fa), bool)
+    for x, y in zip(fa[sel].tolist(), fb[sel].tolist()):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+    return np.array([find(i) for i in range(n)])
+
+
+def pick_glass(o, z, mode, keep=4, min_run=40):
+    """A glass zone's faces picked the way Tonetta's forge picks them (glass/SKILL.md, 2026-09-29): inside the zone's
+    box (grown a little), the faces whose seed texture is painted like glass - "dark" (near-black or deep blue-grey)
+    or "lit" (pale, or a warm glow) - grown one ring into near-glass faces across seams, runs under `min_run` faces
+    dropped, holes closed, the `keep` largest patches kept. A box or normal test alone ships the canopy speckled
+    (the G-Police Havoc windshield, 2026-09-09). -> (face mask, stats)"""
+    me = o.data
+    n = len(me.polygons)
+    centres = np.empty(n * 3, np.float32)
+    me.polygons.foreach_get("center", centres)
+    centres = centres.reshape(-1, 3)
+    lo_o, hi_o = blib.dims(o)
+    diag = (hi_o - lo_o).length
+    lo, hi = np.array(z["box_min"]) - 0.02 * diag, np.array(z["box_max"]) + 0.02 * diag
+    inbox = np.all((centres >= lo) & (centres <= hi), axis=1)
+    fa, fb, _ = face_pairs(me, diag * 1e-5)
+    rgb = face_rgb(o) if mode != "box" else None
+    if rgb is None:
+        pick, near = inbox.copy(), inbox.copy()
+        mode = "box"
+    else:
+        mx, mn = rgb.max(axis=1), rgb.min(axis=1)
+        r, b = rgb[:, 0], rgb[:, 2]
+        if mode == "lit":
+            pick = (mx >= 0.30) | ((r - b >= 0.05) & (mx >= 0.08))
+            near = (mx >= 0.22) | ((r - b >= 0.03) & (mx >= 0.06))
+        else:
+            pick = (mx <= 0.22) & ((mx - mn) <= 0.35 * np.maximum(mx, 1e-6))
+            near = mx <= 0.35
+        pick &= inbox
+        near &= inbox
+    grown = pick.copy()
+    grown[fb[pick[fa] & near[fb]]] = True
+    roots = components(n, fa, fb, grown)
+    ids, counts = np.unique(roots[grown], return_counts=True)
+    grown &= ~np.isin(roots, ids[counts < min_run])
+    for _ in range(2):                                   # close holes: a face with two picked neighbours joins
+        hits = np.bincount(fa[grown[fb]], minlength=n)
+        grown |= (hits >= 2) & inbox
+    roots = components(n, fa, fb, grown)
+    ids, counts = np.unique(roots[grown], return_counts=True)
+    mask = grown & np.isin(roots, ids[np.argsort(-counts)[:keep]]) if len(ids) else grown
+    kept = np.sort(counts)[::-1][:keep] if len(ids) else np.array([0])
+    faces = int(mask.sum())
+    share = float(kept[0]) / max(faces, 1)
+    return mask, {"mode": mode, "faces": faces, "islands": int(min(len(ids), keep)), "islands_found": int(len(ids)),
+                  "largest_share": round(share, 3), "ok": bool(faces < 40 or (len(kept) <= 8 and share >= 0.6))}
+
+
+def cut_out(o, mask, name):
+    """The faces in `mask` moved out of `o` into an object of their own (UVs kept). -> the new object"""
+    g = o.copy()
+    g.data = o.data.copy()
+    bpy.context.collection.objects.link(g)
+    g.name = name
+    for ob, keep in ((g, mask), (o, ~mask)):
+        bm = bmesh.new()
+        bm.from_mesh(ob.data)
+        bm.faces.ensure_lookup_table()
+        bmesh.ops.delete(bm, geom=[f for f in bm.faces if not keep[f.index]], context="FACES")
+        bm.to_mesh(ob.data)
+        bm.free()
+        ob.data.validate()
+        ob.data.update()
+    return g
+
+
+def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05):
+    """See-through glass that reads in every viewer (Tonetta's glass skill, 2026-09-29): alpha 0.3 (below 0.2 the pane
+    vanishes, above 0.7 it is paint), specular 0.45 (0.8 on grey mirrored the backdrop and read as opaque grey), no
+    normal map, blended, both sides drawn."""
+    m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+    b = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    b.inputs["Base Color"].default_value = (*tint, 1.0)
+    b.inputs["Metallic"].default_value = 0.0
+    b.inputs["Roughness"].default_value = rough
+    b.inputs["Alpha"].default_value = alpha
+    if "Specular IOR Level" in b.inputs:
+        b.inputs["Specular IOR Level"].default_value = 0.45
+    for l in list(b.inputs["Normal"].links):
+        m.node_tree.links.remove(l)
+    m.surface_render_method = "BLENDED"
+    m.use_backface_culling = False
+    m["ms_glass"] = True
+    return m
+
+
+def lift_roughness(mats, floor=0.35, trigger=0.40):
+    """A kept texture's roughness brought off glaze: when its mean is under 0.40 it becomes 0.35 + 0.65 r (Tonetta's
+    seed pass; Tripo seeds measured 0.17-0.27 and read as glazed plastic, 2026-09-29). -> the means it found"""
+    found = []
+    for m in mats:
+        t = m.node_tree
+        b = next((n for n in t.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if b is None:
+            continue
+        inp = b.inputs["Roughness"]
+        if not inp.is_linked:
+            if inp.default_value < trigger:
+                found.append(round(float(inp.default_value), 3))
+                inp.default_value = floor + (1 - floor) * inp.default_value
+            continue
+        src = inp.links[0].from_socket
+        node, chan = src.node, None
+        if node.type in ("SEPARATE_COLOR", "SEPRGB"):
+            chan = {"Red": 0, "R": 0, "Green": 1, "G": 1, "Blue": 2, "B": 2}.get(src.name, 1)
+            node = node.inputs[0].links[0].from_node if node.inputs[0].is_linked else None
+        if node is None or node.type != "TEX_IMAGE" or node.image is None or not node.image.size[0]:
+            continue
+        w, h = node.image.size
+        px = np.empty(w * h * 4, np.float32)
+        node.image.pixels.foreach_get(px)
+        px = px.reshape(-1, 4)[::7]
+        mean = float(px[:, chan].mean() if chan is not None else px[:, :3].mean())
+        found.append(round(mean, 3))
+        if mean < trigger:
+            mr = t.nodes.new("ShaderNodeMapRange")
+            mr.inputs["To Min"].default_value = floor
+            mr.inputs["To Max"].default_value = 1.0
+            t.links.new(src, mr.inputs["Value"])
+            t.links.new(mr.outputs["Result"], inp)
+    return found
+
+
+def island_report(o, drop=False):
+    """Loose pieces, open edges and non-manifold edges of a seed, measured (Tonetta: vendor geometry is measured, not
+    policed). With `drop`, only the far, small islands (under 0.5% of the faces and more than 2% of the length away
+    from the main body) are deleted: a latch or a bar is a small island too."""
+    me = o.data
+    n = len(me.polygons)
+    lo, hi = blib.dims(o)
+    diag = (hi - lo).length
+    fa, fb, counts = face_pairs(me, diag * 1e-5)
+    roots = components(n, fa, fb)
+    ids, sizes = np.unique(roots, return_counts=True)
+    main = ids[np.argmax(sizes)]
+    centres = np.empty(n * 3, np.float32)
+    me.polygons.foreach_get("center", centres)
+    centres = centres.reshape(-1, 3)
+    mlo, mhi = centres[roots == main].min(axis=0), centres[roots == main].max(axis=0)
+    far_small = []
+    for i, k in zip(ids, sizes):
+        if i == main or k >= 0.005 * n:
+            continue
+        c = centres[roots == i]
+        gap = np.maximum(np.maximum(mlo - c.max(axis=0), c.min(axis=0) - mhi), 0).max()
+        if gap > 0.02 * LENGTH_M:
+            far_small.append(int(i))
+    rep_ = {"islands": int(len(ids)), "far_small": len(far_small),
+            "open_edges": round(float((counts == 1).mean()), 4), "non_manifold": round(float((counts > 2).mean()), 4)}
+    if drop and far_small:
+        dead = np.isin(roots, far_small)
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        bm.faces.ensure_lookup_table()
+        bmesh.ops.delete(bm, geom=[f for f in bm.faces if dead[f.index]], context="FACES")
+        bm.to_mesh(me)
+        bm.free()
+        me.update()
+        rep_["dropped_faces"] = int(dead.sum())
+    return rep_
+
+
 # ---------------------------------------------------------------- parts in their boxes
 bpy.ops.wm.read_factory_settings(use_empty=True)
 parts, glass_parts = [], []
@@ -792,7 +1049,28 @@ for p in args["parts"]:
     if p["kind"] == "code" and args.get("detail") and p.get("reference_detail", True) and not glass and not rec.get("skin"):
         rec["reference_detail"] = add_reference_detail(o, args["detail"])
     if p["kind"] == "vendor" and not (p.get("material") or {}).get("glass") and args.get("tint_vendor", True):
-        zoned = split_zones(o, p.get("zones") or [])
+        pm0 = p.get("material") or {}
+        zones_left = []
+        for z in p.get("zones") or []:
+            zm0 = z.get("material") or {}
+            mode = z.get("pick") or ("dark" if pm0.get("keep_texture") else "box")
+            if (zm0.get("glass") or zm0.get("finish") == "glass") and mode != "atlas":
+                # the glass is CUT OUT of the seed into a see-through part (2026-09-29, from Tonetta's forge): a
+                # darkened patch of the atlas read as paint on every canopy
+                mask, gstats = pick_glass(o, z, mode, keep=int(z.get("keep", 4)))
+                log("%s: glass zone %s picked %s" % (p["name"], z.get("name"), gstats))
+                if gstats["faces"] >= 20:
+                    g = cut_out(o, mask, "Glass_%s_%s" % (p["name"], z.get("name", "glass")))
+                    g.data.materials.clear()
+                    g.data.materials.append(glass_material("MI_%s_Glass" % NAME))
+                    glass_parts.append((g, {"name": "%s.%s" % (p["name"], z.get("name", "glass")), "kind": "glass", **gstats}))
+                    report.setdefault("glass_zones", []).append({"part": p["name"], "zone": z.get("name"), **gstats})
+                continue
+            zones_left.append(z)
+        if args.get("islands", True):
+            rec["islands"] = island_report(o, drop=bool(args.get("drop_floaters")))
+            log("%s: islands %s" % (p["name"], rec["islands"]))
+        zoned = split_zones(o, zones_left)
         in_zone = set().union(*[m for _z, m in zoned]) if zoned else set()
         rest = {sl.material for sl in o.material_slots if sl.material and sl.material.node_tree} - in_zone
         pm = p.get("material") or {}
@@ -807,6 +1085,8 @@ for p in args["parts"]:
         if not keep:
             rec["tinted"] = tint_to_plan(o, pm.get("color"), rest, metal=bool(pm.get("metal")), force=bool(pm.get("color_lock")))
             rec["surface_planned"] = surface_to_plan(o, pm, rest)
+        else:
+            rec["roughness_lift"] = lift_roughness(rest)
         rec["kept_texture"] = keep
         if args.get("surface_detail", True):
             rec["surface_detail"] = surface_detail(o, pm, mats=rest, vendor=True)
@@ -819,6 +1099,21 @@ for p in args["parts"]:
                 continue
             tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")))
             surface_to_plan(o, zm, mats)
+            if zm.get("finish") == "emissive":
+                # a lamp, a screen, an engine glow: its colour emitted, baked into T_<Name>_E; the strength (6-12, 1-2
+                # only reads as a bright surface) is set on the final material (Tonetta's materials skill)
+                for m in mats:
+                    b = next((n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+                    if b is None:
+                        continue
+                    src = b.inputs["Base Color"]
+                    if src.is_linked:
+                        m.node_tree.links.new(src.links[0].from_socket, b.inputs["Emission Color"])
+                    else:
+                        b.inputs["Emission Color"].default_value = tuple(src.default_value)
+                    b.inputs["Emission Strength"].default_value = 1.0
+                EMISSIVE["strength"] = max(EMISSIVE["strength"], float(z.get("strength") or zm.get("strength") or 8.0))
+                continue
             if args.get("surface_detail", True):
                 surface_detail(o, zm, mats=mats, vendor=True)
         rec["zones"] = [z.get("name") for z, _m in zoned]
@@ -1601,8 +1896,9 @@ scn.cycles.device = "CPU"
 scn.cycles.samples = 1
 blib.select_only([high, lod0])
 bpy.context.view_layer.objects.active = lod0
-bake_kw = dict(use_selected_to_active=True, cage_extrusion=diag * 0.0015, max_ray_distance=diag * 0.006, margin=4,
-               use_clear=True, target="IMAGE_TEXTURES")
+# the margin grows with the atlas (a 4 px margin at 4096 let mipmaps bleed the gutter into the seams, Tonetta's bake)
+bake_kw = dict(use_selected_to_active=True, cage_extrusion=diag * 0.0015, max_ray_distance=diag * 0.006,
+               margin=max(4, size // 128), margin_type="ADJACENT_FACES", use_clear=True, target="IMAGE_TEXTURES")
 
 
 def bake(tag, kind, colour, **extra):
@@ -1658,7 +1954,39 @@ try:
     metal = bake("M", "EMIT", False)
 finally:
     restore(undo)
-normal = bake("N", "NORMAL", False, normal_space="TANGENT")
+
+
+def bevel_normals(radius):
+    """Blender's Bevel shader on every HIGH material's normal for the normal bake: every edge of the seed carries a
+    small round in the baked normal map, without new geometry (Tonetta: "a perfectly sharp edge reads as fake",
+    2026-09-29). -> undo list"""
+    undo = []
+    for m in {s.material for s in high.material_slots if s.material and s.material.node_tree}:
+        t = m.node_tree
+        b = next((n for n in t.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if b is None or m.get("ms_glass"):
+            continue
+        bev = t.nodes.new("ShaderNodeBevel")
+        bev.samples = 8
+        bev.inputs["Radius"].default_value = radius
+        prev = b.inputs["Normal"].links[0].from_socket if b.inputs["Normal"].is_linked else None
+        if prev is not None:
+            t.links.new(prev, bev.inputs["Normal"])
+        t.links.new(bev.outputs["Normal"], b.inputs["Normal"])
+        undo.append((t, b, prev, bev))
+    return undo
+
+
+bev_undo = bevel_normals(float(args["bevel_m"])) if args.get("bevel_m") else []
+try:
+    normal = bake("N", "NORMAL", False, normal_space="TANGENT")
+finally:
+    for t, b, prev, bev in bev_undo:
+        t.nodes.remove(bev)
+        if prev is not None:
+            t.links.new(prev, b.inputs["Normal"])
+report["bevel_mm"] = round(float(args.get("bevel_m") or 0) * 1000, 2)
+emit = bake("E", "EMIT", True) if EMISSIVE["strength"] > 0 else None
 scn.cycles.samples = 16
 scn.world = scn.world or bpy.data.worlds.new("World")
 scn.world.light_settings.distance = max(diag * 0.015, 0.003)
@@ -1682,7 +2010,32 @@ covered = pixels(ao)[:, :, 0] > 0.001            # texels a part landed on; the 
 report["roughness_mean"] = round(float(px[:, :, 1][covered].mean()), 3) if covered.any() else None
 report["metallic_mean"] = round(float(px[:, :, 2][covered].mean()), 3) if covered.any() else None
 report["atlas_coverage"] = round(float(covered.mean()), 3)
-for img, tag in ((bc, "BC"), (normal, "N"), (orm, "ORM")):
+
+
+def dilate(img, covered, steps=None):
+    """The gutter around each UV island filled with its neighbours' colour, so mipmaps do not darken or gloss the
+    seams (Tonetta's texdetail.dilate): each step, every uncovered texel next to a covered one takes their mean."""
+    a = pixels(img).copy()
+    have = covered.copy()
+    for _ in range(steps or max(8, img.size[0] // 128)):
+        acc = np.zeros_like(a[:, :, :3])
+        cnt = np.zeros(have.shape, np.float32)
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            h_ = np.roll(have, (dy, dx), axis=(0, 1))
+            acc += np.roll(a[:, :, :3], (dy, dx), axis=(0, 1)) * h_[:, :, None]
+            cnt += h_
+        grow = (~have) & (cnt > 0)
+        if not grow.any():
+            break
+        a[:, :, :3][grow] = acc[grow] / cnt[grow][:, None]
+        have |= grow
+    img.pixels.foreach_set(a.ravel())
+
+
+maps_out = [(bc, "BC"), (normal, "N"), (orm, "ORM")] + ([(emit, "E")] if emit is not None else [])
+for img, tag in maps_out:
+    dilate(img, covered)
+for img, tag in maps_out:
     img.filepath_raw = os.path.join(OUT, "T_%s_%s.png" % (NAME, tag))
     img.file_format = "PNG"
     img.save()
@@ -1704,15 +2057,17 @@ t_n.image = normal
 nm = nt.nodes.new("ShaderNodeNormalMap")
 nt.links.new(t_n.outputs["Color"], nm.inputs["Color"])
 nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
+if emit is not None:
+    t_e = nt.nodes.new("ShaderNodeTexImage")
+    t_e.image = emit
+    nt.links.new(t_e.outputs["Color"], bsdf.inputs["Emission Color"])
+    bsdf.inputs["Emission Strength"].default_value = EMISSIVE["strength"]
+    report["emissive_strength"] = EMISSIVE["strength"]
 bpy.data.objects.remove(high, do_unlink=True)
 
 # glass parts keep a glass slot of their own, outside the atlas
 for o, r in glass_parts:
-    g = bpy.data.materials.get("MI_%s_Glass" % NAME) or bpy.data.materials.new("MI_%s_Glass" % NAME)
-    gb = next(n for n in g.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-    gb.inputs["Base Color"].default_value = (0.05, 0.07, 0.08, 1)
-    gb.inputs["Roughness"].default_value = 0.05
-    gb.inputs["Alpha"].default_value = 0.25
+    g = glass_material("MI_%s_Glass" % NAME)
     o.data.materials.clear()
     o.data.materials.append(g)
     blib.select_only([lod0, o])
@@ -1848,6 +2203,27 @@ report["files"].append(os.path.basename(p))
 report["files"] += [m["file"] for m in report["maps"]]
 report["engine"] = args.get("engine", "unreal")
 report["materials"] = [m.name for m in lod0.data.materials if m]
+# the delivery gate (Tonetta's gate.py, 2026-09-29): measured, reported, never silently passed
+warn = []
+if report["lods"] and report["lods"][0]["triangles"] > int(args["tri_budget"]) * 1.05:
+    warn.append("LOD0 %d tris over the %d budget" % (report["lods"][0]["triangles"], int(args["tri_budget"])))
+roles = {m["role"] for m in report["maps"]}
+warn += ["no %s map" % r for r in ("BC", "N", "ORM") if r not in roles]
+want = float((args.get("spec") or {}).get("size_m") or 0)
+if want and report.get("dimensions_m") and abs(report["dimensions_m"][0] - want) > 0.1 * want:
+    warn.append("length %.3f m is more than 10%% off the brief's %.3f m" % (report["dimensions_m"][0], want))
+if ((args.get("spec") or {}).get("glass") or any((z.get("material") or {}).get("glass") for q in args["parts"] for z in q.get("zones") or [])) \
+        and not report.get("glass"):
+    warn.append("glass was asked for but none was made")
+for z in report.get("glass_zones") or []:
+    if not z.get("ok"):
+        warn.append("glass zone %s is speckled (%d islands, largest %.0f%%)" % (z["zone"], z["islands"], z["largest_share"] * 100))
+if report.get("roughness_mean") is not None and report["roughness_mean"] < 0.3:
+    warn.append("mean roughness %.2f reads as glaze (under 0.3)" % report["roughness_mean"])
+if (report.get("collision") or {}).get("triangles", 0) > 256:
+    warn.append("collision hull %d tris (over 256)" % report["collision"]["triangles"])
+report["gate"] = {"ok": not warn, "warnings": warn}
+log("gate: %s" % ("ok" if not warn else "; ".join(warn)))
 with open(os.path.join(OUT, "report.json"), "w") as f:
     json.dump(report, f, indent=1)
 log("done")

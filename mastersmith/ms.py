@@ -287,14 +287,49 @@ def cmd_models(a):
         print("removed %s from %s" % (a.key, models.registry_path()))
         return
     rows = sorted(models.all_models().values(), key=lambda m: (m["kind"], m["source"], m["key"]))
-    for kind in ("seed", "picture"):
-        print("%s models (ms %s --model <key>):" % (kind, "seed" if kind == "seed" else "picture/view/part-pictures"))
+    for kind in ("seed", "texture", "picture"):
+        print("%s models (ms %s --model <key>):" % (kind, {"seed": "seed", "texture": "retexture"}.get(kind, "picture/view/part-pictures")))
         for m in (r for r in rows if r["kind"] == kind):
             usd = models.price_of(m)
             print("  %-13s %-30s %-9s %-10s %s" % (m["key"], m["label"], "free" if usd == 0 else ("$%.2f" % usd if usd else "unpriced"),
                                                    m["inputs"], m.get("notes") or m.get("command", "")))
     print("aliases: " + ", ".join("%s = %s" % kv for kv in sorted(models.ALIASES.items())))
     print('register a local model: ms models add <key> --kind seed --command "<exe> {image} {out} ..."')
+
+
+def cmd_retexture(a):
+    """A new texture for the whole seed from a mesh-to-texture model (the owner picks it; Meshy v5 retexture by default),
+    painted onto the seed's own UVs and guided by the approved hero picture and the brief: every side gets texture,
+    not only the sides the pictures saw (Tonetta's retexture pass, 2026-09-29). The registered mesh goes out with one
+    UV layer and no maps, comes back fitted onto its own bounds; registered_before_retexture.blend is the undo."""
+    job = Job(a.job)
+    m = models.resolve(a.model, kind="texture")
+    d = job.path("parts", a.part)
+    blend = os.path.join(d, "registered.blend")
+    if not os.path.exists(blend):
+        sys.exit("no registered seed for %s: ms seed first" % a.part)
+    geo = os.path.join(d, "retexture_input.glb")
+    _blender(job, "swap_seed.py", {"mode": "export", "blend": blend, "out_glb": geo}, "retexture_export_%s" % a.part)
+    if os.path.getsize(geo) > 18 * 1024 * 1024:
+        sys.exit("the seed's geometry is %.0f MB; the retexture model takes 18 MB at most" % (os.path.getsize(geo) / 1e6))
+    os.environ["MASTERSMITH_NO_SPEND"] = "0"
+    config.NO_SPEND = False
+    hero = job.path("ref", "ref_0.png")
+    payload = {"model_url": job.fal.upload(geo), "text_style_prompt": (a.prompt or job.spec.description)[:600],
+               "enable_original_uv": True, "enable_pbr": True, "enable_safety_checker": False}
+    if os.path.exists(hero) and not a.no_picture:
+        payload["image_style_url"] = job.fal.upload(hero)
+    out = job.fal.run(m["endpoint"], payload)
+    glb = os.path.join(d, "retextured.glb")
+    job.fal.download(first_url(out, (".glb",)), glb)
+    print("retextured: %s (%s, $%.2f)" % (glb, m["label"], job.fal.spent()))
+    backup = os.path.join(d, "registered_before_retexture.blend")
+    if not os.path.exists(backup):
+        shutil.copy2(blend, backup)
+    res = os.path.join(d, "retexture.json")
+    _blender(job, "swap_seed.py", {"mode": "import", "blend": backup, "glb": glb, "out_blend": blend,
+                                   "out_render": os.path.join(d, "seed_render.png"), "out_json": res}, "retexture_import_%s" % a.part)
+    print("in place: %s (%s); the old mesh is %s. Read seed_render.png, then ms assemble." % (blend, json.load(open(res)), backup))
 
 
 def cmd_seed(a):
@@ -311,7 +346,7 @@ def cmd_seed(a):
     glb = os.path.join(d, "seed.glb")
     if os.path.exists(glb) and not a.reseed:
         sys.exit("%s already has a seed (%s); --reseed makes a new one (it costs again)" % (a.part, glb))
-    views = models.seed_views(job.spec.category, job.path("ref"), d)
+    views = models.seed_views(job.spec.category, job.path("ref"), d, mirror=a.mirror_far_side)
     primary = a.view or ("left" if job.spec.category == "weapon" else "hero")
     if m.get("source") == "local command":
         pics = [views[r] for r in ("hero", "left", "front", "back", "right", "top") if r in views]
@@ -864,7 +899,10 @@ def cmd_assemble(a):
             "atlas_size": 4096 if (job.spec.tri_budget or 0) >= 100000 else 2048, "render_size": 768, "spec": job.spec.to_dict(),
             "reference": ref if os.path.exists(ref) else None, "parts": parts, "detail": det, "sharpen": not a.no_sharpen,
             # a machined edge's break: 0.08% of the asset's length (0.7 mm on a rifle, 12 mm on a helicopter), capped per part
-            "edge_break_m": 0.0 if a.no_edge_break else 0.0008 * float(plan["dims_m"][0])}
+            "edge_break_m": 0.0 if a.no_edge_break else 0.0008 * float(plan["dims_m"][0]),
+            # every edge's small round, baked into the normal map from the Bevel shader (Tonetta: a razor edge reads
+            # as fake, 2026-09-29): 0.2% of the asset's length
+            "bevel_m": 0.0 if a.no_bevel else 0.002 * float(plan["dims_m"][0]), "drop_floaters": bool(a.drop_floaters)}
     _blender(job, "assemble.py", args, "assemble")
     rep = json.load(open(os.path.join(delivery, "report.json")))
     sheet = six_view_sheet(job, delivery)
@@ -1023,7 +1061,10 @@ def cmd_package(a):
     job = Job(a.job)
     rep = json.load(open(job.path("delivery", "report.json")))
     review = json.load(open(job.path("delivery", "review.json"))) if os.path.exists(job.path("delivery", "review.json")) else None
-    print(write_package(job.spec, rep, {"review": review, "gate": {"ok": True}, "rig": {}}, job.path("delivery")))
+    gate = rep.get("gate") or {"ok": True, "warnings": ["assembled before the delivery gate existed"]}
+    for w in gate.get("warnings") or []:
+        print("  gate: " + w)
+    print(write_package(job.spec, rep, {"review": review, "gate": gate, "rig": {}}, job.path("delivery")))
 
 
 def cmd_status(a):
@@ -1092,7 +1133,10 @@ def main(argv=None):
     s = sub.add_parser("assemble"); s.add_argument("job"); s.add_argument("--parts"); s.add_argument("--no-sharpen", action="store_true")
     s.add_argument("--no-projection", action="store_true", help="skip the picture projection (#14), for comparison")
     s.add_argument("--no-materials", action="store_true", help="skip the CC0 smart-material pass (#15), for comparison")
-    s.add_argument("--no-edge-break", action="store_true", help="leave code parts' edges razor sharp (no small round)"); s.set_defaults(fn=cmd_assemble)
+    s.add_argument("--no-edge-break", action="store_true", help="leave code parts' edges razor sharp (no small round)")
+    s.add_argument("--no-bevel", action="store_true", help="no small round baked into the normal map")
+    s.add_argument("--drop-floaters", action="store_true", help="delete the far, small loose islands of a seed (they are reported anyway)")
+    s.set_defaults(fn=cmd_assemble)
     s = sub.add_parser("sheet"); s.add_argument("glb"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
     s = sub.add_parser("models"); s.add_argument("action", nargs="?", default="list", choices=("list", "add", "remove"))
     s.add_argument("key", nargs="?"); s.add_argument("--kind", default="seed", choices=("seed", "picture")); s.add_argument("--command")
@@ -1102,7 +1146,12 @@ def main(argv=None):
     s.add_argument("--part", default="Body"); s.add_argument("--view", choices=("hero", "left", "front", "back", "top"),
                                                              help="the picture a single-image model gets (default: the hero; a weapon's side)")
     s.add_argument("--replan", action="store_true", help="write the one-part plan again"); s.add_argument("--reseed", action="store_true")
+    s.add_argument("--mirror-far-side", action="store_true", help="give a multi-view model the side view mirrored as the far side (weapons get it anyway)")
     s.set_defaults(fn=cmd_seed)
+    s = sub.add_parser("retexture"); s.add_argument("job"); s.add_argument("--model", default="meshy-retexture")
+    s.add_argument("--part", default="Body"); s.add_argument("--prompt", help="the texture described (default: the brief)")
+    s.add_argument("--no-picture", action="store_true", help="text only, no hero picture as the style guide")
+    s.set_defaults(fn=cmd_retexture)
     s = sub.add_parser("refs"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_refs)
     s = sub.add_parser("results"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_results)
     s = sub.add_parser("preview"); s.add_argument("job"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_preview)

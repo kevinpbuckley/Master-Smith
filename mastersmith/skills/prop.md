@@ -16,8 +16,9 @@ a wooden crate is 0.6, an oil drum 0.9, a workbench 1.8.
 
 A simple box or cylinder still comes back better textured from the vendor than from a procedural
 material, so props seed like everything else. Multiview is rarely worth paying for on a prop unless one
-side differs a lot (a control panel, a poster on one face).
+side differs a lot (a control panel, a poster on one face). Stencils and labels are paint in the texture, never
+geometry (materials.md).
 
 Finishing: origin at the bottom centre so the prop sits on the floor, longest horizontal axis along +X,
-real size in metres, convex hull collision. Realism check: wood should read as wood grain not lacquer,
-metal edges may show wear, and the object should be one object, not a cluster.
+real size in metres, convex hull collision. Roughness ~0.7 overall; wood 0.65-0.85. Realism check: wood should read
+as wood grain not lacquer, metal edges may show wear, and the object should be one object, not a cluster.

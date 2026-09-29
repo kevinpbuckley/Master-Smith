@@ -26,6 +26,7 @@ FAL_PRICES = {
     "tripo3d/h3.1/multiview-to-3d": 0.30,
     "fal-ai/hyper3d/rodin/v2": 0.40,
     "fal-ai/meshy/v5/remesh": 0.20,
+    "fal-ai/meshy/v5/retexture": 0.30,           # CALIBRATE: Tonetta's forge priced it at ~$0.30 (2026-09-29)
     "fal-ai/sam-3/image": 0.005,                 # text-prompted segmentation masks (glass, wheels)
     "fal-ai/hunyuan-3d/v3.1/part": 0.45,         # split a fused mesh (FBX, <=30k faces) into parts
     "fal-ai/meshy/rigging": 0.20,                # humanoid auto-rig from a GLB; +0.12 with enable_animation

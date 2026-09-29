@@ -368,8 +368,16 @@ def validate_plan(raw, dims, max_parts=None):
                     zmin, zmax = to_metres(z.get("side_box") or [], z.get("front_span") or p["front_span"], dims)
                 except (ValueError, TypeError):
                     continue
-                zones.append({"name": clean_name(z.get("name"), set()), "box_min": zmin, "box_max": zmax,
-                              "side_box": [pct(v) for v in z["side_box"]], "material": clean_material(z.get("material"))})
+                zone = {"name": clean_name(z.get("name"), set()), "box_min": zmin, "box_max": zmax,
+                        "side_box": [pct(v) for v in z["side_box"]], "material": clean_material(z.get("material"))}
+                # 2026-09-29: how a glass zone's faces are picked (dark / lit / box / atlas), how many patches it keeps,
+                # and an emissive zone's strength
+                if z.get("pick") in ("dark", "lit", "box", "atlas"):
+                    zone["pick"] = z["pick"]
+                for key in ("keep", "strength"):
+                    if isinstance(z.get(key), (int, float)):
+                        zone[key] = z[key]
+                zones.append(zone)
             part["zones"] = zones
         parts.append(part)
     if len(parts) > max_parts:

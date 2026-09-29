@@ -11,18 +11,17 @@ glass_prompt: window glass
 ---
 # Environment pieces (buildings, walls, bunkers, ruins, rocks, kit pieces)
 
-For traversable organic interiors, keep authored scale, pivots and passage collision.
-Read `docs/ORGANIC_SURFACES.md` for texture density, normal splits and the Unreal
-LOD-section material mapping pitfall. The generic prop finish recentres/scales and
-generates convex collision; handle the mesh in the engine when those operations would
-break level placement or passages.
-
 One structure, plain white background, three-quarter view so the roof and two facades show. Name the
 construction materials (sandbags, concrete, corrugated steel, stone, timber) and the footprint in
 metres. A single building or ruin seeds well; a whole street does not - split it into pieces and build
-each as its own asset.
+each as its own asset. For traversable interiors, keep authored scale, pivots and passage openings: the generic
+finish recentres, scales and generates convex collision, so handle such a mesh in the engine when those would break
+level placement.
 
 Finishing: origin at the bottom centre on the ground plane, longest horizontal axis along +X, real
-footprint in metres. Collision is a convex hull, which is coarse for hollow buildings - the customer
-should use complex-as-simple collision in the engine if they need to walk inside. Realism check: stone
-and concrete must be matte, windows should read as openings or glass, and the structure must sit flat.
+footprint in metres. Collision is a convex hull, which is coarse for hollow buildings - use complex-as-simple
+collision in the engine to walk inside. A window pane gets an interior wall or floor set a little way back, so the
+glass has depth.
+
+Realism check: stone and concrete matte (0.80-0.95; ~0.8 overall), windows read as openings or glass, markings are
+paint, and the structure sits flat.

@@ -30,3 +30,13 @@ def test_skin_edge_break_interior_flags_pass_through():
     assert by["Barrel"]["skin"] is True and by["Barrel"]["edge_break"] is False
     assert by["Cockpit"]["interior"] is True
     assert "skin" not in by["Body"] and "interior" not in by["Body"]
+
+
+def test_zone_pick_keep_and_strength_pass_through():
+    # 2026-09-29: a glass zone picked by the seed's texture, an emissive zone's strength
+    raw = {"parts": [{"name": "Body", "method": "vendor", "side_box": [0, 100, 0, 100], "front_span": [0, 100],
+                      "zones": [{"name": "Canopy", "side_box": [60, 90, 10, 50], "pick": "dark", "keep": 2, "material": {"finish": "glass", "glass": True}},
+                                {"name": "Lamp", "side_box": [90, 95, 40, 45], "strength": 9, "pick": "nonsense", "material": {"finish": "emissive"}}]}]}
+    z = validate_plan(raw, [14.0, 5.0, 6.0])["parts"][0]["zones"]
+    assert z[0]["pick"] == "dark" and z[0]["keep"] == 2
+    assert z[1]["strength"] == 9 and "pick" not in z[1]

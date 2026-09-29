@@ -34,6 +34,9 @@ BUILTIN = {
                   "notes": "cheap; up to four pictures in any order"},
     "trellis2": {"kind": "seed", "label": "TRELLIS.2 (this PC)", "endpoint": config.LOCAL_SEED_MODEL, "inputs": "single",
                  "notes": "free, 1.5-6.5 min; soft edges"},
+    "meshy-retexture": {"kind": "texture", "label": "Meshy v5 retexture", "endpoint": "fal-ai/meshy/v5/retexture",
+                        "inputs": "single", "notes": "a new texture on every side of the seed, on its own UVs, guided by "
+                                                     "the hero picture and the brief (Tonetta's retexture, 2026-09-29)"},
     "nano": {"kind": "picture", "label": "Nano Banana 2", "endpoint": "fal-ai/nano-banana-2", "inputs": "single", "notes": "the default picture model"},
     "nano-pro": {"kind": "picture", "label": "Nano Banana Pro", "endpoint": "fal-ai/nano-banana-pro", "inputs": "single",
                  "notes": "better hero pictures"},
@@ -126,16 +129,19 @@ def run_command(m, out, log=print, timeout=3600, **values):
     return secs
 
 
-def seed_views(category, ref_dir, mirror_dir):
+def seed_views(category, ref_dir, mirror_dir, mirror=False):
     """The approved pictures a whole-object seed is made from, by role: weapons have the side profile as their hero
     (ref_0) and a muzzle view; vehicles and aircraft a three-quarter hero and side, front, back and top views. The far
-    side is the side view mirrored (written into mirror_dir). -> {"hero", "left", "right", "front", "back", "top"}"""
+    side is the side view mirrored (written into mirror_dir) for weapons, or when `mirror` is asked: a vehicle's fuel
+    door, hatch or ejection port is one-sided (Anvil's mirror_as_third_view, 2026-09-29).
+    -> {"hero", "left", "right", "front", "back", "top"}"""
     from PIL import Image, ImageOps
     pic = lambda name: next((os.path.join(ref_dir, name + e) for e in (".png", ".jpg") if os.path.exists(os.path.join(ref_dir, name + e))), None)
     views = {"hero": pic("ref_0")}
     side = pic("ref_0") if category == "weapon" else (pic("ref_side") or None)
     if side:
         views["left"] = side
+    if side and (mirror or category == "weapon"):
         right = os.path.join(mirror_dir, "view_right_mirrored.png")
         ImageOps.mirror(Image.open(side).convert("RGB")).save(right)
         views["right"] = right
@@ -182,6 +188,8 @@ def price_of(m):
         return 0.0
     if m["kind"] == "picture":
         return pricing.image_price(m["endpoint"])
+    if m["kind"] == "texture":
+        return pricing.price(m["endpoint"])
     fake = {r: "u" for r in ("hero", "left", "right", "front", "back", "top")}
     try:
         ep, payload = seed_payload(m, fake)

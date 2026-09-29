@@ -10,16 +10,15 @@ front_hint: the face and chest
 ---
 # Characters and creatures
 
-One character, whole body in frame including the feet, plain white background, neutral A-pose, no
-weapon held across the body, no cape hiding the silhouette, hands open. Always draw the figure standing
-upright in that A-pose even when the brief says hunched, crouching, shambling or limping: the auto-rigger
-only reads upright humanoids, and the pose belongs to the animation, not the mesh. Animals and other
-non-humanoids cannot be auto-rigged; say so in the notes and ship them static. Describe the outfit layer by
-layer and name the materials (leather, steel plate, denim, fur). Give the character's height in metres.
+Outside Master Smith's hard-surface scope: `ms` seeds and finishes a character as one static mesh, with no rig
+pipeline. One character, whole body in frame including the feet, plain white background, neutral A-pose, no weapon
+held across the body, no cape hiding the silhouette, hands open. Draw the figure standing upright in that A-pose
+even when the brief says hunched or crouching: the pose belongs to the animation (rigged in the engine), not the
+mesh. Describe the outfit layer by layer and name the materials (leather, steel plate, denim, fur). Give the
+character's height in metres.
 
 Seed from the front view; a back view is only worth paying for when the outfit is very different behind
-(a backpack, wings, a cape). The vendor mesh comes back as one fused shell with no skeleton - this
-pipeline delivers a static mesh ready to be rigged in the engine, with the origin between the feet.
+(a backpack, wings, a cape). The vendor mesh comes back as one fused shell with no skeleton.
 
 Finishing: the height becomes +Z (up), the character faces -Y in Blender which exports as facing the
 engine's forward, origin at the floor between the feet, real height in metres. Collision is a capsule-like
