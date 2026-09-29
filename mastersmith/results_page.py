@@ -48,7 +48,9 @@ def _v(path):
 
 
 def delivered_jobs(out_dir):
-    return sorted(d for d in os.listdir(out_dir) if os.path.isfile(os.path.join(out_dir, d, "delivery", "report.json")))
+    """Every job with a delivery and a brief (the service-era folders from before 2026-09-28 have no brief)."""
+    return sorted(d for d in os.listdir(out_dir) if os.path.isfile(os.path.join(out_dir, d, "delivery", "report.json"))
+                  and os.path.isfile(os.path.join(out_dir, d, "brief.json")))
 
 
 def job_card(out_dir, job):
@@ -84,8 +86,8 @@ def job_card(out_dir, job):
         "defects": ("<ul>%s</ul>" % defects) if defects else "", "links": "".join(links)}, sc
 
 
-def write_results(out_dir, jobs):
-    """out_dir/results.html for the jobs (their order kept)."""
+def render_results(out_dir, jobs):
+    """The builds page for the jobs (their order kept); the site renders it when opened."""
     cards, scores, spent = [], [], 0.0
     for job in jobs:
         card, sc = job_card(out_dir, job)
@@ -101,6 +103,11 @@ def write_results(out_dir, jobs):
         totals += "<span>mean score <b>%.1f</b> / 10</span>" % (sum(scores) / len(scores))
     if spent:
         totals += "<span>spent <b>$%.2f</b></span>" % spent
+    return PAGE.replace("__TOTALS__", totals).replace("__CARDS__", "".join(cards))
+
+
+def write_results(out_dir, jobs):
+    """out_dir/results.html for the jobs (their order kept)."""
     path = os.path.join(out_dir, "results.html")
-    open(path, "w", encoding="utf-8").write(PAGE.replace("__TOTALS__", totals).replace("__CARDS__", "".join(cards)))
+    open(path, "w", encoding="utf-8").write(render_results(out_dir, jobs))
     return path

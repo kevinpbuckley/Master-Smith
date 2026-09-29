@@ -100,8 +100,10 @@ different, smaller change. Look at the six views after each pass and keep only w
 ## 6. Assemble and review
 `$PY assemble out/<Name>` (5-15 min) -> `delivery/SM_<Name>.glb`, previews, `preview_views.png`, `preview.html`;
 `--no-bevel` drops the baked edge bevel, `--drop-floaters` deletes only far, small islands (measured in the report
-either way). After EVERY assemble that is reported, run `$PY preview out/<Name>` (background) and put the fresh URL in
-the message: a delivery message without a live preview link is incomplete (owner, 2026-09-29).
+either way). After EVERY assemble that is reported, run `$PY preview out/<Name> --no-open` and put its URL in the
+message: a delivery message without a live preview link is incomplete (owner, 2026-09-29). Every page is on ONE site and
+port (owner, 2026-09-29): http://127.0.0.1:8765/ lists every build, /results shows them with their six views, /refs the
+reference review, and each preview is http://127.0.0.1:8765/<Name>/delivery/preview.html with a nav bar back.
 Read `preview_views.png` and every `preview_*.png` yourself, and `delivery/report.json`'s `gate` (warnings) and
 `islands`. What each view proves: FRONT only the nose end-on (a wheel seen as a circle from the front faces the wrong
 way); SIDE proportions and ground contact; TOP symmetry and centring (paired parts are proved from TOP, BOTTOM or FRONT,
@@ -130,7 +132,7 @@ x1.05, BaseColor/Normal/ORM present, size within +-10% of the brief, glass prese
 >= 0.3, UCX hull <= 256 triangles). The delivery message carries, in this order: the preview URL (from a `preview` run
 started after the last assemble), the GLB path, the zip path, the score /10 with defects by view, and what was spent.
 A batch: write `delivery/scorecard.json` (`{"score", "spent", "defects", "unverifiable"}`) per asset, then
-`$PY results out/A out/B ...` serves them all on one page with a link to every preview.
+`$PY results out/A out/B ...` gives the builds page for just those (http://127.0.0.1:8765/results?jobs=A,B).
 
 ## Assembly of parts (only when the owner asks)
 The earlier way, kept for owners who want it: every part drawn alone, meshed alone and fitted into its box.

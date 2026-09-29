@@ -92,6 +92,7 @@ SEED_MULTIVIEW_MODEL = "tripo3d/h3.1/multiview-to-3d"
 # --- the free tier: models on this PC (mastersmith/local.py). Pick picture_model "local/flux2-klein-4b" and seed_vendor
 # "local" for a build; the ids below route there and cost $0. The folder holds ComfyUI (FLUX.2 klein 4B) and trellis.cpp
 # (TRELLIS.2 GGUF): see its README. ComfyUI is started on first use when it is not already running.
+PREVIEW_PORT = int(os.environ.get("MASTERSMITH_PREVIEW_PORT", "8765"))     # the one local site (ms serve), 2026-09-29
 LOCAL_MODELS_DIR = Path(os.environ.get("MASTERSMITH_LOCAL_MODELS_DIR", r"E:\local-models"))
 LOCAL_COMFY_URL = os.environ.get("MASTERSMITH_LOCAL_COMFY_URL", "http://127.0.0.1:8188").rstrip("/")
 LOCAL_PICTURE_MODEL = "local/flux2-klein-4b"

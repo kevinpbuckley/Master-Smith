@@ -80,11 +80,16 @@ def page_data(out_dir, jobs):
     return {"jobs": rows}
 
 
+def render_page(out_dir, jobs):
+    """The reference review page for the jobs, their current review embedded (the site renders it when opened)."""
+    data = json.dumps(page_data(out_dir, jobs)).replace("</", "<\\/")
+    return REFS_HTML.replace("__DATA__", data)
+
+
 def write_page(out_dir, jobs):
     """out_dir/refs.html with the jobs' pictures and their current review embedded."""
     path = os.path.join(out_dir, "refs.html")
-    data = json.dumps(page_data(out_dir, jobs)).replace("</", "<\\/")
-    open(path, "w", encoding="utf-8").write(REFS_HTML.replace("__DATA__", data))
+    open(path, "w", encoding="utf-8").write(render_page(out_dir, jobs))
     return path
 
 

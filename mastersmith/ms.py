@@ -26,7 +26,8 @@ deterministic thing and writes into a job folder under out/<Name>/:
     python -m mastersmith.ms assemble out/BullpupCarbine [--parts A,B] [--no-sharpen]
     python -m mastersmith.ms sheet path/to/any.glb [--out sheet.png]
     python -m mastersmith.ms refs out/BullpupCarbine out/Other [--no-open]  (reference pictures to approve, ref/review.json)
-    python -m mastersmith.ms preview out/BullpupCarbine [--no-open]   (delivery/preview.html served and opened)
+    python -m mastersmith.ms serve [--restart|--stop]                    (the one local site: every build and job, one port)
+    python -m mastersmith.ms preview out/BullpupCarbine [--no-open]   (delivery/preview.html on the site, opened)
     python -m mastersmith.ms results [out/A out/B] [--no-open]     (every delivered job on one page, links to each preview)
     python -m mastersmith.ms package out/BullpupCarbine
     python -m mastersmith.ms status out/BullpupCarbine
@@ -43,7 +44,7 @@ import webbrowser
 
 from PIL import Image, ImageOps
 
-from . import config, models, picturecheck, pricing, refs_review, results_page
+from . import config, models, picturecheck, pricing, refs_review, results_page, site
 from .fal import Fal, first_url
 from .images import Images
 from .spec import Spec
@@ -926,7 +927,7 @@ PREVIEW_HTML = """<!doctype html><html><head><meta charset="utf-8"><meta name="v
  table{border-collapse:collapse;width:100%%} td,th{padding:6px 8px;border-bottom:1px solid #333;vertical-align:top;text-align:left}
  td img{height:150px;background:#fff;border-radius:4px;margin-right:4px} .lod button{margin-right:6px}
 </style></head><body>
-<header><h1>%(name)s</h1><small>%(desc)s</small><br><small>%(dims)s m &middot; LOD0 %(tris)s tris &middot; %(nparts)d parts &middot; %(engine)s</small></header>
+%(nav)s<header><h1>%(name)s</h1><small>%(desc)s</small><br><small>%(dims)s m &middot; LOD0 %(tris)s tris &middot; %(nparts)d parts &middot; %(engine)s</small></header>
 <section>
 <model-viewer id="mv" src="%(glb)s" camera-controls camera-orbit="-35deg 78deg 110%%" exposure="1.1" shadow-intensity="0.6" environment-image="neutral" alt="%(name)s"></model-viewer>
 <div class="lod" style="margin-top:8px">%(lods)s <button onclick="mv.autoRotate=!mv.autoRotate">rotate</button></div>
@@ -968,7 +969,9 @@ def write_preview(job):
             imgs([os.path.join(d, "quarter.png"), os.path.join(d, "side.png")]), imgs([os.path.join(d, "seed_render.png")]),
             ("%s, IoU %.2f" % (reg.get("mode"), reg.get("iou", 0))) if reg else "not meshed"))
     sheet = os.path.join(delivery, "preview_views.png")
+    folder = os.path.basename(job.dir)
     html = PREVIEW_HTML % {
+        "nav": site.nav("", '<a href="/refs?jobs=%s" style="color:#bcd3ec">%s references</a>' % (folder, folder)),
         "name": name, "desc": job.spec.description, "dims": " x ".join("%.3f" % v for v in rep.get("dimensions_m") or []),
         "tris": format((rep.get("lods") or [{}])[0].get("triangles", 0), ","), "nparts": len(plan["parts"]), "engine": job.spec.engine,
         "glb": (os.path.basename(lods[0]) + "?v=%d" % int(os.path.getmtime(lods[0]))) if lods else "", "lods": lod_buttons,
@@ -984,14 +987,19 @@ def cmd_preview(a):
     if not os.path.exists(job.path("delivery", "report.json")):
         sys.exit("nothing assembled yet: ms assemble %s first" % a.job)
     page = write_preview(job)
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    # a small static server on the job folder, left running in the background; the page links across ref/, plan/, parts/
-    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-    subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", job.dir],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
-    url = "http://127.0.0.1:%d/delivery/preview.html" % port
+    out_dir = os.path.abspath(str(config.OUT_DIR))
+    if os.path.normcase(os.path.dirname(job.dir)) == os.path.normcase(out_dir):
+        # every job on the one site and port (owner, 2026-09-29), with its nav bar back to all the builds
+        url = _serve_out(out_dir) + "/%s/delivery/preview.html" % os.path.basename(job.dir)
+    else:
+        # a job outside out/ (a scratch copy) gets a small static server of its own
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+        subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", job.dir],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+        url = "http://127.0.0.1:%d/delivery/preview.html" % port
     print("preview: %s  (%s)" % (url, page))
     if not a.no_open:
         webbrowser.open(url)
@@ -1005,9 +1013,8 @@ def cmd_refs(a):
     for j in jobs:
         if not os.path.isfile(os.path.join(out_dir, j, "brief.json")):
             sys.exit("no job %s in %s" % (j, out_dir))
-    page = refs_review.write_page(out_dir, jobs)
-    url = _serve_out(out_dir) + "/refs.html"
-    print("reference review: %s  (%s, %d jobs)" % (url, page, len(jobs)))
+    url = _serve_out(out_dir) + "/refs" + (("?jobs=" + ",".join(jobs)) if a.jobs else "")
+    print("reference review: %s  (%d jobs)" % (url, len(jobs)))
     print("choices land in out/<Name>/ref/review.json; read them before building")
     if not a.no_open:
         webbrowser.open(url)
@@ -1021,23 +1028,37 @@ def cmd_results(a):
     for j in jobs:
         if not os.path.isfile(os.path.join(out_dir, j, "delivery", "report.json")):
             sys.exit("nothing assembled yet in %s" % j)
-    page = results_page.write_results(out_dir, jobs)
-    url = _serve_out(out_dir) + "/results.html"
-    print("results: %s  (%s, %d jobs)" % (url, page, len(jobs)))
+    url = _serve_out(out_dir) + "/results" + (("?jobs=" + ",".join(jobs)) if a.jobs else "")
+    print("builds: %s  (%d jobs; the home page %s lists them all)" % (url, len(jobs), _serve_out(out_dir) + "/"))
     if not a.no_open:
         webbrowser.open(url)
 
 
-def _serve_out(out_dir):
-    """The out/ folder on a free local port, left running in the background (refs_review.py: static files plus the
-    reference-review writes); every job's preview.html opens from it too. Returns the base URL."""
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-    subprocess.Popen([sys.executable, "-m", "mastersmith.refs_review", out_dir, str(port)], cwd=str(config.ROOT),
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
-    return "http://127.0.0.1:%d" % port
+def _serve_out(out_dir, restart=False):
+    """The one local site (site.py) on config.PREVIEW_PORT, serving out/: started when it is not running, restarted
+    when its code changed. Every preview, the builds page and the reference review are on it (owner, 2026-09-29: "all
+    previews always on same port"). Returns the base URL."""
+    return site.ensure(out_dir, config.PREVIEW_PORT, config.ROOT, restart=restart)
+
+
+def cmd_serve(a):
+    """The site's home page: every build and job with links (the one port for everything)."""
+    out_dir = str(config.OUT_DIR)
+    if a.stop:
+        p = site._ping(config.PREVIEW_PORT)
+        if p:
+            try:
+                import urllib.request
+                urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/api/stop" % config.PREVIEW_PORT, data=b"{}",
+                                                              method="POST"), timeout=2)
+            except Exception:  # noqa: BLE001 - it exits while answering
+                pass
+        print("stopped" if p else "not running")
+        return
+    url = _serve_out(out_dir, restart=a.restart) + "/"
+    print("site: %s  (builds %sresults, references %srefs)" % (url, url, url))
+    if not a.no_open:
+        webbrowser.open(url)
 
 
 def cmd_sheet(a):
@@ -1154,6 +1175,8 @@ def main(argv=None):
     s.set_defaults(fn=cmd_retexture)
     s = sub.add_parser("refs"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_refs)
     s = sub.add_parser("results"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_results)
+    s = sub.add_parser("serve"); s.add_argument("--restart", action="store_true"); s.add_argument("--stop", action="store_true")
+    s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_serve)
     s = sub.add_parser("preview"); s.add_argument("job"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_preview)
     s = sub.add_parser("package"); s.add_argument("job"); s.set_defaults(fn=cmd_package)
     s = sub.add_parser("status"); s.add_argument("job"); s.set_defaults(fn=cmd_status)

@@ -22,7 +22,7 @@ Agent-specific notes live in that agent's own file (`CLAUDE.md`, ...).
   `brief.json` · `ref/` reference pictures · `plan/` side.png, front.png, `*_grid.png`, `dims.json`, `plan.json` ·
   `parts/<Part>/` side.png, quarter.png, seed.glb, registered.blend, registration.json, seed_render.png, fit.json ·
   `delivery/` SM_<Name>.glb + LODs, T_ maps, preview_*.png, `preview_views.png` (six sides), `preview.html`
-  (written by `assemble`; `ms preview` opens it in the browser), report.json, zip.
+  (written by `assemble`; `ms preview` opens it on the one site, http://127.0.0.1:8765/), report.json, zip.
 - `mastersmith/skills/<category>.md` what a good asset of that category is (weapon, vehicle, aircraft, helicopter,
   prop, character, environment). Read the one for the job's category before planning.
 - `mastersmith/blender/` the Blender scripts: `register_part.py` (turn the seed to match its picture),
@@ -147,7 +147,8 @@ surface detail onto it (for a part whose coded shape is not the drawn one: foldi
 | `sheet <file.glb>` | six views of any GLB |
 | `refs [<job> ...] [--no-open]` | serves the reference pictures of the listed jobs (all jobs when none) on one local page with Approve / Redraw and a note per picture; the owner's choices land in `ref/review.json` (`ms status` prints them). Drafts moved to `ref/unused/` are not shown; `ref/notes.txt` is shown above a job's pictures |
 | `results [<job> ...] [--no-open]` | every delivered job (or the listed ones) on one local page: six views, score and defects from `delivery/scorecard.json` (`{"score", "spent", "tonetta", "defects"}`, written by the agent after its review), cost, links to each job's 3D preview, GLB and zip, all from one port |
-| `preview <job> [--no-open]` | serves `delivery/preview.html` (3D viewer, six views, every part's pictures beside its seed) and opens it |
+| `serve [--restart\|--stop] [--no-open]` | the ONE local site on port 8765 (`MASTERSMITH_PREVIEW_PORT`): the home page lists every build (score, 3D preview, six views, references, zip) and every job still without a build; `/results` the builds with their six views and defects, `/refs` the reference review; every page, the 3D previews included, carries the same nav bar. `preview`, `refs` and `results` start it when it is not running and restart it when its code changed; nothing else opens a port (owner, 2026-09-29) |
+| `preview <job> [--no-open]` | writes `delivery/preview.html` (3D viewer, six views, every part's pictures beside its seed) and opens it on the site: `http://127.0.0.1:8765/<Name>/delivery/preview.html` |
 | `package <job>` | README, manifest, zip in delivery/; prints the delivery gate's warnings (LOD0 within the budget x1.05, BaseColor/Normal/ORM present, size within +-10% of the brief, glass present when asked for, mean roughness >= 0.3, UCX hull <= 256 triangles) |
 | `status <job>` | what the job has so far |
 
