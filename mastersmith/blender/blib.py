@@ -83,9 +83,18 @@ def setup_render(size, samples, look="probe"):
         flat_bg = nt.nodes.new("ShaderNodeBackground")
         env = nt.nodes.new("ShaderNodeTexEnvironment")
         env.image = bpy.data.images.load(hdri, check_existing=True)
-        env_bg.inputs[1].default_value = 1.2
+        # calibrated 2026-09-28: at 1.2 (with the key and rim at 50/40) a mid grey of sRGB 96 in the reference rendered
+        # at 151-165, and every review called the models pale; 0.45 put it near the reference. Recalibrated 2026-09-29
+        # with the key and rim at 20/16: at 0.45 the Havoc's body (texture sRGB 72, reference 81) rendered at 55 and
+        # blue - "dim"; 0.8 with the warmer tint below renders it at 82, on the reference
+        env_bg.inputs[1].default_value = 0.8
         flat_bg.inputs[0].default_value = backdrop
-        nt.links.new(env.outputs[0], env_bg.inputs[0])
+        warm = nt.nodes.new("ShaderNodeMixRGB")          # the studio HDRI is cool: a mid grey rendered 86/96/97
+        warm.blend_type = "MULTIPLY"
+        warm.inputs[0].default_value = 1.0
+        warm.inputs[2].default_value = (1.22, 1.0, 0.86, 1.0)   # 1.12/0.94 still rendered the Havoc bluer than its texture
+        nt.links.new(env.outputs[0], warm.inputs[1])
+        nt.links.new(warm.outputs[0], env_bg.inputs[0])
         nt.links.new(lp.outputs["Is Camera Ray"], mix.inputs[0])
         nt.links.new(env_bg.outputs[0], mix.inputs[1])
         nt.links.new(flat_bg.outputs[0], mix.inputs[2])
@@ -128,8 +137,8 @@ class Stage:
             self.temps.append(o)
         if look == "preview":
             # the studio HDRI does the lighting; a small key shapes the shadows, a rim separates the silhouette
-            light("Key", (0.7, -0.8, 0.8), 50, 1.6, (1.0, 0.98, 0.96))
-            light("Rim", (-0.6, -0.5, 0.9), 40, 3.0)
+            light("Key", (0.7, -0.8, 0.8), 20, 1.6, (1.0, 0.98, 0.96))
+            light("Rim", (-0.6, -0.5, 0.9), 16, 3.0)
         else:
             light("Key", (0.7, -0.8, 0.8), 200, 4.0, (1.0, 0.98, 0.96))
             light("Fill", (-0.7, 0.6, 0.25), 70, 5.0, (0.96, 0.97, 1.0))
@@ -222,3 +231,58 @@ def camera_from_record(rec, name="ProbeCam"):
     from mathutils import Matrix
     cam.matrix_world = Matrix(rec["matrix_world"])
     return cam
+
+
+def hex_rgb(h, metal=False):
+    """#rrggbb -> linear RGB as colour.py makes it for every part (floored; a dark metal lifted to its reflectance)."""
+    from colour import planned_linear
+    return planned_linear(h, metal) or (0.5, 0.5, 0.5)
+
+
+def plan_material(name, spec):
+    """The planned colour, metal and roughness as a procedural material with the variation a real surface has
+    (roughness noise, faint colour noise, worn lighter edges on metal by pointiness): what build_part.py gives code
+    parts, for an SDF part (import_part.py) too."""
+    spec = spec or {}
+    mat = bpy.data.materials.new("MI_part_%s" % name)
+    nt = mat.node_tree
+    bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    rough = float(spec.get("roughness", 0.6))
+    metal = bool(spec.get("metal"))
+    base = hex_rgb(spec.get("color"), metal)
+    finish = spec.get("finish") or ("metal" if metal else "polymer")
+    if metal:
+        rough = min(rough, 0.4)
+    elif finish == "rubber":
+        rough = max(rough, 0.85)
+    bsdf.inputs["Metallic"].default_value = 1.0 if metal else 0.0
+    coord = nt.nodes.new("ShaderNodeTexCoord")
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 180.0
+    noise.inputs["Detail"].default_value = 6.0
+    nt.links.new(coord.outputs["Object"], noise.inputs["Vector"])
+    r_map = nt.nodes.new("ShaderNodeMapRange")
+    r_map.inputs["To Min"].default_value = max(0.05, rough - 0.07)
+    r_map.inputs["To Max"].default_value = min(1.0, rough + 0.07)
+    nt.links.new(noise.outputs["Fac"], r_map.inputs["Value"])
+    nt.links.new(r_map.outputs["Result"], bsdf.inputs["Roughness"])
+    c_mix = nt.nodes.new("ShaderNodeMix")
+    c_mix.data_type = "RGBA"
+    c_mix.inputs["A"].default_value = (*[c * 0.96 for c in base], 1.0)
+    c_mix.inputs["B"].default_value = (*[min(1.0, c * 1.04) for c in base], 1.0)
+    nt.links.new(noise.outputs["Fac"], c_mix.inputs["Factor"])
+    colour = c_mix.outputs["Result"]
+    if metal:
+        geo = nt.nodes.new("ShaderNodeNewGeometry")
+        edge = nt.nodes.new("ShaderNodeMapRange")
+        edge.inputs["From Min"].default_value = 0.52
+        edge.inputs["From Max"].default_value = 0.62
+        nt.links.new(geo.outputs["Pointiness"], edge.inputs["Value"])
+        wear = nt.nodes.new("ShaderNodeMix")
+        wear.data_type = "RGBA"
+        nt.links.new(edge.outputs["Result"], wear.inputs["Factor"])
+        nt.links.new(colour, wear.inputs["A"])
+        wear.inputs["B"].default_value = (*[min(1.0, c * 1.6 + 0.04) for c in base], 1.0)
+        colour = wear.outputs["Result"]
+    nt.links.new(colour, bsdf.inputs["Base Color"])
+    return mat

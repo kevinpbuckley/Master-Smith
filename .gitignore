@@ -19,3 +19,9 @@ web/out/
 web/.env*.local
 web/next-env.d.ts
 web/*.tsbuildinfo
+chats/
+.claude/worktrees/
+/.agents/skills
+
+# models registered on this machine (ms models add): paths are machine-specific
+local_models.json
