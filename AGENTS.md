@@ -179,6 +179,13 @@ Two passes in `assemble` make the surfaces (both on by default; `--no-projection
   side reads the box mirrored back so the word is not reversed, the mesher's embossed letters (Tripo's garbled
   "TNALT") are laid onto the panel, and the seed's normal map gives way to the surface's own normal. Make a box
   generous: Tripo's own letters ran past the picture's word.
+- **Canopy rebuild** (`"shell": true` on the glass zone): the seed's canopy glazing is replaced, not cut out. Every
+  glass-painted face on the canopy's envelope goes (the panes, their inner skins, the ragged pieces the colour pick
+  leaves, the small frame and sill strips between them, and what is left deep inside), then one clean shell (the
+  hull of the kept panes, set just inside the frame) is the glass. A painted frame band runs along its smoothed edge,
+  and bars run along its long, sharp creases (`MI_<Name>_Frame`, the body's planned colour). A deleted face the shell
+  does not cover comes back. Use it when the colour-picked glass reads as shattered: Tripo paints its panes in pale
+  and dark patches (the Havoc, 2026-09-29). With an insert under it, `"line": false`: the tub hides the walls.
 - **Cockpit lining**: a glass zone lines the walls seen through it from behind (`"line": false` turns it off). A
   mesher's cockpit walls are one skin thick, and through the canopy the eye met the back of the far side's panels,
   lettering mirrored. They get a dark matte inner copy of their own material (`MI_<Name>_Interior`, outside the atlas).

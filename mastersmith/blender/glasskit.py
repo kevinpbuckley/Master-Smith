@@ -97,9 +97,9 @@ def components(n, fa, fb, mask=None):
     return np.array([find(i) for i in range(n)])
 
 
-def mesh_tree(o, extra=None):
-    """A ray tree of the part's faces, and of `extra` (vertices, triangles) - panes not yet in the mesh.
-    -> (tree, polygon index per tree triangle; -1 for the extra ones)"""
+def mesh_tree(o, extra=None, skip=None):
+    """A ray tree of the part's faces (not those in the `skip` mask: faces about to be deleted), and of `extra`
+    (vertices, triangles) - panes not yet in the mesh. -> (tree, polygon index per tree triangle; -1 for extra)"""
     from mathutils.bvhtree import BVHTree
     me = o.data
     me.calc_loop_triangles()
@@ -111,6 +111,8 @@ def mesh_tree(o, extra=None):
     tri = tri.reshape(-1, 3)
     poly = np.empty(len(me.loop_triangles), np.int64)
     me.loop_triangles.foreach_get("polygon_index", poly)
+    if skip is not None:
+        tri, poly = tri[~skip[poly]], poly[~skip[poly]]
     if extra is not None and len(extra[1]):
         tri = np.concatenate([tri, np.asarray(extra[1]) + len(co)])
         co = np.concatenate([co, np.asarray(extra[0], np.float32)])
@@ -186,12 +188,14 @@ def canopy_hull(o, box_faces, diag, edge=1 / 120.0):
     return bm
 
 
-def glass_shell(hull, tree, diag, inset=0.002, min_patch=30):
+def glass_shell(hull, tree, diag, inset=0.002, min_patch=30, full=False):
     """Glass over the holes that go straight through a canopy (the Tripo Havoc, 2026-09-29: the rear of its canopy
     frame was open, so the sky showed through the cockpit and nothing reflected). The hull is set `inset` (of the
     diagonal) inside the frame; a face is kept where a ray outward leaves the model and a ray inward meets nothing or
     the back of a face (the inside of the far wall) - not the roof, the frame, the seed's own panes or the nose. One
-    ring more tucks the edges under the frame; patches under `min_patch` faces go. -> (vertices, triangles) or None"""
+    ring more tucks the edges under the frame; patches under `min_patch` faces go. `full`: the shell IS the canopy's
+    glass (the seed's panes are deleted, pick_glass's `rebuild`): a face is kept wherever it looks out and the seed's
+    own skin is not right under it. -> (vertices, triangles) or None"""
     bm = hull.copy()
     for v in bm.verts:
         v.co -= v.normal * (inset * diag)
@@ -212,7 +216,11 @@ def glass_shell(hull, tree, diag, inset=0.002, min_patch=30):
             tucked[i] = out[0] is not None and out[3] < 4 * inset * diag
             continue
         hit = rays.ray_cast(c - n * eps, -n)
-        keep[i] = hit[0] is None or hit[1].dot(-n) > 0
+        if full:
+            # dropped only where the hull bridges the seed's own skin close under it (the nose, the hood's edge)
+            keep[i] = hit[0] is None or hit[1].dot(-n) > 0 or hit[3] > 2 * inset * diag
+        else:
+            keep[i] = hit[0] is None or hit[1].dot(-n) > 0
     ring = np.zeros(len(faces), bool)
     for i in np.nonzero(keep)[0]:
         for e in faces[i].edges:
@@ -247,10 +255,133 @@ def glass_shell(hull, tree, diag, inset=0.002, min_patch=30):
     return verts, tris
 
 
+def rim_loops(tris):
+    """The boundary of a triangle patch: {vertex: [its two boundary neighbours]} and the boundary edges, each
+    with the third corner of its triangle (so the side the glass is on is known)."""
+    count, third = {}, {}
+    for t in tris:
+        for k in range(3):
+            a, b, c = int(t[k]), int(t[(k + 1) % 3]), int(t[(k + 2) % 3])
+            key = (min(a, b), max(a, b))
+            count[key] = count.get(key, 0) + 1
+            third[key] = (a, b, c)
+    edges = [third[k] for k, v in count.items() if v == 1]
+    nbr = {}
+    for a, b, _c in edges:
+        nbr.setdefault(a, []).append(b)
+        nbr.setdefault(b, []).append(a)
+    return nbr, edges
+
+
+def smooth_rim(verts, tris, rounds=8):
+    """The shell's edge smoothed along itself: kept and dropped faces leave a staircase (2026-09-29)."""
+    verts = np.array(verts, np.float64)
+    nbr, _edges = rim_loops(tris)
+    ring = [v for v, ns in nbr.items() if len(ns) == 2]
+    for _ in range(rounds):
+        new = {v: 0.5 * verts[v] + 0.25 * (verts[nbr[v][0]] + verts[nbr[v][1]]) for v in ring}
+        for v, p in new.items():
+            verts[v] = p
+    return verts.astype(np.float32)
+
+
+def rim_band(verts, tris, diag, inner=0.003, outer=0.004, lift=0.0012):
+    """A painted frame band along a rebuilt canopy's edge, lifted just proud of the glass, with a lip down to it: the
+    glass meets the body along a clean frame instead of the seed's ragged cut (fractions of the diagonal).
+    -> (vertices, quads) or None"""
+    verts = np.asarray(verts, np.float64)
+    nbr, edges = rim_loops(tris)
+    if not edges:
+        return None
+    tri_n = {}
+    for t in tris:
+        n = np.cross(verts[t[1]] - verts[t[0]], verts[t[2]] - verts[t[0]])
+        for v in t:
+            tri_n.setdefault(int(v), np.zeros(3))
+            tri_n[int(v)] += n
+    out_dir = {}
+    for a, b, c in edges:
+        n = tri_n[a] + tri_n[b]
+        d = np.cross(verts[b] - verts[a], n)
+        if np.dot(d, verts[c] - verts[a]) > 0:           # pointing into the glass: turn it away
+            d = -d
+        for v in (a, b):
+            out_dir.setdefault(v, np.zeros(3))
+            out_dir[v] += d
+    idx, pos = {}, []
+
+    def put(p):
+        pos.append(p)
+        return len(pos) - 1
+    for v, d in out_dir.items():
+        d = d / max(np.linalg.norm(d), 1e-12)
+        n = tri_n[v] / max(np.linalg.norm(tri_n[v]), 1e-12)
+        p = verts[v]
+        idx[v] = (put(p - d * inner * diag + n * lift * diag), put(p + d * outer * diag + n * lift * diag),
+                  put(p - d * inner * diag - n * 0.2 * lift * diag))
+    quads = []
+    for a, b, _c in edges:
+        ia, ib = idx[a], idx[b]
+        quads.append([ia[0], ib[0], ib[1], ia[1]])          # the band's face
+        quads.append([ia[2], ib[2], ib[0], ia[0]])          # the lip down to the glass
+    return np.array(pos, np.float32), quads
+
+
+def crease_bars(verts, tris, diag, angle=35.0, width=0.006, lift=0.0012, min_run=0.08):
+    """Frame bars along a rebuilt canopy's creases (the edges where its facets meet at more than `angle` degrees:
+    the top arch, the pillars, the windscreen's edges), a painted strip `width` wide lifted just proud of the glass,
+    with a lip on each side (fractions of the diagonal). Only creases that run on for `min_run` of the diagonal:
+    the hull's short odd creases stood up as loose tabs, and 25 degrees zig-zagged across the side windows
+    (2026-09-29). -> (vertices, quads) or None"""
+    verts = np.asarray(verts, np.float64)
+    faces_of = {}
+    tri_n = []
+    for k, t in enumerate(tris):
+        n = np.cross(verts[t[1]] - verts[t[0]], verts[t[2]] - verts[t[0]])
+        tri_n.append(n / max(np.linalg.norm(n), 1e-12))
+        for j in range(3):
+            a, b = int(t[j]), int(t[(j + 1) % 3])
+            faces_of.setdefault((min(a, b), max(a, b)), []).append(k)
+    cos_lim = np.cos(np.radians(angle))
+    crease = [(a, b) for (a, b), fs in faces_of.items()
+              if len(fs) == 2 and float(np.dot(tri_n[fs[0]], tri_n[fs[1]])) <= cos_lim]
+    parent = {}
+
+    def find(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for a, b in crease:
+        parent[find(a)] = find(b)
+    run = {}
+    for a, b in crease:
+        run[find(a)] = run.get(find(a), 0.0) + float(np.linalg.norm(verts[b] - verts[a]))
+    long_runs = {r for r, length in run.items() if length >= min_run * diag}
+    pos, quads = [], []
+    for a, b in crease:
+        if find(a) not in long_runs:
+            continue
+        fs = faces_of[(a, b)]
+        n = tri_n[fs[0]] + tri_n[fs[1]]
+        n /= max(np.linalg.norm(n), 1e-12)
+        along = verts[b] - verts[a]
+        side = np.cross(along, n)
+        side /= max(np.linalg.norm(side), 1e-12)
+        w, h = 0.5 * width * diag, lift * diag
+        base = len(pos)
+        for p in (verts[a], verts[b]):
+            pos += [p - side * w + n * h, p + side * w + n * h, p - side * w - n * 0.2 * h, p + side * w - n * 0.2 * h]
+        a0, a1, a2, a3 = base, base + 1, base + 2, base + 3
+        b0, b1, b2, b3 = base + 4, base + 5, base + 6, base + 7
+        quads += [[a0, b0, b1, a1], [a2, b2, b0, a0], [a1, b1, b3, a3]]
+    return (np.array(pos, np.float32), quads) if quads else None
+
+
 def pane_object(o, panes, name):
     """The filled panes as an object beside the part, in its frame, with an empty UV layer for the join."""
     me = bpy.data.meshes.new(name)
-    me.from_pydata(panes[0].tolist(), [], panes[1].tolist())
+    me.from_pydata(np.asarray(panes[0]).tolist(), [], [list(map(int, f)) for f in panes[1]])
     me.uv_layers.new(name=o.data.uv_layers.active.name if o.data.uv_layers.active else "UVMap")
     me.update()
     g = bpy.data.objects.new(name, me)
@@ -273,13 +404,17 @@ def glass_paint(rgb, mode):
     return (mx <= 0.22) & (sat <= 0.35), mx <= 0.35
 
 
-def pick_glass(o, z, mode, keep=8, min_run=40, fill=True):
+def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     """A glass zone's faces picked the way Tonetta's forge picks them (glass/SKILL.md, 2026-09-29): inside the zone's
     box (grown a little), the faces whose seed texture is painted like glass (`glass_paint`; "auto" takes the style
     with more of the outside skin), grown one ring into near-glass faces across seams, runs under `min_run` faces
     dropped, holes closed, the `keep` largest patches kept. A box or normal test alone ships the canopy speckled
     (the G-Police Havoc windshield, 2026-09-09). Only faces on the outside skin are glass, and holes straight through
-    the canopy are closed with a shell (`fill`). -> (face mask, stats, panes or None)"""
+    the canopy are closed with a shell (`fill`). `rebuild` (the zone's "shell": true): the mask is every glass-painted
+    face on the canopy's envelope - the panes, their inner skins and the ragged pieces the colour pick leaves - to be
+    DELETED, and the panes returned are one clean shell that is the glass: Tripo painted the Havoc's panes in pale and
+    dark patches, and the picked glass read as shattered (owner, 2026-09-29: "polish it").
+    -> (face mask, stats, panes or None)"""
     me = o.data
     n = len(me.polygons)
     centres = np.empty(n * 3, np.float32)
@@ -312,7 +447,7 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True):
         mode = max(styles, key=lambda k: styles[k][3])
         pick, near, outside, _a = styles[mode]
     panes = None
-    if fill:
+    if fill and not rebuild:
         # the canopy's envelope is the hull of its outer glass-painted skin (not the whole box: the navy nose passes
         # the dark test too); the shell closes the holes that go straight through it
         hull = canopy_hull(o, pick & outside, diag)
@@ -338,6 +473,7 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True):
     ids, counts = np.unique(roots[grown], return_counts=True)
     mask = grown & np.isin(roots, ids[np.argsort(-counts)[:keep]]) if len(ids) else grown
     kept = np.sort(counts)[::-1][:keep] if len(ids) else np.array([0])
+    panes_kept = mask.copy()                     # the outer panes the colour pick settled on (the envelope's source)
     # a pane modelled with a thickness has an inner skin just behind it, whatever it is painted: glass too. Left
     # opaque, the Havoc's inner skins were lined dark and read as black panels in every window (2026-09-29). Behind
     # (set back a few mm, facing the same way or the other) and near it - not the frame, which lies flush with it
@@ -354,6 +490,79 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True):
             if (loc - Vector(centres[i])).dot(gn) > 0.0002 * diag:
                 mask[i] = True
                 inner += 1
+    fragments = 0
+    envelope = canopy_hull(o, panes_kept, diag, edge=1 / 70.0) if rebuild and panes_kept.any() else None
+    if envelope is not None:
+        # the envelope is the hull of the kept panes only (stray pale highlights on the nose stretched it over the
+        # nose). Every face of the pick's own style on it goes, whatever island the colour pick put it in; of the
+        # other style, the compact patches (shards on a pane) go and the long thin strips (Tripo paints its frame
+        # bars dark) stay; the hood is body paint and stays
+        from mathutils.bvhtree import BVHTree
+        et = BVHTree.FromBMesh(envelope)
+        on_env = np.zeros(n, bool)
+        deep = np.zeros(n, bool)
+        for i in np.nonzero(inbox & ~mask)[0]:
+            loc, hn, _hi, dist = et.find_nearest(Vector(centres[i]))
+            on_env[i] = dist <= 0.006 * diag
+            # deep inside the envelope: what is left of the seed's cockpit under the glass (sill backs, frame backs,
+            # the headrest above the insert) - under clean glass it read as black shards (2026-09-29)
+            deep[i] = dist > 0.006 * diag and (Vector(centres[i]) - loc).dot(hn) < 0   # no gap under on_env
+        own = glassy & on_env & ~mask
+        mask |= own
+        fragments = int(own.sum())
+        if rgb is not None:
+            other = glass_paint(rgb, "pale" if mode == "dark" else "dark")[0] & on_env & ~mask
+            roots = components(n, fa, fb, other)
+            area = np.empty(n, np.float32)
+            me.polygons.foreach_get("area", area)
+            for r in np.unique(roots[other]):
+                comp = other & (roots == r)
+                ext = centres[comp].max(axis=0) - centres[comp].min(axis=0)
+                longest = float(ext.max())
+                # a bar: its area is a thin strip along its longest side (under 12% of a square on it)
+                if longest > 0 and float(area[comp].sum()) / (longest * longest) > 0.12:
+                    mask |= comp
+                    fragments += int(comp.sum())
+        leftovers = int((deep & ~mask).sum())
+        mask |= deep
+        fragments += leftovers
+        # what is left on the envelope is body paint: the hood and the nose top are big panels and stay; the bits of
+        # frame and sill between the panes are small and ragged, and under clean glass (and lined from behind) they
+        # read as shards (2026-09-29): they go too, and the rim band frames the glass instead
+        env_area = sum(f.calc_area() for f in envelope.faces)
+        rest = on_env & ~mask
+        roots = components(n, fa, fb, rest)
+        for r in np.unique(roots[rest]):
+            comp = rest & (roots == r)
+            if float(area[comp].sum()) < 0.03 * env_area:
+                mask |= comp
+                fragments += int(comp.sum())
+        panes = glass_shell(envelope, mesh_tree(o, skip=mask), diag, full=True)
+        if panes is not None:
+            # the seed's frame bars are strips of paint between the panes, ragged where the panes came away (their
+            # diagonal bar and rear post read as shards behind the clean glass): what lies on the envelope right
+            # beside the new glass goes, the glass closes over it, and clean bars go on along the shell's creases
+            st0 = BVHTree.FromPolygons([Vector(v) for v in panes[0]], [list(map(int, t)) for t in panes[1]])
+            strips = 0
+            for i in np.nonzero(on_env & ~mask)[0]:
+                if st0.find_nearest(Vector(centres[i]), 0.008 * diag)[0] is not None:
+                    mask[i] = True
+                    strips += 1
+            fragments += strips
+            panes = glass_shell(envelope, mesh_tree(o, skip=mask), diag, full=True)
+        envelope.free()
+        # a deleted face the shell does not cover comes back, or it would be a hole (the nose top's pale highlights)
+        if panes is not None:
+            st = BVHTree.FromPolygons([Vector(v) for v in panes[0]], [list(map(int, t)) for t in panes[1]])
+            back = 0
+            for i in np.nonzero(mask & on_env & ~deep)[0]:
+                c, nr = Vector(centres[i]), Vector(normals[i])
+                hit = st.ray_cast(c - nr * 0.002 * diag, nr, 0.012 * diag)
+                hit2 = st.ray_cast(c + nr * 0.002 * diag, -nr, 0.012 * diag)
+                if hit[0] is None and hit2[0] is None:
+                    mask[i] = False
+                    back += 1
+            fragments -= back
     faces = int(mask.sum())
     share = float(kept[0]) / max(faces, 1)
     # speckle is many islands, or kept patches holding little of the pick (a framed canopy is several panes, so the
@@ -365,9 +574,11 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True):
     return mask, {"mode": mode, "styles_m2": {k: round(v[3], 2) for k, v in styles.items()}, "faces": faces, "islands": int(min(len(ids), keep)), "islands_found": int(len(ids)),
                   "largest_share": round(share, 3), "coverage": round(coverage, 3),
                   "dropped": np.sort(counts)[::-1][keep:keep + 6].tolist() if len(ids) else [], "interior_left_opaque": interior - inner,
-                  "inner_skin": inner,
+                  "inner_skin": inner, "fragments": fragments, "rebuilt": bool(rebuild and panes is not None),
+                  "shell_faces": int(len(panes[1])) if panes is not None else 0,
                   "share_of_part": round(part_share, 4), "pane_faces": int(len(panes[1])) if panes is not None else 0,
-                  "ok": bool((faces < 40 or (coverage >= 0.6 and len(ids) <= 40)) and part_share <= 0.08)}, panes
+                  "ok": bool(panes is not None and len(panes[1]) >= 50) if rebuild else
+                  bool((faces < 40 or (coverage >= 0.6 and len(ids) <= 40)) and part_share <= 0.08)}, panes
 
 
 def cut_out(o, mask, name):

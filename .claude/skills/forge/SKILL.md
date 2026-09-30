@@ -97,6 +97,9 @@ different, smaller change. Look at the six views after each pass and keep only w
   the seed blurred, embossed or mirrored gets a `"lettering"` box on the part (percent off the side grid, generous):
   the picture's word prints whole on both sides and the relief is flattened. Check it in a close-up of each side,
   lit AND unlit (base colour only): shading ghosts come from the seed's normal map or leftover slivers, not the paint.
+- **Shattered-looking glass** (the pick left opaque shards between glass faces): `"shell": true` on the glass zone
+  rebuilds the canopy as one clean shell with a painted frame band and crease bars (AGENTS.md, Materials). Check it
+  with the glass hidden and the frame bright once: what is left behind the glass should be the cockpit only.
 - **Cockpit behind glass**: the walls seen through the canopy are lined from behind (a dark matte inside) so the far
   panels' backs and their mirrored lettering do not show. A pane modelled with a thickness has its inner skin taken
   as glass too (it was lined black). Show the lining bright once (`MI_<Name>_Interior`) to see what it covers.

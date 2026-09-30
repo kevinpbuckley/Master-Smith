@@ -27,7 +27,10 @@ if len(meshes) > 1:
     bpy.ops.object.join()
 target = bpy.context.view_layer.objects.active
 lo, hi = blib.dims(target)
-blib.setup_render(int(args.get("size", 768)), 32, look="preview")
+# see-through glass speckles into a maze at 32 samples once the denoiser has had it (the rebuilt Havoc canopy,
+# 2026-09-29): an asset with blended glass gets 128
+glassy = any(getattr(m, "surface_render_method", "") == "BLENDED" for m in bpy.data.materials)
+blib.setup_render(int(args.get("size", 768)), 128 if glassy else 32, look="preview")
 stage = blib.Stage(target, look="preview")           # its lights; the camera is replaced by an orthographic one
 cam = bpy.data.objects.new("ViewCam", bpy.data.cameras.new("ViewCam"))
 bpy.context.collection.objects.link(cam)

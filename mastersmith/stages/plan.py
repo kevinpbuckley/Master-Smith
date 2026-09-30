@@ -390,7 +390,8 @@ def validate_plan(raw, dims, max_parts=None):
                 for key in ("keep", "strength"):
                     if isinstance(z.get(key), (int, float)):
                         zone[key] = z[key]
-                for key in ("fill", "line"):                 # shell the frame's holes; line the cockpit's backs
+                for key in ("fill", "line", "shell"):        # shell the frame's holes; line the cockpit's backs;
+                                                                # "shell": the whole canopy one clean shell
                     if isinstance(z.get(key), bool):
                         zone[key] = z[key]
                 zones.append(zone)

@@ -783,6 +783,7 @@ LENGTH_M = float(args.get("length_m") or 1.0)
 EMISSIVE = {"strength": 0.0}
 
 
+from glasskit import crease_bars, rim_band, smooth_rim  # noqa: E402
 from glasskit import (  # noqa: E402 - the glass and cockpit passes, shared with cabin.py
     base_image, face_rgb, face_pairs, components, mesh_tree, escapes,
     exterior_faces, canopy_hull, glass_shell, pane_object, glass_paint, pick_glass,
@@ -1016,7 +1017,7 @@ def island_report(o, drop=False):
 
 # ---------------------------------------------------------------- parts in their boxes
 bpy.ops.wm.read_factory_settings(use_empty=True)
-parts, glass_parts, liner_parts = [], [], []
+parts, glass_parts, liner_parts, frame_parts = [], [], [], []
 # the whole object's box, from the plan: the frame the side grid's percents (lettering boxes) are read in
 ASSET_LO = [min(q["box_min"][i] for q in args["parts"]) for i in range(3)]
 ASSET_HI = [max(q["box_max"][i] for q in args["parts"]) for i in range(3)]
@@ -1054,11 +1055,22 @@ for p in args["parts"]:
             if (zm0.get("glass") or zm0.get("finish") == "glass") and mode != "atlas":
                 # the glass is CUT OUT of the seed into a see-through part (2026-09-29, from Tonetta's forge): a
                 # darkened patch of the atlas read as paint on every canopy
-                mask, gstats, panes = pick_glass(o, z, mode, keep=int(z.get("keep", 8)), fill=bool(z.get("fill", True)))
+                mask, gstats, panes = pick_glass(o, z, mode, keep=int(z.get("keep", 8)), fill=bool(z.get("fill", True)),
+                                                 rebuild=bool(z.get("shell")))
                 log("%s: glass zone %s picked %s" % (p["name"], z.get("name"), gstats))
                 zname = "%s_%s" % (p["name"], z.get("name", "glass"))
                 made = []
-                if gstats["faces"] >= 20:
+                if gstats.get("rebuilt"):
+                    delete_faces(o, mask)          # the seed's patchy panes go; the clean shell below is the glass
+                    lo_o, hi_o = blib.dims(o)
+                    panes = (smooth_rim(panes[0], panes[1]), panes[1])
+                    band = rim_band(panes[0], panes[1], (hi_o - lo_o).length)
+                    if band is not None:
+                        frame_parts.append((pane_object(o, band, "Frame_" + zname), {"name": "%s.%s.frame" % (p["name"], z.get("name"))}))
+                    bars = crease_bars(panes[0], panes[1], (hi_o - lo_o).length)
+                    if bars is not None:
+                        frame_parts.append((pane_object(o, bars, "Bars_" + zname), {"name": "%s.%s.bars" % (p["name"], z.get("name"))}))
+                elif gstats["faces"] >= 20:
                     made.append((cut_out(o, mask, "Glass_" + zname), ""))
                 if panes is not None:
                     made.append((pane_object(o, panes, "Panes_" + zname), ".panes"))
@@ -1865,7 +1877,7 @@ if code_tris > code_allow:
 # Havoc's LOD0 ran 10% over, 2026-09-29); a lining is flat dark matte, so it is cut down first
 for o, _r in liner_parts:
     decimate_to(o, max(1000, int(budget * 0.03)))
-extra_tris = sum(blib.tri_count(o) for o, _r in glass_parts + liner_parts)
+extra_tris = sum(blib.tri_count(o) for o, _r in glass_parts + liner_parts + frame_parts)
 left = max(budget - code_tris - extra_tris, int(budget * 0.3))
 areas = [surface_area(o) for o, _r in vendor]
 for (o, r), a in zip(vendor, areas):
@@ -2160,6 +2172,20 @@ for o, r in liner_parts:
     bpy.context.view_layer.objects.active = lod0
     bpy.ops.object.join()
 report["lining"] = {"parts": [r["name"] for _o, r in liner_parts]} if liner_parts else None
+# a rebuilt canopy's frame band: the body's planned paint, a slot of its own
+body_spec = next((q for q in args["parts"] if q.get("body")), {})
+for o, r in frame_parts:
+    fm = bpy.data.materials.get("MI_%s_Frame" % NAME) or bpy.data.materials.new("MI_%s_Frame" % NAME)
+    fb = next(n for n in fm.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    fb.inputs["Base Color"].default_value = (*planned_linear((body_spec.get("material") or {}).get("color") or "#495058"), 1.0)
+    fb.inputs["Roughness"].default_value = 0.5
+    fb.inputs["Metallic"].default_value = 0.0
+    o.data.materials.clear()
+    o.data.materials.append(fm)
+    blib.select_only([lod0, o])
+    bpy.context.view_layer.objects.active = lod0
+    bpy.ops.object.join()
+report["frame"] = {"parts": [r["name"] for _o, r in frame_parts]} if frame_parts else None
 log("atlas %d baked: roughness %s, metallic %s, %.0f%% of the atlas used" % (size, report["roughness_mean"], report["metallic_mean"],
                                                                          report["atlas_coverage"] * 100))
 
