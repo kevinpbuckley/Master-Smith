@@ -1,6 +1,7 @@
 """Measure the cockpit well of a body, so an interior part's box is the space it has (inside Blender).
     blender -b -Y --python cabin.py -- <args.json>
-args: {"hull_blend", "box_min", "box_max", "keep_depth", "x_range": [x0, x1] metres, "out_json"}
+args: {"hull_blend", "box_min", "box_max", "keep_depth", "x_range": [x0, x1] metres, "z_top" (optional), "out_json",
+       "carve": {"zones": [glass zones], "box_min", "box_max"} (optional: carve the seed's own cockpit first)}
 
 The body's registered seed is placed in its planned box the way assemble.py places it, then rays find, at stations
 along x_range, the floor of the open well (straight down the centreline from above), its side walls (sideways from just
@@ -45,6 +46,19 @@ if args.get("keep_depth"):
 ob.data.transform(Matrix.Translation(-(lo + hi) * 0.5))
 ob.data.transform(Matrix.Diagonal(Vector(scale).to_4d()))
 ob.data.transform(Matrix.Translation(centre))
+carved = None
+if args.get("carve"):
+    # a whole-object seed meshed its cockpit closed (the Tripo Havoc, 2026-09-29): measure the well the assembler
+    # leaves - the seed's own contents carved out, and the glass taken away so the rays reach the floor
+    import glasskit
+    c = args["carve"]
+    mask, carved = glasskit.cockpit_contents(ob, c["zones"], [(c["box_min"], c["box_max"])])
+    glass = np.zeros(len(ob.data.polygons), bool)
+    for z in c["zones"]:
+        gm, _s, _p = glasskit.pick_glass(ob, z, z.get("pick") or "auto", fill=False)
+        glass |= gm
+    glasskit.delete_faces(ob, mask | glass)
+    carved["glass_faces"] = int(glass.sum())
 me = ob.data
 me.calc_loop_triangles()
 co = np.empty(len(me.vertices) * 3, np.float32)
@@ -64,7 +78,9 @@ def first_hit(origin, direction, far):
 stations = []
 x0, x1 = (float(v) for v in args["x_range"])
 for x in np.linspace(x0, x1, 11):
-    top = hi.z + 0.05 * H
+    # from the interior's own planned top when there is one: from above the whole model the rays stopped on the
+    # Havoc's canopy hood and frame bars (2026-09-29)
+    top = min(float(args["z_top"]), hi.z + 0.05 * H) if args.get("z_top") is not None else hi.z + 0.05 * H
     floor, _d = first_hit((x, 0.0, top), (0, 0, -1), 2 * H + 1)
     if floor is None:
         continue
@@ -80,7 +96,7 @@ for x in np.linspace(x0, x1, 11):
                      "wall_right_y": round(-dr, 4) if dr else None, "sill_z": [round(v, 4) if v is not None else None for v in sills],
                      "well": bool(well)})
 inside = [st for st in stations if st["well"]]
-res = {"stations": stations, "hull_bounds": [[round(v, 4) for v in lo], [round(v, 4) for v in hi]]}
+res = {"stations": stations, "hull_bounds": [[round(v, 4) for v in lo], [round(v, 4) for v in hi]], "carved": carved}
 if inside:
     step = (x1 - x0) / 10.0
     half = min(min(st["wall_left_y"], -st["wall_right_y"]) for st in inside)

@@ -85,15 +85,21 @@ different, smaller change. Look at the six views after each pass and keep only w
 - **Whatever the glass shows has to exist**: a fighter or gunship cockpit (a dark tub hiding the shell, a seat, an
   instrument panel with screens, a stick, a HUD frame), a car cab (floor, two seats, a dash, a wheel, door cards):
   200-800 triangles, matte 0.7-0.9, nothing poking through, built LAST once the outside reads. A cockpit is about
-  0.9 m wide and 1.3-1.4 m tall inside; a canopy 1.5-2.5 m long. The seed needs an open cockpit for it (redraw the
-  views with the canopy open, or cut it); then a cockpit part (`"interior": true`, `ms cabin` for its box and fit card,
-  its own pictures and seed) under the glass.
+  0.9 m wide and 1.3-1.4 m tall inside; a canopy 1.5-2.5 m long. A cockpit part (`"interior": true`, vendor, its
+  own pictures and seed) under the glass REPLACES the seed's own: the assembler carves the seed's cockpit contents out
+  of the body first (the faces in the interior's box that cannot see out with the canopy closed; the seed file is not
+  touched), and `ms cabin` measures the carved well for its box and fit card. The Havoc (2026-09-29): Tripo's cockpit
+  was a closed lump; plan box read off the grid, cabin's walls and sill, 2 Nano pictures and a Tripo mesh ($0.76).
+  Then look at three things: the report's `pokes_out` (the share of the insert a ray sideways or down sees leave the
+  hull; under 3%), the side close-ups (a tub rim above the sill blacks out the windows: sink the box), and the
+  windscreen (a glare shield past the sloping glass: pull the box's front back).
 - **Markings are paint**: stencils, numbers, stripes and painted vents stay in the texture, never geometry. A word
   the seed blurred, embossed or mirrored gets a `"lettering"` box on the part (percent off the side grid, generous):
   the picture's word prints whole on both sides and the relief is flattened. Check it in a close-up of each side,
   lit AND unlit (base colour only): shading ghosts come from the seed's normal map or leftover slivers, not the paint.
 - **Cockpit behind glass**: the walls seen through the canopy are lined from behind (a dark matte inside) so the far
-  panels' backs and their mirrored lettering do not show; a better cockpit than the seed's is an interior part.
+  panels' backs and their mirrored lettering do not show. A pane modelled with a thickness has its inner skin taken
+  as glass too (it was lined black). Show the lining bright once (`MI_<Name>_Interior`) to see what it covers.
 - **Outline**: `$PY fit out/<Name> Body` bends the seed through a lattice onto its side picture and refuses a fit that
   would crumple the surface; `$PY brush` for a local fault you can name (AGENTS.md, "Sculpting without a mouse").
 - **Symmetry**: a seed broken on one side is repaired about the asset's own centre plane (not world Y=0), mirroring the

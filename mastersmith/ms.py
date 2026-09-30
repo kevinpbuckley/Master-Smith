@@ -624,10 +624,18 @@ def cmd_cabin(a):
     d = job.path("parts", part["name"])
     os.makedirs(d, exist_ok=True)
     out = os.path.join(d, "cabin.json")
+    # a whole-object seed's canopy is a glass zone on the hull: the assembler carves the seed's own cockpit out under
+    # it for an interior part, so the well is measured carved (2026-09-29)
+    hm = hull.get("material") or {}
+    zones = [dict(z, pick=z.get("pick") or ("auto" if hm.get("keep_texture") else "box")) for z in hull.get("zones") or []
+             if ((z.get("material") or {}).get("glass") or (z.get("material") or {}).get("finish") == "glass") and z.get("pick") != "atlas"]
+    carve = {"zones": zones, "box_min": part["box_min"], "box_max": part["box_max"]} if zones else None
     _blender(job, "cabin.py", {"hull_blend": blend, "box_min": hull["box_min"], "box_max": hull["box_max"],
                                "keep_depth": bool(fit.get("keep_depth")), "x_range": [part["box_min"][0], part["box_max"][0]],
-                               "out_json": out}, "cabin_%s" % part["name"])
+                               "z_top": part["box_max"][2] if carve else None, "out_json": out, "carve": carve}, "cabin_%s" % part["name"])
     res = json.load(open(out))
+    if res.get("carved"):
+        print("the seed's own cockpit carved out first (as the assembler will): %s" % res["carved"])
     well = res.get("well")
     if not well:
         sys.exit("no open cockpit well found in %s between x %.2f and %.2f m: the body was meshed closed (redraw its "
