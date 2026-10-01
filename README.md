@@ -71,6 +71,12 @@ body's bore, splits material zones (rubber pads, bare steel, glass), tints to th
 sharpens planar faces, bakes the full-detail parts into one atlas, builds LOD0/1/2 and a convex hull, and renders
 the previews and the six orthographic views the review is judged on.
 
+For generated surfaces that look overly glossy or rippled, use
+`ms assemble out/<Name> --finish-profile restrained`. This optional profile reduces normal and bump strength,
+raises roughness by material finish, and caps the baked bevel at 1.5 mm. Material zones follow the actual width
+of a kept-depth seed. It preserves seed geometry, so malformed sights, muzzles, windows, and lettering still
+need targeted repair. Review the six views against the previous build before retaining the result.
+
 ## Layout
 
 ```

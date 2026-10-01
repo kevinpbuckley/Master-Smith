@@ -1060,7 +1060,9 @@ for p in args["parts"]:
                 log("%s: glass zone %s picked %s" % (p["name"], z.get("name"), gstats))
                 zname = "%s_%s" % (p["name"], z.get("name", "glass"))
                 made = []
-                if gstats.get("rebuilt"):
+                if gstats.get("preserve_frame"):
+                    delete_faces(o, mask)   # explicitly fitted panes tuck under the existing frame
+                elif gstats.get("rebuilt"):
                     delete_faces(o, mask)          # the seed's patchy panes go; the clean shell below is the glass
                     lo_o, hi_o = blib.dims(o)
                     panes = (smooth_rim(panes[0], panes[1]), panes[1])
@@ -1096,6 +1098,12 @@ for p in args["parts"]:
         if args.get("islands", True):
             rec["islands"] = island_report(o, drop=bool(args.get("drop_floaters")))
             log("%s: islands %s" % (p["name"], rec["islands"]))
+        if args.get("finish_profile") == "restrained" and p.get("keep_depth"):
+            from restrained_finish import depth_zones
+            # 2026-09-30: a 63 mm seed in a 50 mm plan left the shotgun's blue receiver sides outside every zone.
+            lo, hi = blib.dims(o)
+            zones_left, rec["material_zone_depth_scale"] = depth_zones(
+                zones_left, p["box_min"][1], p["box_max"][1], float(lo[1]), float(hi[1]))
         zoned = split_zones(o, zones_left)
         in_zone = set().union(*[m for _z, m in zoned]) if zoned else set()
         rest = {sl.material for sl in o.material_slots if sl.material and sl.material.node_tree} - in_zone
@@ -1124,7 +1132,7 @@ for p in args["parts"]:
                 for m in mats:
                     m["ms_glass"] = True
                 continue
-            tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")))
+            tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")), force=bool(zm.get("color_lock")))
             surface_to_plan(o, zm, mats)
             if zm.get("finish") == "emissive":
                 # a lamp, a screen, an engine glow: its colour emitted, baked into T_<Name>_E; the strength (6-12, 1-2
@@ -1156,6 +1164,13 @@ for p in args["parts"]:
         else:
             sets.append((p.get("pbr_set"), {sl.material for sl in o.material_slots if sl.material and sl.material.node_tree}))
         rec["smart_materials"] = sum(smart_material(o, lib[key], mats, length_m) for key, mats in sets if key in lib and mats)
+    if (args.get("finish_profile") == "restrained" and p["kind"] == "vendor"
+            and not glass and args.get("tint_vendor", True)):
+        from restrained_finish import apply as restrained_finish
+        # 2026-09-30: apply after every material layer so later smart materials cannot restore the gloss.
+        rec["restrained_finish"] = restrained_finish(rest, p.get("material") or {}, float(args["length_m"]))
+        for zone, mats in zoned:
+            rec["restrained_finish"] += restrained_finish(mats, zone.get("material") or {}, float(args["length_m"]))
     for slot in o.material_slots:
         if slot.material:
             slot.material.name = "MS_src_%s_%s" % (p["name"], slot.material.name)

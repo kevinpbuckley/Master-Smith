@@ -912,7 +912,9 @@ def cmd_assemble(a):
             "edge_break_m": 0.0 if a.no_edge_break else 0.0008 * float(plan["dims_m"][0]),
             # every edge's small round, baked into the normal map from the Bevel shader (Tonetta: a razor edge reads
             # as fake, 2026-09-29): 0.2% of the asset's length
-            "bevel_m": 0.0 if a.no_bevel else 0.002 * float(plan["dims_m"][0]), "drop_floaters": bool(a.drop_floaters)}
+            "bevel_m": 0.0 if a.no_bevel else (min(0.0015, 0.0005 * float(plan["dims_m"][0]))
+                if a.finish_profile == "restrained" else 0.002 * float(plan["dims_m"][0])),
+            "finish_profile": a.finish_profile, "drop_floaters": bool(a.drop_floaters)}
     _blender(job, "assemble.py", args, "assemble")
     rep = json.load(open(os.path.join(delivery, "report.json")))
     sheet = six_view_sheet(job, delivery)
@@ -1165,6 +1167,8 @@ def main(argv=None):
     s.add_argument("--no-materials", action="store_true", help="skip the CC0 smart-material pass (#15), for comparison")
     s.add_argument("--no-edge-break", action="store_true", help="leave code parts' edges razor sharp (no small round)")
     s.add_argument("--no-bevel", action="store_true", help="no small round baked into the normal map")
+    s.add_argument("--finish-profile", choices=("standard", "restrained"), default="standard",
+                   help="restrained: smaller bevel, weaker relief and matte material floors; preserves seed geometry")
     s.add_argument("--drop-floaters", action="store_true", help="delete the far, small loose islands of a seed (they are reported anyway)")
     s.set_defaults(fn=cmd_assemble)
     s = sub.add_parser("sheet"); s.add_argument("glb"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
