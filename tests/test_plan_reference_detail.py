@@ -58,3 +58,28 @@ def test_lettering_boxes_pass_through():
                       "lettering": [[74, 84, 67, 74], [80, 70, 10, 20], "junk", [1, 2, 3]]}]}
     part = validate_plan(raw, [14.0, 5.0, 6.0])["parts"][0]
     assert part["lettering"] == [[74.0, 84.0, 67.0, 74.0]]
+
+
+def test_emissive_finish_survives_and_glow_passes_through():
+    # 2026-09-30: "emissive" was missing from FINISHES, so an emissive zone came out polymer and never glowed
+    from mastersmith.stages.plan import clean_material
+    assert clean_material({"finish": "emissive"})["finish"] == "emissive"
+    assert clean_material({"finish": "concrete"})["finish"] == "concrete"
+    raw = {"parts": [{"name": "Body", "method": "vendor", "side_box": [0, 100, 0, 100], "front_span": [0, 100],
+                      "zones": [{"name": "Bands", "side_box": [0, 100, 0, 100], "glow": {"hue": 275, "hue_tol": 400},
+                                 "material": {"finish": "emissive"}},
+                                {"name": "Tip", "side_box": [94, 100, 30, 60], "glow": "#00e5ff", "material": {"finish": "emissive"}},
+                                {"name": "Pad", "side_box": [0, 10, 0, 100], "glow": "bright", "material": {"finish": "rubber"}}]}]}
+    z = validate_plan(raw, [0.8, 0.25, 0.33])["parts"][0]["zones"]
+    assert z[0]["glow"] == {"hue": 275.0, "hue_tol": 90.0, "min_sat": 0.35, "min_val": 0.35}
+    assert abs(z[1]["glow"]["hue"] - 186.0) < 1.0
+    assert "glow" not in z[2]
+
+
+def test_flat_zone_passes_through():
+    # 2026-09-30: a rear cap the mesher printed with the muzzle's glow is repainted flat in the planned colour
+    raw = {"parts": [{"name": "Body", "method": "vendor", "side_box": [0, 100, 0, 100], "front_span": [0, 100],
+                      "zones": [{"name": "RearCap", "side_box": [0, 2, 30, 90], "flat": True, "material": {"finish": "painted"}},
+                                {"name": "Band", "side_box": [40, 50, 30, 90], "flat": "yes", "material": {"finish": "painted"}}]}]}
+    z = validate_plan(raw, [1.0, 0.25, 0.34])["parts"][0]["zones"]
+    assert z[0]["flat"] is True and "flat" not in z[1]

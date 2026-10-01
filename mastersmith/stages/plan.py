@@ -304,7 +304,9 @@ def snap_to_silhouette(plan, threshold=0.1):
     return changed
 
 
-FINISHES = ("polymer", "rubber", "metal", "painted", "glass", "wood", "fabric")
+# 2026-09-30: "concrete" and "emissive" were documented finishes but missing here, so an emissive zone came
+# out polymer and never glowed
+FINISHES = ("polymer", "rubber", "metal", "painted", "glass", "wood", "fabric", "concrete", "emissive")
 
 
 def clean_material(mat):
@@ -327,6 +329,23 @@ def clean_material(mat):
             # 2026-09-29: "color_lock" keeps the planned colour when the box is mostly a neighbour (the barrel run
             # back through the handguard sampled the handguard's grey)
             "color_lock": bool(mat.get("color_lock"))}
+
+
+def clean_glow(glow):
+    """An emissive zone that glows only where the texture shows the glow colour (2026-09-30: a ray gun's lens, an
+    energy band between gunmetal rings, a torpedo's lit tip): {"hue": degrees, "hue_tol", "min_sat", "min_val"}, or
+    the glow colour as "#rrggbb". -> the clean dict, or None"""
+    import colorsys
+    if isinstance(glow, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", glow):
+        r, g, b = (int(glow[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+        glow = {"hue": colorsys.rgb_to_hsv(r, g, b)[0] * 360.0}
+    if not isinstance(glow, dict) or not isinstance(glow.get("hue"), (int, float)):
+        return None
+    out = {"hue": float(glow["hue"]) % 360.0}
+    for key, lo, hi, default in (("hue_tol", 2.0, 90.0, 20.0), ("min_sat", 0.0, 1.0, 0.35), ("min_val", 0.0, 1.0, 0.35)):
+        v = glow.get(key, default)
+        out[key] = min(hi, max(lo, float(v))) if isinstance(v, (int, float)) else default
+    return out
 
 
 def validate_plan(raw, dims, max_parts=None):
@@ -390,10 +409,14 @@ def validate_plan(raw, dims, max_parts=None):
                 for key in ("keep", "strength"):
                     if isinstance(z.get(key), (int, float)):
                         zone[key] = z[key]
-                for key in ("fill", "line", "shell"):        # shell the frame's holes; line the cockpit's backs;
-                                                                # "shell": the whole canopy one clean shell
+                for key in ("fill", "line", "shell", "flat"):  # shell the frame's holes; line the cockpit's backs;
+                                                                # "shell": the whole canopy one clean shell; "flat":
+                                                                # the planned colour only, none of the texture
                     if isinstance(z.get(key), bool):
                         zone[key] = z[key]
+                glow = clean_glow(z.get("glow"))
+                if glow:
+                    zone["glow"] = glow
                 zones.append(zone)
             part["zones"] = zones
         parts.append(part)

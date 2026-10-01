@@ -121,7 +121,12 @@ OUTSIDE skin is glass: a face whose rays all hit the model (seats, panels, the c
 go straight through a canopy frame get a glass shell (the canopy's convex hull, set just inside the frame; `"fill":
 false` turns it off). The report checks the kept panes hold 60% of the pick, at most 40 islands, at most 8% of the
 part (a box test alone is never enough, Tonetta: "never assign glass face by face from a normal or a box test"). An
-`emissive` zone glows at `"strength"` 6-12 and is baked into T_<Name>_E. `metal`
+`emissive` zone glows at `"strength"` 6-12 and is baked into T_<Name>_E. With `"glow"` it glows only where the
+texture already shows the glow's colour: `{"hue": degrees, "hue_tol": 20, "min_sat": 0.35, "min_val": 0.35}` or
+`"#rrggbb"` (2026-09-30: a ray gun's lens, violet bands between gunmetal rings, a torpedo's lit tip); the rest of
+the box keeps its own colour and finish, so a generous box is fine as long as nothing else in it has that hue.
+`"flat": true` on a zone paints its planned colour alone, none of the texture: for a face the mesher textured wrong
+(a seed with no back view printed its glowing muzzle onto the rear cap; a tint kept the lightning at +-50%). `metal`
 is true only for bare metal. A dark metal is lifted to 7% reflectance by adding grey (`mastersmith/blender/colour.py`), but a tinted colour
 still renders more saturated on large flat faces: give blued or black steel a near-neutral colour (the shotgun's #283446 came out navy,
 2026-09-29). `"reference_detail": false` on a code part skips projecting the reference picture's

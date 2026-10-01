@@ -222,7 +222,7 @@ def image_mean_luminance(img):
     return float(used.mean()) if len(used) > 100 else float(lum.mean())
 
 
-def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False, force=False):
+def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False, force=False, flat=False):
     """A vendor part takes its planned colour, keeping its own light and dark variation: base colour = planned colour x
     (texel luminance / the texture's mean luminance), clamped. Tripo keeps a washed-out grey where the plan says matte
     black (the pistol frame, 2026-09-27); this is the part's material being set as planned while it is assembled, the
@@ -239,7 +239,9 @@ def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False, force=
         base = b.inputs["Base Color"]
         rgb = t.nodes.new("ShaderNodeRGB")
         rgb.outputs[0].default_value = (*lin, 1.0)
-        if not base.is_linked:
+        if not base.is_linked or flat:
+            # flat (2026-09-30): a face the mesher textured wrong takes the planned colour alone (a seed with no back
+            # view printed its glowing muzzle onto the rear cap; tinting kept the lightning lines at +-50%)
             t.links.new(rgb.outputs[0], base)
             done = True
             continue
@@ -827,6 +829,59 @@ def lift_roughness(mats, floor=0.35, trigger=0.40):
     return found
 
 
+def glow_emission(mats, glow):
+    """Emission = the material's own base colour where its hue is within hue_tol of the glow's and it is saturated and
+    bright enough, black elsewhere (soft edges). The bake of T_<Name>_E then carries just the glowing texels.
+    -> {"hue", "materials"}"""
+    h0 = float(glow["hue"]) / 360.0
+    tol = float(glow.get("hue_tol", 20.0)) / 360.0
+    smin, vmin = float(glow.get("min_sat", 0.35)), float(glow.get("min_val", 0.35))
+    done = 0
+    for m in mats:
+        t = m.node_tree
+        b = next((n for n in t.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if b is None or not b.inputs["Base Color"].is_linked:
+            continue
+        colour = b.inputs["Base Color"].links[0].from_socket
+        hsv = t.nodes.new("ShaderNodeSeparateColor")
+        hsv.mode = "HSV"
+        t.links.new(colour, hsv.inputs["Color"])
+
+        def math(op, a, bval=None):
+            n = t.nodes.new("ShaderNodeMath")
+            n.operation = op
+            for i, v in enumerate((a, bval)):
+                if v is None:
+                    continue
+                if isinstance(v, (int, float)):
+                    n.inputs[i].default_value = v
+                else:
+                    t.links.new(v, n.inputs[i])
+            return n.outputs[0]
+
+        def ramp(v, lo, hi, rising=True):
+            n = t.nodes.new("ShaderNodeMapRange")
+            n.clamp = True
+            t.links.new(v, n.inputs["Value"])
+            n.inputs["From Min"].default_value, n.inputs["From Max"].default_value = lo, hi
+            n.inputs["To Min"].default_value, n.inputs["To Max"].default_value = (0.0, 1.0) if rising else (1.0, 0.0)
+            return n.outputs[0]
+
+        d = math("ABSOLUTE", math("SUBTRACT", hsv.outputs["Red"], h0))
+        d = math("MINIMUM", d, math("SUBTRACT", 1.0, d))          # the hue circle wraps at red
+        mask = math("MULTIPLY", ramp(d, tol * 0.5, tol, rising=False), ramp(hsv.outputs["Green"], smin * 0.7, smin))
+        mask = math("MULTIPLY", mask, ramp(hsv.outputs["Blue"], vmin * 0.7, vmin))
+        mix = t.nodes.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        t.links.new(mask, mix.inputs["Factor"])
+        mix.inputs[6].default_value = (0.0, 0.0, 0.0, 1.0)
+        t.links.new(colour, mix.inputs[7])
+        t.links.new(mix.outputs[2], b.inputs["Emission Color"])
+        b.inputs["Emission Strength"].default_value = 1.0
+        done += 1
+    return {"hue": glow["hue"], "materials": done}
+
+
 def paint_not_chrome(mats, finish, metal_max=0.12, rough_min=0.30):
     """A kept texture on a painted or polymer part keeps its colours but not the mesher's chrome: Tripo mapped the
     Havoc's canopy hood as roughness 0.04, metallic 0.82 (the rest of the hull 0.36 / 0.03), and it rendered as black
@@ -1132,7 +1187,14 @@ for p in args["parts"]:
                 for m in mats:
                     m["ms_glass"] = True
                 continue
-            tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")), force=bool(zm.get("color_lock")))
+            if zm.get("finish") == "emissive" and z.get("glow"):
+                # 2026-09-30: only the texels in the glow's hue glow (a lens, an energy band, a lit tip); the rest of
+                # the box keeps its own colour and finish, so no tint and no planned roughness here
+                rec.setdefault("glow_zones", []).append(glow_emission(mats, z["glow"]))
+                EMISSIVE["strength"] = max(EMISSIVE["strength"], float(z.get("strength") or zm.get("strength") or 8.0))
+                continue
+            tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")), force=bool(zm.get("color_lock")),
+                         flat=bool(z.get("flat")))
             surface_to_plan(o, zm, mats)
             if zm.get("finish") == "emissive":
                 # a lamp, a screen, an engine glow: its colour emitted, baked into T_<Name>_E; the strength (6-12, 1-2
