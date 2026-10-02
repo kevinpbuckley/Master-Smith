@@ -22,11 +22,11 @@ from . import config, pricing
 # key -> what it is. "endpoint" is the fal model id (or the built-in local id); "inputs" single | multiview.
 BUILTIN = {
     "hi3d-mv": {"kind": "seed", "label": "Hi3D v3 multi-view (2048)", "endpoint": config.SEED_HI3D_MULTIVIEW, "inputs": "multiview",
-                "notes": "the best whole-object M4A1 of the 2026-09-29 comparison (6.5/10); named front/left/back/right views"},
+                "notes": "M4A1 6.5/10 (2026-09-29); the eight Proteus weapons Ready (2026-09-30); the pick when cost does not matter"},
     "hi3d": {"kind": "seed", "label": "Hi3D v3 (2048)", "endpoint": "hitem3d/hi3d/v3.0/image-to-3d", "inputs": "single",
              "notes": "crisp hard-surface geometry from one picture"},
     "tripo": {"kind": "seed", "label": "Tripo H3.1 detailed", "endpoint": "tripo3d/h3.1/image-to-3d", "inputs": "single",
-              "notes": "PBR textures; thin parts survive"},
+              "notes": "tied hi3d-mv on the M4A1 (6.5); from the hero, the Havoc's 9/10 seed; benchmark 5-7 (2026-09-30)"},
     "tripo-mv": {"kind": "seed", "label": "Tripo H3.1 multi-view", "endpoint": "tripo3d/h3.1/multiview-to-3d", "inputs": "multiview",
                  "notes": "needs front, left, back and right views"},
     "meshy7": {"kind": "seed", "label": "Meshy v7", "endpoint": "fal-ai/meshy/v7/image-to-3d", "inputs": "single", "notes": "cheap"},

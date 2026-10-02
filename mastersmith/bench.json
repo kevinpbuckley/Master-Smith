@@ -1,0 +1,11 @@
+{
+ "about": "The owner's standard test set ('the test we have been running on Tonetta', 2026-09-30): each asset's source is the job whose plan is the best tuned so far (zones, glass, cockpit insert, lettering). `ms bench --model <key>` clones each, re-seeds it and assembles it; `--keep-seed` re-assembles the same seeds with the current code for free. Baselines are the owner-visible scores those jobs got.",
+ "assets": [
+  {"name": "BullpupCarbineMk2", "source": "BullpupCarbineMk2_tripo_whole", "baseline": {"job": "BullpupCarbineMk2_tripo_whole", "score": 7.5}},
+  {"name": "M4A1", "source": "M4A1_tripo_whole", "baseline": {"job": "M4A1_tripo_whole", "score": 6.5}},
+  {"name": "MainBattleTank", "source": "MainBattleTank_TripoTest_20260930", "baseline": {"job": "MainBattleTank_TripoTest_20260930", "score": 7}},
+  {"name": "AH64Apache", "source": "AH64Apache_TripoTest_20260930", "baseline": {"job": "AH64Apache_TripoTest_20260930", "score": 5}},
+  {"name": "PumpShotgun", "source": "PumpShotgun_Refined_20260930", "baseline": {"job": "PumpShotgun_Refined_20260930", "score": 5}},
+  {"name": "HavocGunship", "source": "HavocGunship_tripo_whole", "baseline": {"job": "HavocGunship_tripo_whole", "score": 9}}
+ ]
+}

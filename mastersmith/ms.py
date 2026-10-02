@@ -40,11 +40,12 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 import webbrowser
 
 from PIL import Image, ImageOps
 
-from . import config, models, picturecheck, pricing, refs_review, results_page, site
+from . import config, jobs as jobtools, ledger, models, picturecheck, pricing, refs_review, results_page, site
 from .fal import Fal, first_url
 from .images import Images
 from .spec import Spec
@@ -158,6 +159,18 @@ def existing_pictures(folder):
 
 # ------------------------------------------------------------------ commands
 def cmd_new(a):
+    if a.from_file:
+        # several briefs at once (the eight Proteus weapons were made by a script in another repo, 2026-09-30):
+        # [{"name", "category", "size", "description", "tris"?, "style"?, "engine"?}]
+        briefs = json.load(open(a.from_file, encoding="utf-8"))
+        for b in briefs.get("briefs", briefs) if isinstance(briefs, dict) else briefs:
+            ns = argparse.Namespace(name=b["name"], category=b.get("category", a.category), size=float(b["size"]),
+                                    description=b["description"], style=b.get("style", a.style), engine=b.get("engine", a.engine),
+                                    tris=int(b.get("tris") or 0), rebrief=a.rebrief, from_file=None)
+            cmd_new(ns)
+        return
+    if not a.name or a.size is None or not a.description:
+        sys.exit("ms new <Name> --size <m> --description \"...\" (or --from briefs.json)")
     folder = os.path.join(str(config.OUT_DIR), a.name)
     have = existing_pictures(folder) if os.path.isdir(folder) else []
     if have:
@@ -183,7 +196,9 @@ def cmd_picture(a):
     refs = [os.path.abspath(r) if os.path.exists(r) else job.path(r) for r in (a.ref or [])]
     model = _picture_model(a.model)
     job.images.generate(a.prompt, out, model=model, references=refs, aspect_ratio=a.aspect)
-    print("picture:", out, "($%.2f)" % job.images.spent() if hasattr(job.images, "spent") else "")
+    usd = job.images.spent() if hasattr(job.images, "spent") else None
+    ledger.record(job.dir, "picture", model=a.model, usd=usd, out=a.out)
+    print("picture:", out, "($%.2f)" % usd if usd is not None else "")
 
 
 def cmd_view(a):
@@ -198,6 +213,8 @@ def cmd_view(a):
     job.images.generate(prompt, out, model=_picture_model(a.model), references=[src], aspect_ratio="1:1")
     if a.mirror:
         ImageOps.mirror(Image.open(out).convert("RGB")).save(out)
+    ledger.record(job.dir, "view", model=a.model, usd=job.images.spent() if hasattr(job.images, "spent") else None,
+                  out=os.path.relpath(out, job.dir), which=a.which)
     print("view:", out)
 
 
@@ -328,6 +345,7 @@ def cmd_retexture(a):
     out = job.fal.run(m["endpoint"], payload)
     glb = os.path.join(d, "retextured.glb")
     job.fal.download(first_url(out, (".glb",)), glb)
+    ledger.record(job.dir, "retexture", model=a.model, usd=job.fal.spent(), part=a.part)
     print("retextured: %s (%s, $%.2f)" % (glb, m["label"], job.fal.spent()))
     backup = os.path.join(d, "registered_before_retexture.blend")
     if not os.path.exists(backup):
@@ -358,6 +376,7 @@ def cmd_seed(a):
         pics = [views[r] for r in ("hero", "left", "front", "back", "right", "top") if r in views]
         pics = pics if m["inputs"] == "multiview" else [views.get(primary) or views["hero"]]
         models.run_command(m, glb, image=pics[0], images=pics)
+        ledger.record(job.dir, "seed", model=a.model, usd=0.0, part=a.part)
         print("seed: %s (%s, free)" % (glb, m["label"]))
     else:
         if not str(m["endpoint"]).startswith("local/"):
@@ -368,6 +387,7 @@ def cmd_seed(a):
         used = [k for k in payload if k.endswith("_image_url")] or (["%d views" % len(payload["image_urls"])] if payload.get("image_urls") else [primary])
         out = job.fal.run(ep, payload)
         job.fal.download(first_url(out, (".glb",)), glb)
+        ledger.record(job.dir, "seed", model=a.model, usd=job.fal.spent(), part=a.part, views=used)
         print("seed: %s (%s from %s, $%.2f)" % (glb, m["label"], ", ".join(used), job.fal.spent()))
     plan_path = job.path("plan", "plan.json")
     if a.replan or not os.path.exists(plan_path):
@@ -446,6 +466,8 @@ def cmd_part_pictures(a):
         mm = [round((box[1][i] - box[0][i]) * 1000) for i in range(3)]
         print("fit card: %s" % fit_card(plan, part, box, os.path.join(d, "fit_card.png"),
                                         "%s: %d x %d x %d mm (L x W x H) in its box" % (part["name"], mm[0], mm[1], mm[2])))
+    if hasattr(job.images, "spent") and job.images.spent():
+        ledger.record(job.dir, "part-pictures", model=a.model, usd=job.images.spent(), part=part["name"])
     print("Look at both (Read them). Redraw with --redraw --fixes '...' if the design drifted (ask the owner first).")
 
 
@@ -478,6 +500,7 @@ def cmd_mesh(a):
     mesh_url = first_url(out, (".glb",))
     glb = os.path.join(d, "seed.glb")
     job.fal.download(mesh_url, glb)
+    ledger.record(job.dir, "mesh", model=a.vendor, usd=job.fal.spent(), part=part["name"])
     print("mesh: %s (%s, $%.2f)" % (glb, model, job.fal.spent()))
     _do_register(job, part, d, a.src == "quarter" and os.path.exists(os.path.join(d, "quarter.png")), 0, 0)
 
@@ -827,16 +850,30 @@ def _proj_picture(src, dst, crop=True):
     return dst, (a.shape[1], a.shape[0])
 
 
+def _mean_linear(rgba_path):
+    """The mean colour (linear RGB) of a projection picture's object pixels (its alpha is the object's mask)."""
+    import numpy as np
+    a = np.asarray(Image.open(rgba_path).convert("RGBA")).astype(np.float32) / 255.0
+    m = a[:, :, 3] > 0.5
+    if m.sum() < 100:
+        return None
+    rgb = a[:, :, :3][m]
+    lin = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    # and its mean chroma (max - min of the sRGB values): how colourful the object is, for the saturation match
+    return [round(float(v), 5) for v in lin.mean(axis=0)] + [round(float((rgb.max(axis=1) - rgb.min(axis=1)).mean()), 5)]
+
+
 def _projection_inputs(job, plan, parts):
     """What assemble.py projects (#14): the approved side and front views for every part (with their high-pass
     detail maps), and each part's own side picture when it has one, in its own frame - or the asset's frame when
     it is the erased body picture (same size as the plan's side view)."""
     side_size = Image.open(plan["side"]).size
-    out = {"strength": 0.85}
+    out = {"strength": 0.85, "mode": "full"}
     ps = _proj_picture(plan["side"], job.path("plan", "proj_side.png"), crop=False)
     if ps:
         out["side"] = ps[0]
         out["side_detail"] = detail_map(plan["side"], job.path("plan", "detail_side.png"))
+        out["side_mean_linear"] = _mean_linear(ps[0])
     if plan.get("front"):
         pf = _proj_picture(plan["front"], job.path("plan", "proj_front.png"), crop=False)
         if pf:
@@ -900,7 +937,8 @@ def cmd_assemble(a):
     if plan.get("front"):
         det["front"] = detail_map(plan["front"], job.path("plan", "detail_front.png"))
     ref = job.path("ref", "ref_0.png")
-    projection = None if a.no_projection else _projection_inputs(job, plan, parts)
+    mode = "off" if a.no_projection else a.projection
+    projection = None if mode == "off" else dict(_projection_inputs(job, plan, parts), mode=mode)
     pbr_library = {}
     if not a.no_materials:
         from . import materials
@@ -917,18 +955,46 @@ def cmd_assemble(a):
             "edge_break_m": 0.0 if a.no_edge_break else 0.0008 * float(plan["dims_m"][0]),
             # every edge's small round, baked into the normal map from the Bevel shader (Tonetta: a razor edge reads
             # as fake, 2026-09-29): 0.2% of the asset's length
+            # 2026-09-30: the restrained profile is the default (0.05% of the length, at most 1.5 mm): 0.2% grew to
+            # 28 mm on the 14 m Havoc and, with the stacked 1 mm bumps and glossy edge wear, read as melted ("gooey")
             "bevel_m": 0.0 if a.no_bevel else (min(0.0015, 0.0005 * float(plan["dims_m"][0]))
                 if a.finish_profile == "restrained" else 0.002 * float(plan["dims_m"][0])),
-            "finish_profile": a.finish_profile, "drop_floaters": bool(a.drop_floaters)}
-    _blender(job, "assemble.py", args, "assemble")
+            "finish_profile": a.finish_profile, "drop_floaters": bool(a.drop_floaters), "origin": a.origin,
+            "draft": bool(a.draft), "tubes": a.tubes}
+    _blender(job, "assemble.py", args, "assemble_draft" if a.draft else "assemble")
+    if a.draft:
+        d = os.path.join(delivery, "draft")
+        rep = json.load(open(os.path.join(d, "report.json")))
+        print("draft (no bake, LODs or exports; the delivery is untouched) -> %s" % d)
+        for z in rep.get("glass_zones") or []:
+            print("  glass %s: %s" % (z.get("zone"), {k: z.get(k) for k in ("mode", "faces", "coverage", "share_of_part", "ok")}))
+        for r in rep.get("parts") or []:
+            for k in ("pokes_out", "pokes_into_body", "islands"):
+                if k in r:
+                    print("  %s %s: %s" % (r["name"], k, r[k]))
+        if rep.get("muzzle") is not None:
+            print("  muzzle: %s; sockets %s" % (rep["muzzle"], [s["name"] for s in rep.get("sockets") or []]))
+        print("  renders: " + ", ".join(os.path.join(d, r) for r in rep.get("renders") or []))
+        print("Read the renders; run the full assemble (no --draft) once the boxes and picks are right.")
+        return
     rep = json.load(open(os.path.join(delivery, "report.json")))
     sheet = six_view_sheet(job, delivery)
     print("assembled %d parts -> %s" % (len(parts), delivery))
-    print("  size %s m, LOD0 %s tris" % (rep.get("dimensions_m"), (rep.get("lods") or [{}])[0].get("triangles")))
-    print("  previews: " + ", ".join(os.path.join(delivery, r) for r in rep["renders"]))
+    print("  size %s m, LOD0 %s tris, origin %s" % (rep.get("dimensions_m"), (rep.get("lods") or [{}])[0].get("triangles"),
+                                                    (rep.get("origin") or {}).get("mode", "centre")))
+    if rep.get("sockets"):
+        print("  sockets (SOCKET_ in the FBX, metres): " + ", ".join("%s %s" % (s["name"], s["location"]) for s in rep["sockets"]))
+    if rep.get("muzzle") is not None:
+        print("  muzzle: %s" % rep["muzzle"])
+    for w in (rep.get("gate") or {}).get("warnings") or []:
+        print("  gate: " + w)
+    print("  previews: " + ", ".join(os.path.join(delivery, r) for r in rep["renders"] + (rep.get("detail_renders") or [])))
     print("  six views: %s" % sheet)
-    print("  page: %s  (ms preview %s opens it)" % (write_preview(job), a.job))
-    print("Now LOOK at the six views and the previews (Read them) before calling it good.")
+    write_preview(job)
+    url = _preview_url(job)
+    print("  preview: %s" % url)
+    print("Now LOOK at the six views and the previews (Read them) before calling it good, and put the preview link in "
+          "the message.")
 
 
 PREVIEW_HTML = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><title>%(name)s</title>
@@ -998,24 +1064,29 @@ def write_preview(job):
     return out
 
 
+def _preview_url(job):
+    """The job's live preview on the one site (started when it is not running): every delivery message carries it
+    (owner, 2026-09-29: "where's my preview link?"; `assemble` printed only a file path)."""
+    out_dir = os.path.abspath(str(config.OUT_DIR))
+    if os.path.normcase(os.path.dirname(job.dir)) == os.path.normcase(out_dir):
+        # every job on the one site and port (owner, 2026-09-29), with its nav bar back to all the builds
+        return _serve_out(out_dir) + "/%s/delivery/preview.html" % os.path.basename(job.dir)
+    # a job outside out/ (a scratch copy) gets a small static server of its own
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+    subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", job.dir],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+    return "http://127.0.0.1:%d/delivery/preview.html" % port
+
+
 def cmd_preview(a):
     job = Job(a.job)
     if not os.path.exists(job.path("delivery", "report.json")):
         sys.exit("nothing assembled yet: ms assemble %s first" % a.job)
     page = write_preview(job)
-    out_dir = os.path.abspath(str(config.OUT_DIR))
-    if os.path.normcase(os.path.dirname(job.dir)) == os.path.normcase(out_dir):
-        # every job on the one site and port (owner, 2026-09-29), with its nav bar back to all the builds
-        url = _serve_out(out_dir) + "/%s/delivery/preview.html" % os.path.basename(job.dir)
-    else:
-        # a job outside out/ (a scratch copy) gets a small static server of its own
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-        subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", job.dir],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
-        url = "http://127.0.0.1:%d/delivery/preview.html" % port
+    url = _preview_url(job)
     print("preview: %s  (%s)" % (url, page))
     if not a.no_open:
         webbrowser.open(url)
@@ -1029,6 +1100,17 @@ def cmd_refs(a):
     for j in jobs:
         if not os.path.isfile(os.path.join(out_dir, j, "brief.json")):
             sys.exit("no job %s in %s" % (j, out_dir))
+    if a.sheet:
+        # the agent's own look before the owner's: one picture per job it can Read (2026-10-01: 9 of 38 redrawn)
+        for j in jobs:
+            cat = json.load(open(os.path.join(out_dir, j, "brief.json"), encoding="utf-8")).get("category")
+            path, warns = picturecheck.contact_sheet(os.path.join(out_dir, j), cat, os.path.join(out_dir, j, "ref_sheet.png"))
+            print("sheet: %s" % path)
+            for w in warns:
+                print("  check: %s" % w)
+        print(picturecheck.REF_CHECKLIST)
+        if a.no_open:
+            return
     url = _serve_out(out_dir) + "/refs" + (("?jobs=" + ",".join(jobs)) if a.jobs else "")
     print("reference review: %s  (%d jobs)" % (url, len(jobs)))
     print("choices land in out/<Name>/ref/review.json; read them before building")
@@ -1125,6 +1207,198 @@ def cmd_status(a):
     else:
         print("plan: none yet (ms grid, then write plan.json, then ms plan)")
     print("delivery:", "yes" if os.path.exists(job.path("delivery", "report.json")) else "none")
+    sc_path = job.path("delivery", "scorecard.json")
+    if os.path.exists(sc_path):
+        sc = json.load(open(sc_path, encoding="utf-8"))
+        print("score: %s%s" % (sc.get("score"), " (owner: %s)" % sc["owner_score"] if sc.get("owner_score") is not None
+                                 else " (self-scored, not confirmed by the owner)"))
+    # the owner's choices and the money, which a compacted context forgets (2026-09-30/10-01)
+    s = ledger.summary(ledger.load(job.dir))
+    if s["calls"] or s["notes"]:
+        print("models used: %s" % ("; ".join("%s %s" % (k, ", ".join(v)) for k, v in s["models"].items()) or "none recorded"))
+        print("spent on this job: $%.2f in %d paid call(s) recorded" % (s["spent_usd"], s["calls"]))
+        for n in s["notes"][-12:]:
+            print("  note: %s" % n)
+
+
+def cmd_closeup(a):
+    """One close-up of the delivery the way a reviewer needs it: a box off the side grid, a view, glass or lining hidden
+    or shown bright red, a zone's faces in red, lit or unlit (base colour only), clay, or cut open (2026-09-29: ~17
+    throwaway Blender probe scripts on the Havoc's glass and cockpit). Renders delivery/closeups/<name>.png."""
+    job = Job(a.job)
+    d = job.path("delivery")
+    blend = os.path.join(d, "SM_%s.blend" % job.spec.name)
+    if not os.path.exists(blend):
+        sys.exit("nothing assembled yet: ms assemble %s first" % a.job)
+    rep = json.load(open(os.path.join(d, "report.json")))
+    pivot = (rep.get("origin") or {}).get("at_in_plan_frame_m") or [0.0, 0.0, 0.0]
+    plan = _plan(job)
+    shift = lambda v: [round(v[i] - pivot[i], 5) for i in range(3)]
+    args = {"blend": blend, "name": job.spec.name, "view": a.view, "unlit": a.unlit, "clay": a.clay, "size": a.size,
+            "hide": [h for h in (a.hide or "").split(",") if h], "highlight": [h for h in (a.highlight or "").split(",") if h]}
+    if a.box:
+        x0, x1, zt, zb = (float(v) for v in a.box.split(","))
+        lo, hi = planmod.to_metres([x0, x1, zt, zb], [0, 100], plan["dims_m"])
+        args["focus_min"], args["focus_max"] = shift(lo), shift(hi)
+    boxes = {}
+    for p in plan["parts"]:
+        boxes[p["name"]] = [shift(p["box_min"]), shift(p["box_max"])]
+        for z in p.get("zones") or []:
+            boxes[z["name"]] = [shift(z["box_min"]), shift(z["box_max"])]
+    args["boxes"] = boxes
+    if a.section:
+        axis, value = a.section.split("=")
+        k = "xyz".index(axis.strip().lower())
+        args["section"] = [axis.strip().lower(), float(value) - pivot[k]]
+    tags = [a.view] + (["unlit"] if a.unlit else []) + (["clay"] if a.clay else []) + ["no-" + h for h in args["hide"]] + \
+        ["red-" + h for h in args["highlight"]] + (["cut-" + a.section.replace("=", "")] if a.section else []) + \
+        (["box-" + a.box.replace(",", "-")] if a.box else [])
+    out = os.path.join(d, "closeups", (a.out or "_".join(tags)) + ".png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    args["out"] = out
+    _blender(job, "closeup.py", args, "closeup", timeout=900)
+    res = json.load(open(os.path.splitext(out)[0] + ".json"))
+    print("close-up: %s  (%s)" % (out, "; ".join(res.get("done") or []) or "as delivered"))
+    print("Read it.")
+
+
+def cmd_rig(a):
+    """The delivered weapon rigged for an engine: Root/Body/(Barrel)/Muzzle bones at the measured muzzles, rigid skin,
+    Idle/Fire/Equip (and FiringLoop) clips, all in centimetres with no node scale, read back to prove it (ported from
+    Proteus's rig script, 2026-10-01: an FBX left in metres became a x100 root bone in Unreal). -> delivery/rig/"""
+    job = Job(a.job)
+    d = job.path("delivery")
+    blend = os.path.join(d, "SM_%s.blend" % job.spec.name)
+    if not os.path.exists(blend):
+        sys.exit("nothing assembled yet: ms assemble %s first" % a.job)
+    rep = json.load(open(os.path.join(d, "report.json")))
+    if job.spec.category != "weapon":
+        print("note: %s is a %s; the rig is a weapon's (recoil, equip slide, muzzle bones)" % (job.spec.name, job.spec.category))
+    if not any(s["name"].startswith("Muzzle") for s in rep.get("sockets") or []):
+        print("note: the delivery has no measured muzzle (assembled before 2026-10-02?): re-assemble for muzzle bones at the bores")
+    out = os.path.join(d, "rig")
+    args = {"blend": blend, "name": job.spec.name, "out_dir": out, "maps_dir": d, "sockets": rep.get("sockets") or [],
+            "origin": a.origin, "barrel": [float(v) for v in a.barrel.split(",")] if a.barrel else None,
+            "recoil": a.recoil, "kick": a.kick, "equip": a.equip, "loop": a.loop, "idle": a.idle, "glow": not a.no_glow}
+    _blender(job, "rig_weapon.py", args, "rig", timeout=1200)
+    res = json.load(open(os.path.join(out, "rig.json")))
+    print("rigged -> %s: %s" % (out, ", ".join(res["files"])))
+    print("  bones %s; clips %s; muzzles %s" % (res["bones"], res["clips"], res["muzzles_m"]))
+    print("  read back: %s" % res["fbx_check"])
+    print("  renders: " + ", ".join(os.path.join(out, r) for r in res["renders"]))
+    if not res["fbx_check"].get("ok"):
+        sys.exit("the skeletal FBX does not read back at the weapon's size with a unit root: do not hand it to the engine")
+    print("Read the renders. In Unreal: import SK_%s.fbx as a skeletal mesh, then the A_ clips onto its skeleton; the "
+          "Muzzle bones are the sockets." % job.spec.name)
+
+
+def cmd_note(a):
+    """The owner's decision in their words, kept with the job (ms status prints it): models picked, references
+    approved, what to change. A compacted context loses the conversation; the job folder keeps this."""
+    job = Job(a.job)
+    ledger.record(job.dir, "note", text=" ".join(a.text))
+    print("noted in %s" % os.path.join(job.dir, ledger.FILE))
+
+
+def cmd_clone(a):
+    """A copy of a job to rebuild from: its pictures, its tuned plan and every part but the one re-seeded (2026-09-30:
+    a re-run that started from a generic plan lost the Havoc's cockpit insert and canopy shell, 9/10 -> 5/10)."""
+    src = a.src if os.path.isdir(a.src) else os.path.join(str(config.OUT_DIR), a.src)
+    dst = os.path.join(str(config.OUT_DIR), os.path.basename(os.path.normpath(a.name)))
+    try:
+        res = jobtools.clone_job(src, dst, reseed=[p.strip() for p in a.reseed.split(",") if p.strip()], keep_seed=a.keep_seed)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    print("cloned %s -> %s (%d files): seeds kept %s; to seed again %s" % (src, dst, res["copied"], res["seeds_kept"] or "none",
+                                                                             res["reseed"] or "none"))
+    rel = os.path.relpath(dst, str(config.ROOT))
+    if res["reseed"]:
+        print("Next: ms seed %s --model <the owner's pick> (keeps the plan), then ms assemble %s" % (rel, rel))
+    else:
+        print("Next: ms assemble %s (free: the same seeds with the current code)" % rel)
+
+
+def _price(model_key):
+    try:
+        return models.price_of(models.resolve(model_key, kind="seed")) or 0.0
+    except KeyError:
+        sys.exit("no seed model %s (ms models)" % model_key)
+
+
+def cmd_batch(a):
+    """One command over several jobs, a few at a time, a log per job and one line each (the Proteus weapons were seeded
+    and assembled by shell loops in another repo, 2026-09-30). A command that spends asks for --yes."""
+    jobs = [j if os.path.isdir(j) else os.path.join(str(config.OUT_DIR), j) for j in a.jobs]
+    for j in jobs:
+        if not os.path.isfile(os.path.join(j, "brief.json")):
+            sys.exit("no job %s" % j)
+    extra = jobtools.split_args(a.args)
+    if a.command in jobtools.SPENDING and not a.yes:
+        est = ""
+        if a.command == "seed" and "--model" in extra:
+            est = " (%d x $%.2f = $%.2f)" % (len(jobs), _price(extra[extra.index("--model") + 1]),
+                                             len(jobs) * _price(extra[extra.index("--model") + 1]))
+        sys.exit("ms %s spends money%s: say the estimate to the owner, then add --yes" % (a.command, est))
+    print("ms %s on %d jobs, %d at a time (logs: <job>/batch_%s.log)" % (a.command, len(jobs), a.parallel, a.command))
+    res = jobtools.run_batch(a.command, jobs, extra, parallel=a.parallel)
+    bad = [r for r in res if r["exit"] != 0]
+    if a.command == "assemble" and "--draft" not in extra:
+        names = ",".join(os.path.basename(r["job"]) for r in res if r["exit"] == 0)
+        if names:
+            print("builds: %s/results?jobs=%s" % (_serve_out(str(config.OUT_DIR)), names))
+    if bad:
+        sys.exit("%d of %d failed: %s" % (len(bad), len(res), ", ".join("%s (%s)" % (os.path.basename(r["job"]), r["log"]) for r in bad)))
+
+
+def cmd_bench(a):
+    """The owner's standard test set (mastersmith/bench.json): each asset cloned from its best-tuned job, re-seeded with
+    the model the owner picked (or, --keep-seed, the same seeds re-assembled with the current code for free), assembled,
+    and summed up against its baseline score (2026-09-30: Codex scripted this by hand and lost the tuned plans)."""
+    out_dir = str(config.OUT_DIR)
+    assets = jobtools.bench_set()
+    if a.only:
+        want = {w.strip().lower() for w in a.only.split(",")}
+        assets = [x for x in assets if x["name"].lower() in want]
+    if not a.keep_seed and not a.model:
+        sys.exit("--model <seed model the owner picked>, or --keep-seed for a free re-assemble of the same seeds")
+    tag = a.tag or time.strftime("%Y%m%d")
+    suffix = "rebuild" if a.keep_seed else a.model.replace("-", "")
+    rows = []
+    for x in assets:
+        src = os.path.join(out_dir, x["source"])
+        dst = os.path.join(out_dir, "%s_%s_%s" % (x["name"], suffix, tag))
+        if not os.path.isdir(src):
+            print("  %s: source %s is missing, skipped" % (x["name"], x["source"]))
+            continue
+        rows.append({**x, "job": dst, "needs_seed": not a.keep_seed and not os.path.exists(os.path.join(dst, "parts", "Body", "seed.glb"))})
+    seeds = [r for r in rows if r["needs_seed"]]
+    price = _price(a.model) if seeds else 0.0
+    print("bench %s: %d assets -> %s" % (tag, len(rows), ", ".join(os.path.basename(r["job"]) for r in rows)))
+    if seeds:
+        print("  seeding %d with %s: %d x $%.2f = $%.2f" % (len(seeds), a.model, len(seeds), price, len(seeds) * price))
+        if not a.yes:
+            sys.exit("say this estimate to the owner; run again with --yes once they agree")
+    for r in rows:
+        if not os.path.isdir(r["job"]):
+            res = jobtools.clone_job(os.path.join(out_dir, r["source"]), r["job"], keep_seed=a.keep_seed)
+            print("  cloned %s from %s (seeds kept: %s)" % (os.path.basename(r["job"]), r["source"], res["seeds_kept"] or "none"))
+    if seeds:
+        jobtools.run_batch("seed", [r["job"] for r in seeds], ["--model", a.model], parallel=a.parallel)
+    done = [r for r in rows if os.path.exists(os.path.join(r["job"], "parts", "Body", "registered.blend"))]
+    res = jobtools.run_batch("assemble", [r["job"] for r in done], jobtools.split_args(a.args), parallel=a.assemble_parallel)
+    summary = {"tag": tag, "model": None if a.keep_seed else a.model, "keep_seed": a.keep_seed, "assets": []}
+    for r, x in zip(done, res):
+        summary["assets"].append({"name": r["name"], "job": os.path.basename(r["job"]), "source": r["source"],
+                                  "baseline": r.get("baseline"), "exit": x["exit"], "gate": x["gate"], "log": x["log"]})
+    os.makedirs(os.path.join(out_dir, "_bench"), exist_ok=True)
+    path = os.path.join(out_dir, "_bench", "%s_%s.json" % (suffix, tag))
+    json.dump(summary, open(path, "w", encoding="utf-8"), indent=1)
+    ok = ",".join(s["job"] for s in summary["assets"] if s["exit"] == 0)
+    print("summary: %s" % path)
+    if ok:
+        print("builds: %s/results?jobs=%s" % (_serve_out(out_dir), ok))
+    print("Now LOOK at each build's six views and close-ups, write delivery/scorecard.json against the baseline score "
+          "(SKILL.md §6 anchors), and report the table with the results link.")
 
 
 def main(argv=None):
@@ -1137,10 +1411,45 @@ def main(argv=None):
             pass
     ap = argparse.ArgumentParser(prog="ms", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("new"); s.add_argument("name"); s.add_argument("--category", default="prop"); s.add_argument("--size", type=float, required=True)
+    s = sub.add_parser("new"); s.add_argument("name", nargs="?"); s.add_argument("--category", default="prop"); s.add_argument("--size", type=float)
     s.add_argument("--rebrief", action="store_true", help="rewrite brief.json of an existing job (its pictures are kept)")
-    s.add_argument("--description", required=True); s.add_argument("--style", default="realistic"); s.add_argument("--engine", default="unreal")
+    s.add_argument("--description"); s.add_argument("--style", default="realistic"); s.add_argument("--engine", default="unreal")
+    s.add_argument("--from", dest="from_file", help='several jobs: a JSON list of {"name", "category", "size", "description"}')
     s.add_argument("--tris", type=int, default=0); s.set_defaults(fn=cmd_new)
+    s = sub.add_parser("clone", help="a job copied to rebuild from: pictures, tuned plan, other parts' seeds")
+    s.add_argument("src"); s.add_argument("name"); s.add_argument("--reseed", default="Body", help="parts whose seed is NOT copied (comma list)")
+    s.add_argument("--keep-seed", action="store_true", help="copy every seed too (a free re-assemble with the current code)")
+    s.set_defaults(fn=cmd_clone)
+    s = sub.add_parser("batch", help="one ms command over several jobs, a few at a time")
+    s.add_argument("command"); s.add_argument("jobs", nargs="+"); s.add_argument("--parallel", type=int, default=2)
+    s.add_argument("--args", default="", help='the rest of the command line for each job, e.g. "--model tripo" or "--draft"')
+    s.add_argument("--yes", action="store_true", help="the owner agreed to what a spending command costs"); s.set_defaults(fn=cmd_batch)
+    s = sub.add_parser("bench", help="the owner's standard test set (mastersmith/bench.json) re-seeded and assembled")
+    s.add_argument("--model", help="the seed model the owner picked"); s.add_argument("--keep-seed", action="store_true")
+    s.add_argument("--only", help="comma list of asset names"); s.add_argument("--tag", help="default: today, YYYYMMDD")
+    s.add_argument("--parallel", type=int, default=3, help="seeds at a time"); s.add_argument("--assemble-parallel", type=int, default=2)
+    s.add_argument("--args", default="", help="extra assemble arguments"); s.add_argument("--yes", action="store_true")
+    s.set_defaults(fn=cmd_bench)
+    s = sub.add_parser("note", help="the owner's decision, kept with the job"); s.add_argument("job"); s.add_argument("text", nargs="+")
+    s.set_defaults(fn=cmd_note)
+    s = sub.add_parser("closeup", help="one close-up of the delivery: a box, a view, glass hidden or red, unlit, clay, a cut")
+    s.add_argument("job"); s.add_argument("--box", help="x0,x1,z_top,z_bottom in side-grid percents")
+    s.add_argument("--view", default="iso", choices=("iso", "iso_rear", "iso_low", "left", "right", "front", "back", "top", "bottom"))
+    s.add_argument("--unlit", action="store_true", help="base colour only, no shading"); s.add_argument("--clay", action="store_true")
+    s.add_argument("--hide", help="glass,lining,frame"); s.add_argument("--highlight", help="glass, lining, frame, or a part or zone name")
+    s.add_argument("--section", help="x=, y= or z= metres in the plan frame: the near side cut away")
+    s.add_argument("--size", type=int, default=1024); s.add_argument("--out", help="file name (no extension)")
+    s.set_defaults(fn=cmd_closeup)
+    s = sub.add_parser("rig", help="a delivered weapon rigged and animated for an engine, in centimetres")
+    s.add_argument("job"); s.add_argument("--origin", default="keep", choices=("keep", "mount", "centre", "bottom", "rear", "grip"))
+    s.add_argument("--barrel", help="from,to: the window (fractions of the length from the rear) where the barrel splits off")
+    s.add_argument("--recoil", type=float, default=0.05, help="fraction of the length the body slides back")
+    s.add_argument("--kick", type=float, default=0.0, help="fraction of the length the barrel kicks back")
+    s.add_argument("--equip", type=float, default=0.12, help="fraction of the length the equip slide starts back")
+    s.add_argument("--loop", choices=("jet", "coil"), help="a FiringLoop clip: a flame jet's buzz or a coil's pump")
+    s.add_argument("--idle", choices=("coil",), help="a coil's slow pulse at idle")
+    s.add_argument("--no-glow", action="store_true", help="leave the emissive map out (a muzzle that must not glow)")
+    s.set_defaults(fn=cmd_rig)
     s = sub.add_parser("picture"); s.add_argument("job"); s.add_argument("--out", required=True); s.add_argument("--prompt", required=True)
     s.add_argument("--ref", action="append"); s.add_argument("--model", default="nano"); s.add_argument("--aspect", default="4:3")
     s.add_argument("--redraw", action="store_true", help="draw over an existing picture (ask the owner first)"); s.set_defaults(fn=cmd_picture)
@@ -1175,12 +1484,23 @@ def main(argv=None):
     s = sub.add_parser("sdf"); s.add_argument("job"); s.add_argument("part"); s.add_argument("script", nargs="?"); s.add_argument("--voxel", type=float, help="mm")
     s.set_defaults(fn=cmd_sdf)
     s = sub.add_parser("assemble"); s.add_argument("job"); s.add_argument("--parts"); s.add_argument("--no-sharpen", action="store_true")
-    s.add_argument("--no-projection", action="store_true", help="skip the picture projection (#14), for comparison")
+    s.add_argument("--projection", choices=("auto", "full", "letters", "off"), default="auto",
+                   help="auto: a kept-texture seed takes the pictures only in its lettering boxes, other parts all over; "
+                        "full: everywhere (the old way); letters: lettering boxes only; off: none")
+    s.add_argument("--no-projection", action="store_true", help="the same as --projection off")
+    s.add_argument("--origin", choices=("centre", "bottom", "top", "rear", "front", "mount", "grip"), default="centre",
+                   help="the exported pivot: centre (default), bottom (a vehicle on the ground), mount (a pylon weapon's "
+                        "plate top), grip (the Grip socket), ...")
+    s.add_argument("--draft", action="store_true", help="stop before the bake: renders of the placed parts with their glass, "
+                   "lining and muzzle into delivery/draft/ in a fraction of the time; the delivery is untouched")
+    s.add_argument("--tubes", type=int, default=0, help="a launcher's tube count: Muzzle_0..N-1 from the front vertices when "
+                   "the tubes are loaded or capped and show no open bore")
     s.add_argument("--no-materials", action="store_true", help="skip the CC0 smart-material pass (#15), for comparison")
     s.add_argument("--no-edge-break", action="store_true", help="leave code parts' edges razor sharp (no small round)")
     s.add_argument("--no-bevel", action="store_true", help="no small round baked into the normal map")
-    s.add_argument("--finish-profile", choices=("standard", "restrained"), default="standard",
-                   help="restrained: smaller bevel, weaker relief and matte material floors; preserves seed geometry")
+    s.add_argument("--finish-profile", choices=("standard", "restrained"), default="restrained",
+                   help="restrained (default since 2026-10-02): bevel 0.05%% of the length up to 1.5 mm, weaker relief, "
+                        "matte floors by finish; standard: the 0.2%% bevel and full relief of before")
     s.add_argument("--drop-floaters", action="store_true", help="delete the far, small loose islands of a seed (they are reported anyway)")
     s.set_defaults(fn=cmd_assemble)
     s = sub.add_parser("sheet"); s.add_argument("glb"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
@@ -1198,7 +1518,9 @@ def main(argv=None):
     s.add_argument("--part", default="Body"); s.add_argument("--prompt", help="the texture described (default: the brief)")
     s.add_argument("--no-picture", action="store_true", help="text only, no hero picture as the style guide")
     s.set_defaults(fn=cmd_retexture)
-    s = sub.add_parser("refs"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_refs)
+    s = sub.add_parser("refs"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true")
+    s.add_argument("--sheet", action="store_true", help="also write <job>/ref_sheet.png per job (every picture, labelled, with warnings) to Read")
+    s.set_defaults(fn=cmd_refs)
     s = sub.add_parser("results"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_results)
     s = sub.add_parser("serve"); s.add_argument("--restart", action="store_true"); s.add_argument("--stop", action="store_true")
     s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_serve)
