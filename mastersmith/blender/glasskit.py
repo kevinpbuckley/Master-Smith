@@ -415,6 +415,20 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     DELETED, and the panes returned are one clean shell that is the glass: Tripo painted the Havoc's panes in pale and
     dark patches, and the picked glass read as shattered (owner, 2026-09-29: "polish it").
     -> (face mask, stats, panes or None)"""
+    if mode == "fitted":
+        # 2026-09-30: an explicitly reviewed pane surface can replace a dark windshield without selecting its cockpit.
+        from fitted_glass import surface_mask
+        me = o.data
+        centres = np.array([f.center[:] for f in me.polygons])
+        normals = np.array([f.normal[:] for f in me.polygons])
+        vertices, triangles = z["vertices"], z["triangles"]
+        mask = surface_mask(centres, normals, vertices, triangles, float(z["tolerance"]), z.get("bounds"))
+        share = float(mask.mean())
+        if not mask.any() or share > 0.08:
+            raise ValueError("fitted glass must select a nonempty local skin under 8% of the seed")
+        return mask, {"mode": mode, "faces": int(mask.sum()), "share_of_part": round(share, 4),
+                      "pane_faces": len(triangles), "rebuilt": True, "preserve_frame": True,
+                      "ok": True, "tolerance_m": z["tolerance"]}, (vertices, triangles)
     me = o.data
     n = len(me.polygons)
     centres = np.empty(n * 3, np.float32)

@@ -49,8 +49,18 @@ def _v(path):
 
 def delivered_jobs(out_dir):
     """Every job with a delivery and a brief (the service-era folders from before 2026-09-28 have no brief)."""
-    return sorted(d for d in os.listdir(out_dir) if os.path.isfile(os.path.join(out_dir, d, "delivery", "report.json"))
+    return sorted(d for d in os.listdir(out_dir) if not d.startswith("_") and os.path.isfile(os.path.join(out_dir, d, "delivery", "report.json"))
                   and os.path.isfile(os.path.join(out_dir, d, "brief.json")))
+
+
+def shown_score(sc):
+    """(score, label) as the pages show it: the owner's score when the scorecard has one, else the agent's marked
+    "self". 2026-09-29: the agent scored a parts batch 7-8 and the owner put its M4A1 at 3; a self-score is a claim."""
+    if sc.get("owner_score") is not None:
+        return float(sc["owner_score"]), "owner"
+    if sc.get("score") is not None:
+        return float(sc["score"]), "self"
+    return None, ""
 
 
 def job_card(out_dir, job):
@@ -59,7 +69,7 @@ def job_card(out_dir, job):
     brief = json.load(open(os.path.join(out_dir, job, "brief.json"), encoding="utf-8"))
     sc_path = os.path.join(d, "scorecard.json")
     sc = json.load(open(sc_path, encoding="utf-8")) if os.path.exists(sc_path) else {}
-    score = sc.get("score")
+    score, who = shown_score(sc)
     cls = "s-none" if score is None else "s-good" if score >= 8 else "s-mid" if score >= 7 else "s-low"
     dims = " x ".join("%.2f" % v for v in rep.get("dimensions_m") or [])
     tris = (rep.get("lods") or [{}])[0].get("triangles", 0)
@@ -79,11 +89,12 @@ def job_card(out_dir, job):
             '<span class="score %(cls)s">%(score)s</span></div><div class="meta">%(meta)s</div>%(tonetta)s%(defects)s'
             '<div class="links">%(links)s</div></div></article>') % {
         "job": e(job), "v": _v(os.path.join(d, "preview_views.png")), "cls": cls,
-        "score": ("%g / 10" % score) if score is not None else "not scored",
+        "score": ("%g / 10 %s" % (score, who)) if score is not None else "not scored",
         "meta": e("%s · %s m · %s tris · %d parts%s" % (brief.get("category", ""), dims, format(tris, ","),
                                                        len(rep.get("parts") or []), (" · " + sc["spent"]) if sc.get("spent") else "")),
         "tonetta": ('<div class="meta">re-runs Tonetta %s</div>' % e(sc["tonetta"])) if sc.get("tonetta") else "",
-        "defects": ("<ul>%s</ul>" % defects) if defects else "", "links": "".join(links)}, sc
+        "defects": (('<div class="meta">%s</div>' % e(sc["calibration"])) if sc.get("calibration") else "")
+                   + (("<ul>%s</ul>" % defects) if defects else ""), "links": "".join(links)}, sc
 
 
 def render_results(out_dir, jobs):
@@ -92,8 +103,8 @@ def render_results(out_dir, jobs):
     for job in jobs:
         card, sc = job_card(out_dir, job)
         cards.append(card)
-        if sc.get("score") is not None:
-            scores.append(float(sc["score"]))
+        if shown_score(sc)[0] is not None:
+            scores.append(shown_score(sc)[0])
         try:
             spent += float(str(sc.get("spent", "0")).lstrip("$"))
         except ValueError:

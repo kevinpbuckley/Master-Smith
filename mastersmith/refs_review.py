@@ -56,8 +56,9 @@ def record_review(out_dir, job, file, status, note=""):
 
 def all_jobs(out_dir):
     """Every job folder with a brief and at least one reference picture."""
-    return sorted(d for d in os.listdir(out_dir)
-                  if os.path.isfile(os.path.join(out_dir, d, "brief.json")) and ref_pictures(os.path.join(out_dir, d)))
+    # a folder starting with _ is a helper (out/_bench, a batch's scratch), never a job
+    return sorted(d for d in os.listdir(out_dir) if not d.startswith("_")
+                  and os.path.isfile(os.path.join(out_dir, d, "brief.json")) and ref_pictures(os.path.join(out_dir, d)))
 
 
 def page_data(out_dir, jobs):

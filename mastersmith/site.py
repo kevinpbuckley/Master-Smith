@@ -59,7 +59,7 @@ def home_page(out_dir):
         sc_path = os.path.join(d, "scorecard.json")
         sc = json.load(open(sc_path, encoding="utf-8")) if os.path.exists(sc_path) else {}
         brief = json.load(open(os.path.join(out_dir, job, "brief.json"), encoding="utf-8"))
-        score = sc.get("score")
+        score, who = results_page.shown_score(sc)
         when = time.strftime("%b %d %H:%M", time.localtime(os.path.getmtime(os.path.join(d, "report.json"))))
         views = os.path.join(d, "preview_views.png")
         thumb = ('<img src="%s/delivery/preview_views.png?v=%d" alt="">' % (e(job), int(os.path.getmtime(views)))) if os.path.exists(views) else ""
@@ -70,7 +70,7 @@ def home_page(out_dir):
                     '<a href="refs?jobs=%(j)s">References</a>%(zip)s</td></tr>' % {
                         "j": e(job), "thumb": thumb, "cat": e(brief.get("category", "")), "how": e(sc.get("tonetta") or ""),
                         "cls": "" if score is None else "good" if score >= 8 else "mid" if score >= 7 else "low",
-                        "score": "–" if score is None else "%g" % score, "when": when,
+                        "score": "–" if score is None else "%g %s" % (score, who), "when": when,
                         "zip": ('<a href="%s/delivery/%s">Zip</a>' % (e(job), e(zips[0]))) if zips else ""})
     built = set(results_page.delivered_jobs(out_dir))
     pending = ['<li><a href="refs?jobs=%s">%s</a></li>' % (e(j), e(j)) for j in _jobs_by_recent(out_dir, False) if j not in built]

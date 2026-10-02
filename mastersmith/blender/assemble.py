@@ -222,7 +222,7 @@ def image_mean_luminance(img):
     return float(used.mean()) if len(used) > 100 else float(lum.mean())
 
 
-def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False, force=False):
+def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False, force=False, flat=False):
     """A vendor part takes its planned colour, keeping its own light and dark variation: base colour = planned colour x
     (texel luminance / the texture's mean luminance), clamped. Tripo keeps a washed-out grey where the plan says matte
     black (the pistol frame, 2026-09-27); this is the part's material being set as planned while it is assembled, the
@@ -239,7 +239,9 @@ def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False, force=
         base = b.inputs["Base Color"]
         rgb = t.nodes.new("ShaderNodeRGB")
         rgb.outputs[0].default_value = (*lin, 1.0)
-        if not base.is_linked:
+        if not base.is_linked or flat:
+            # flat (2026-09-30): a face the mesher textured wrong takes the planned colour alone (a seed with no back
+            # view printed its glowing muzzle onto the rear cap; tinting kept the lightning lines at +-50%)
             t.links.new(rgb.outputs[0], base)
             done = True
             continue
@@ -783,6 +785,7 @@ LENGTH_M = float(args.get("length_m") or 1.0)
 EMISSIVE = {"strength": 0.0}
 
 
+import muzzle as muzzlekit  # noqa: E402 - the open bores end-on (pure numpy, tested)
 from glasskit import crease_bars, rim_band, smooth_rim  # noqa: E402
 from glasskit import (  # noqa: E402 - the glass and cockpit passes, shared with cabin.py
     base_image, face_rgb, face_pairs, components, mesh_tree, escapes,
@@ -825,6 +828,132 @@ def lift_roughness(mats, floor=0.35, trigger=0.40):
             t.links.new(src, mr.inputs["Value"])
             t.links.new(mr.outputs["Result"], inp)
     return found
+
+
+def image_mean_rgb(img):
+    """(mean linear RGB, mean sRGB chroma) of an image's used texels (an atlas's black padding left out), on a
+    subsample, or None."""
+    w, h = img.size
+    if not w or not h:
+        return None
+    a = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(a)
+    s = a.reshape(-1, 4)[:: max(1, (w * h) // 65536), :3]
+    lin = np.where(s <= 0.04045, s / 12.92, ((s + 0.055) / 1.055) ** 2.4) if img.colorspace_settings.name == "sRGB" else s
+    keep = (lin @ np.array([0.2126, 0.7152, 0.0722], np.float32)) > 0.004
+    if keep.sum() <= 100:
+        return None
+    return lin[keep].mean(axis=0), float((s[keep].max(axis=1) - s[keep].min(axis=1)).mean())
+
+
+def grade_to_picture(mats, picture, limit=1.33):
+    """A kept texture's overall colour cast pulled towards the approved picture's: its saturation scaled to the
+    picture's mean chroma (only down, to at least half), then per-channel gains that bring its mean chromaticity onto
+    the picture's, its luminance kept, clamped to +-33%. With the projection only in the lettering boxes (2026-10-02)
+    the M4A1's Tripo receiver came back olive where the picture is black; the per-pixel projection had been hiding
+    that cast, and printing pale patches and white marks elsewhere. -> {"saturation", "gains"} or None"""
+    if not picture or len(picture) < 3:
+        return None
+    p = np.asarray(picture[:3], np.float64)
+    p_chroma = float(picture[3]) if len(picture) > 3 else None
+    lumw = np.array([0.2126, 0.7152, 0.0722])
+    done = None
+    for m in mats:
+        t = m.node_tree
+        b = next((n for n in t.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if b is None or not b.inputs["Base Color"].is_linked or "_zone_" in m.name:
+            continue
+        src = b.inputs["Base Color"].links[0].from_socket
+        img, todo, seen = None, [src.node], set()
+        while todo and img is None:
+            nd = todo.pop()
+            if nd.name in seen:
+                continue
+            seen.add(nd.name)
+            if nd.type == "TEX_IMAGE" and nd.image:
+                img = nd.image
+            todo.extend(l.from_node for i in nd.inputs for l in i.links)
+        stats = image_mean_rgb(img) if img is not None else None
+        if stats is None or p @ lumw <= 1e-4 or stats[0] @ lumw <= 1e-4:
+            continue
+        tex, t_chroma = stats
+        sat = 1.0
+        if p_chroma is not None and t_chroma > 1e-4:
+            sat = float(np.clip(p_chroma / t_chroma, 0.5, 1.0))
+        gain = (p / (p @ lumw)) / np.maximum(tex / (tex @ lumw), 1e-4)
+        gain = np.clip(gain, 1.0 / limit, limit)
+        gain /= ((gain * tex) @ lumw) / (tex @ lumw)          # the texture's own brightness kept
+        if np.abs(gain - 1.0).max() < 0.03 and sat > 0.95:
+            continue
+        out = src
+        if sat <= 0.95:
+            hs = t.nodes.new("ShaderNodeHueSaturation")
+            hs.inputs["Saturation"].default_value = sat
+            t.links.new(out, hs.inputs["Color"])
+            out = hs.outputs["Color"]
+        if np.abs(gain - 1.0).max() >= 0.03:
+            mul = t.nodes.new("ShaderNodeVectorMath")
+            mul.operation = "MULTIPLY"
+            mul.inputs[1].default_value = tuple(float(g) for g in gain)
+            t.links.new(out, mul.inputs[0])
+            out = mul.outputs[0]
+        t.links.new(out, b.inputs["Base Color"])
+        done = {"saturation": round(sat, 3), "gains": [round(float(g), 3) for g in gain],
+                "chroma": [round(t_chroma, 4), round(p_chroma, 4) if p_chroma is not None else None]}
+    return done
+
+
+def glow_emission(mats, glow):
+    """Emission = the material's own base colour where its hue is within hue_tol of the glow's and it is saturated and
+    bright enough, black elsewhere (soft edges). The bake of T_<Name>_E then carries just the glowing texels.
+    -> {"hue", "materials"}"""
+    h0 = float(glow["hue"]) / 360.0
+    tol = float(glow.get("hue_tol", 20.0)) / 360.0
+    smin, vmin = float(glow.get("min_sat", 0.35)), float(glow.get("min_val", 0.35))
+    done = 0
+    for m in mats:
+        t = m.node_tree
+        b = next((n for n in t.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if b is None or not b.inputs["Base Color"].is_linked:
+            continue
+        colour = b.inputs["Base Color"].links[0].from_socket
+        hsv = t.nodes.new("ShaderNodeSeparateColor")
+        hsv.mode = "HSV"
+        t.links.new(colour, hsv.inputs["Color"])
+
+        def math(op, a, bval=None):
+            n = t.nodes.new("ShaderNodeMath")
+            n.operation = op
+            for i, v in enumerate((a, bval)):
+                if v is None:
+                    continue
+                if isinstance(v, (int, float)):
+                    n.inputs[i].default_value = v
+                else:
+                    t.links.new(v, n.inputs[i])
+            return n.outputs[0]
+
+        def ramp(v, lo, hi, rising=True):
+            n = t.nodes.new("ShaderNodeMapRange")
+            n.clamp = True
+            t.links.new(v, n.inputs["Value"])
+            n.inputs["From Min"].default_value, n.inputs["From Max"].default_value = lo, hi
+            n.inputs["To Min"].default_value, n.inputs["To Max"].default_value = (0.0, 1.0) if rising else (1.0, 0.0)
+            return n.outputs[0]
+
+        d = math("ABSOLUTE", math("SUBTRACT", hsv.outputs["Red"], h0))
+        d = math("MINIMUM", d, math("SUBTRACT", 1.0, d))          # the hue circle wraps at red
+        mask = math("MULTIPLY", ramp(d, tol * 0.5, tol, rising=False), ramp(hsv.outputs["Green"], smin * 0.7, smin))
+        mask = math("MULTIPLY", mask, ramp(hsv.outputs["Blue"], vmin * 0.7, vmin))
+        mix = t.nodes.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        t.links.new(mask, mix.inputs["Factor"])
+        mix.inputs[6].default_value = (0.0, 0.0, 0.0, 1.0)
+        t.links.new(colour, mix.inputs[7])
+        t.links.new(mix.outputs[2], b.inputs["Emission Color"])
+        b.inputs["Emission Strength"].default_value = 1.0
+        done += 1
+    return {"hue": glow["hue"], "materials": done}
 
 
 def paint_not_chrome(mats, finish, metal_max=0.12, rough_min=0.30):
@@ -1060,7 +1189,9 @@ for p in args["parts"]:
                 log("%s: glass zone %s picked %s" % (p["name"], z.get("name"), gstats))
                 zname = "%s_%s" % (p["name"], z.get("name", "glass"))
                 made = []
-                if gstats.get("rebuilt"):
+                if gstats.get("preserve_frame"):
+                    delete_faces(o, mask)   # explicitly fitted panes tuck under the existing frame
+                elif gstats.get("rebuilt"):
                     delete_faces(o, mask)          # the seed's patchy panes go; the clean shell below is the glass
                     lo_o, hi_o = blib.dims(o)
                     panes = (smooth_rim(panes[0], panes[1]), panes[1])
@@ -1096,6 +1227,12 @@ for p in args["parts"]:
         if args.get("islands", True):
             rec["islands"] = island_report(o, drop=bool(args.get("drop_floaters")))
             log("%s: islands %s" % (p["name"], rec["islands"]))
+        if args.get("finish_profile") == "restrained" and p.get("keep_depth"):
+            from restrained_finish import depth_zones
+            # 2026-09-30: a 63 mm seed in a 50 mm plan left the shotgun's blue receiver sides outside every zone.
+            lo, hi = blib.dims(o)
+            zones_left, rec["material_zone_depth_scale"] = depth_zones(
+                zones_left, p["box_min"][1], p["box_max"][1], float(lo[1]), float(hi[1]))
         zoned = split_zones(o, zones_left)
         in_zone = set().union(*[m for _z, m in zoned]) if zoned else set()
         rest = {sl.material for sl in o.material_slots if sl.material and sl.material.node_tree} - in_zone
@@ -1124,7 +1261,14 @@ for p in args["parts"]:
                 for m in mats:
                     m["ms_glass"] = True
                 continue
-            tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")))
+            if zm.get("finish") == "emissive" and z.get("glow"):
+                # 2026-09-30: only the texels in the glow's hue glow (a lens, an energy band, a lit tip); the rest of
+                # the box keeps its own colour and finish, so no tint and no planned roughness here
+                rec.setdefault("glow_zones", []).append(glow_emission(mats, z["glow"]))
+                EMISSIVE["strength"] = max(EMISSIVE["strength"], float(z.get("strength") or zm.get("strength") or 8.0))
+                continue
+            tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")), force=bool(zm.get("color_lock")),
+                         flat=bool(z.get("flat")))
             surface_to_plan(o, zm, mats)
             if zm.get("finish") == "emissive":
                 # a lamp, a screen, an engine glow: its colour emitted, baked into T_<Name>_E; the strength (6-12, 1-2
@@ -1156,6 +1300,13 @@ for p in args["parts"]:
         else:
             sets.append((p.get("pbr_set"), {sl.material for sl in o.material_slots if sl.material and sl.material.node_tree}))
         rec["smart_materials"] = sum(smart_material(o, lib[key], mats, length_m) for key, mats in sets if key in lib and mats)
+    if (args.get("finish_profile") == "restrained" and p["kind"] == "vendor"
+            and not glass and args.get("tint_vendor", True)):
+        from restrained_finish import apply as restrained_finish
+        # 2026-09-30: apply after every material layer so later smart materials cannot restore the gloss.
+        rec["restrained_finish"] = restrained_finish(rest, p.get("material") or {}, float(args["length_m"]))
+        for zone, mats in zoned:
+            rec["restrained_finish"] += restrained_finish(mats, zone.get("material") or {}, float(args["length_m"]))
     for slot in o.material_slots:
         if slot.material:
             slot.material.name = "MS_src_%s_%s" % (p["name"], slot.material.name)
@@ -1641,6 +1792,10 @@ def project_pictures(o, p, proj):
     mats = {sl.material for sl in o.material_slots if sl.material and sl.material.node_tree and not sl.material.get("ms_glass")}
     if not mats:
         return {}
+    # a kept texture (a whole-object seed) is the mesher's own paint: the picture printed over it left pale slot
+    # patches on the bullpup, white marks round the tank's wheels and washed out the Havoc's hull, and projection was
+    # switched off on most builds of 2026-09-29/30. It prints there only inside the lettering boxes now.
+    letters_only = bool(p.get("letters_only"))
     views = []
     skipped = []
     letter_frame = False           # lettering boxes are percents of the whole object's side grid: its frame only
@@ -1668,7 +1823,7 @@ def project_pictures(o, p, proj):
             skipped.append("approved side view (covers %.2f)" % cover)
     if skipped:
         log("%s: projection skipped for the %s - the picture does not line up with the part" % (p.get("name"), ", ".join(skipped)))
-    if proj.get("front") and os.path.exists(proj["front"]) and p.get("front_part"):
+    if proj.get("front") and os.path.exists(proj["front"]) and p.get("front_part") and not letters_only:
         views.append(("front", proj["front"], proj.get("front_detail"), proj["asset_frame_front"], "ms_vis_front"))
     if not views:
         return {"skipped": skipped} if skipped else {}
@@ -1747,6 +1902,8 @@ def project_pictures(o, p, proj):
                 v = op("ADD", op("DIVIDE", op("SUBTRACT", pos.outputs["Z"], cz), H_), 0.5)
                 sides = ((u, face_x.outputs["Fac"], vis_attr),)
                 letters = None
+            if letters_only and letters is None:
+                continue                   # nothing of this picture prints on a kept texture outside the lettering
             for uu, face_dot, side_vis in sides:
                 uv = N.new("ShaderNodeCombineXYZ")
                 K.new(uu, uv.inputs[0])
@@ -1757,6 +1914,8 @@ def project_pictures(o, p, proj):
                 K.new(uv.outputs[0], tex.inputs["Vector"])
                 if view == "front":                # foreshortened and lit from the front: squarely facing faces only, gently
                     w = op("MULTIPLY", facing(face_dot, 0.6, 0.85), op("MULTIPLY", tex.outputs["Alpha"], strength * 0.7))
+                elif letters_only:
+                    w = op("MULTIPLY", letters, op("MULTIPLY", facing(face_dot, 0.1, 0.3), tex.outputs["Alpha"]))
                 else:
                     w = op("MULTIPLY", facing(face_dot), op("MULTIPLY", tex.outputs["Alpha"], strength))
                     if letters is not None:
@@ -1817,11 +1976,22 @@ if args.get("projection"):
         spec = next((p for p in args["parts"] if p["name"] == r["name"]), {})
         if (spec.get("material") or {}).get("glass") or spec.get("interior"):
             continue                 # a cockpit insert is not in the side picture's paint (it is behind the glass)
+        pm_ = spec.get("material") or {}
+        mode = proj.get("mode", "full")
+        spec["letters_only"] = mode == "letters" or (mode == "auto" and bool(pm_.get("keep_texture")) and not pm_.get("color_lock"))
+        if spec["letters_only"] and mode == "auto":
+            r["colour_grade"] = grade_to_picture({sl.material for sl in o.material_slots if sl.material and sl.material.node_tree},
+                                                 proj.get("side_mean_linear"))
+            if r["colour_grade"]:
+                log("%s: kept texture's colour cast graded to the picture, gains %s" % (r["name"], r["colour_grade"]))
+        if spec["letters_only"] and not spec.get("lettering"):
+            r["projection"] = {"skipped": ["kept texture: the pictures print only inside lettering boxes, and it has none"]}
+            continue
         # a long part reaching into the front zone (the bullpup receiver runs to 61% of the length under the
         # handguard) got the front picture on its hidden front faces in patches (2026-09-28): its REAR end decides
         spec["front_part"] = blib.dims(o)[0].x > front_line
         facing_attributes(o)
-        if proj.get("front") and spec["front_part"]:
+        if proj.get("front") and spec["front_part"] and not spec["letters_only"]:
             vis = face_visibility(o, all_objs, (1.0, 0.0, 0.0), eps)
             attr = o.data.attributes.get("ms_vis_front") or o.data.attributes.new("ms_vis_front", "FLOAT", "FACE")
             attr.data.foreach_set("value", vis.astype(np.float32))
@@ -1831,7 +2001,178 @@ if args.get("projection"):
                 attr = o.data.attributes.get(name) or o.data.attributes.new(name, "FLOAT", "FACE")
                 attr.data.foreach_set("value", vis.astype(np.float32))
         r["projection"] = project_pictures(o, spec, proj)
-    log("pictures projected: " + ", ".join("%s (%s)" % (r["name"], "+".join(r["projection"].get("views", []))) for _o, r in parts if r.get("projection")))
+        if spec["letters_only"]:
+            r["projection"]["letters_only"] = True
+    log("pictures projected (%s): " % proj.get("mode", "full") + ", ".join(
+        "%s (%s)" % (r["name"], "+".join(r["projection"].get("views", [])) or "none") for _o, r in parts if r.get("projection")))
+
+def front_depth(objs, length, cells=200):
+    """How far a ray from just ahead of the front travels back (-X) before it meets the model, over a grid across the
+    front 30% of the asset (rows: z upwards, cols: y). -> (depth, cell, x_front, y0, z0)"""
+    from mathutils.bvhtree import BVHTree
+    verts, tris = [], []
+    for ob in objs:
+        me = ob.data
+        me.calc_loop_triangles()
+        co = np.empty(len(me.vertices) * 3, np.float32)
+        me.vertices.foreach_get("co", co)
+        m = np.array(ob.matrix_world)
+        co = co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3]
+        tri = np.empty(len(me.loop_triangles) * 3, np.int32)
+        me.loop_triangles.foreach_get("vertices", tri)
+        tris.append(tri.reshape(-1, 3) + sum(len(v) for v in verts))
+        verts.append(co)
+    co, tri = np.concatenate(verts), np.concatenate(tris)
+    bvh = BVHTree.FromPolygons([Vector(v) for v in co], tri.tolist())
+    x_front = float(co[:, 0].max())
+    near = co[co[:, 0] > x_front - 0.3 * length]
+    lo_, hi_ = near.min(axis=0), near.max(axis=0)
+    cell = max(float(max(hi_[1] - lo_[1], hi_[2] - lo_[2])) / cells, 1e-5)
+    y0, z0 = float(lo_[1]) - 3 * cell, float(lo_[2]) - 3 * cell
+    ny = int((hi_[1] - lo_[1]) / cell) + 7
+    nz = int((hi_[2] - lo_[2]) / cell) + 7
+    depth = np.full((nz, ny), np.inf)
+    start = x_front + 0.01 * length
+    back = Vector((-1.0, 0.0, 0.0))
+    for i in range(nz):
+        z = z0 + (i + 0.5) * cell
+        for j in range(ny):
+            hit = bvh.ray_cast(Vector((start, y0 + (j + 0.5) * cell, z)), back, 1.5 * length)[0]
+            if hit is not None:
+                depth[i, j] = x_front - hit.x
+    return depth, cell, x_front, y0, z0
+
+
+def named_box(*words):
+    """The box of the first part, or zone of a part, whose name has one of `words` (asset frame, metres)."""
+    for q in args["parts"]:
+        if any(w in q["name"].lower() for w in words):
+            return Vector(q["box_min"]), Vector(q["box_max"])
+    for q in args["parts"]:
+        for z in q.get("zones") or []:
+            if any(w in str(z.get("name", "")).lower() for w in words) and z.get("box_min"):
+                return Vector(z["box_min"]), Vector(z["box_max"])
+    return None
+
+
+def weapon_sockets(objs, lo, hi):
+    """A weapon's sockets: Muzzle (or Muzzle_0..n and Muzzle between them) at its open bores, measured end-on
+    (muzzle.py); Grip and Sight from a part or zone named so. -> (sockets, muzzle report or None)"""
+    spec = args.get("spec") or {}
+    sockets, info = [], None
+    length = float(hi.x - lo.x)
+    if not muzzlekit.is_melee(spec.get("description")):
+        depth, cell, x_front, y0, z0 = front_depth(objs, length)
+        found = muzzlekit.muzzle_openings(depth, cell, length)
+        pts = [(x_front - o["rim_depth_m"], y0 + (o["col"] + 0.5) * cell, z0 + (o["row"] + 0.5) * cell) for o in found]
+        info = {"found": len(found), "open": bool(found) and all(o["open"] for o in found), "grid_mm": round(cell * 1000, 2),
+                "bores": [{"diameter_mm": round(o["diameter_m"] * 1000, 1), "open": o["open"],
+                           "depth_mm": None if o["bore_depth_m"] == float("inf") else round(o["bore_depth_m"] * 1000, 1)}
+                          for o in found]}
+        tubes = int(args.get("tubes") or 0)
+        if tubes > 1 and len(pts) < tubes:
+            # loaded or capped tubes show no bore: their centres from the front-most vertices (assemble --tubes N)
+            co = np.concatenate([np.array([o.matrix_world @ v.co for v in o.data.vertices]) for o in objs])
+            front = co[co[:, 0] > co[:, 0].max() - max(0.03 * length, 0.005)]
+            centres, lab = muzzlekit.cluster_tubes(front[:, 1:3], tubes)
+            pts = [(float(front[lab == j][:, 0].max()) if (lab == j).any() else float(co[:, 0].max()), float(centres[j][0]),
+                    float(centres[j][1])) for j in range(tubes)]
+            info["tubes_from_vertices"] = tubes
+        if len(pts) > 1:
+            for k, i in enumerate(muzzlekit.order_muzzles(pts)):
+                sockets.append({"name": "Muzzle_%d" % k, "location": [round(v, 4) for v in pts[i]]})
+            sockets.append({"name": "Muzzle", "location": [round(float(np.mean([p[i] for p in pts])), 4) for i in range(3)]})
+        elif pts:
+            sockets.append({"name": "Muzzle", "location": [round(v, 4) for v in pts[0]]})
+        else:
+            # no recess at all: the middle of the front-most end, never the box centre (2026-10-01)
+            co = np.concatenate([np.array([o.matrix_world @ v.co for v in o.data.vertices]) for o in objs])
+            tip = co[co[:, 0] > co[:, 0].max() - max(0.004 * length, 1e-4)]
+            sockets.append({"name": "Muzzle", "location": [round(float(co[:, 0].max()), 4), round(float(tip[:, 1].mean()), 4),
+                                                            round(float(tip[:, 2].mean()), 4)]})
+    g = named_box("grip")
+    if g is not None:
+        sockets.append({"name": "Grip", "location": [round(v, 4) for v in ((g[0] + g[1]) / 2)]})
+    s = named_box("rail", "sight", "optic", "scope")
+    if s is not None:
+        sockets.append({"name": "Sight", "location": [round((s[0].x + s[1].x) / 2, 4), round((s[0].y + s[1].y) / 2, 4), round(s[1].z, 4)]})
+    return sockets, info
+
+
+def render_muzzle(target, sockets, lo, hi, path, hidden=()):
+    """The muzzle end-on, close: where an open bore (or a lens, a cap, a glow in it) shows. -> file name or None"""
+    pts = [Vector(s["location"]) for s in sockets if s["name"].startswith("Muzzle")]
+    if not pts:
+        return None
+    r_ = max(0.05 * (hi.x - lo.x), 0.01)
+    blo = Vector((max(p.x for p in pts) - 2 * r_, min(p.y for p in pts) - r_, min(p.z for p in pts) - r_))
+    bhi = Vector((max(p.x for p in pts), max(p.y for p in pts) + r_, max(p.z for p in pts) + r_))
+    st = blib.Stage(target, extra_hidden=list(hidden), focus_bounds=(blo, bhi))
+    st.render("front", path)
+    st.close()
+    return os.path.basename(path)
+
+
+def frame_material():
+    """A rebuilt canopy's frame band and bars: the body's planned paint, a slot of its own."""
+    body_spec = next((q for q in args["parts"] if q.get("body")), {})
+    fm = bpy.data.materials.get("MI_%s_Frame" % NAME) or bpy.data.materials.new("MI_%s_Frame" % NAME)
+    fb = next(n for n in fm.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    fb.inputs["Base Color"].default_value = (*planned_linear((body_spec.get("material") or {}).get("color") or "#495058"), 1.0)
+    fb.inputs["Roughness"].default_value = 0.5
+    fb.inputs["Metallic"].default_value = 0.0
+    return fm
+
+
+IS_WEAPON = (args.get("spec") or {}).get("category") == "weapon"
+
+if args.get("draft"):
+    # `assemble --draft` (2026-10-02): the Havoc's glass and cockpit took ~18 full assembles of 5-9 min each for 1%
+    # box nudges on 2026-09-29. A draft stops here - parts placed, zones, glass, lining and projection done, no
+    # decimation, bake, LODs or exports - and renders the source parts with their own materials into delivery/draft/,
+    # with report.json's glass_zones, pokes_out, islands and (weapons) the measured muzzle. The delivery is untouched.
+    draft_dir = os.path.join(OUT, "draft")
+    os.makedirs(draft_dir, exist_ok=True)
+    for o, _r in liner_parts:
+        o.data.materials.clear()
+        o.data.materials.append(interior_material("MI_%s_Interior" % NAME))
+    for o, _r in frame_parts:
+        o.data.materials.clear()
+        o.data.materials.append(frame_material())
+    copies = []
+    for o in [o for o, _r in parts + glass_parts + liner_parts + frame_parts]:
+        c = o.copy()
+        c.data = o.data.copy()
+        bpy.context.collection.objects.link(c)
+        copies.append(c)
+    blib.select_only(copies)
+    if len(copies) > 1:
+        bpy.ops.object.join()
+    draft = bpy.context.view_layer.objects.active
+    draft.name = "Draft_" + NAME
+    lo, hi = blib.dims(draft)
+    report["draft"] = True
+    report["dimensions_m"] = [round(v, 4) for v in (hi - lo)]
+    if IS_WEAPON:
+        report["sockets"], report["muzzle"] = weapon_sockets([draft], lo, hi)
+        log("muzzle: %s; sockets %s" % (report["muzzle"], [s["name"] for s in report["sockets"]]))
+    blib.setup_render(int(args.get("render_size", 768)), 32, look="preview")
+    stage = blib.Stage(draft)
+    report["renders"] = [stage.render(v, os.path.join(draft_dir, "draft_%s.png" % v))["file"] for v in ("iso", "side", "front")]
+    stage.close()
+    span = hi.x - lo.x
+    for tag, x0, x1 in (("front", hi.x - span * 0.4, hi.x), ("rear", lo.x, lo.x + span * 0.4)):
+        st = blib.Stage(draft, focus_bounds=(Vector((x0, lo.y, lo.z)), Vector((x1, hi.y, hi.z))))
+        report["renders"].append(st.render("iso", os.path.join(draft_dir, "draft_detail_%s.png" % tag))["file"])
+        st.close()
+    if report.get("sockets"):
+        m = render_muzzle(draft, report["sockets"], lo, hi, os.path.join(draft_dir, "draft_detail_muzzle.png"))
+        if m:
+            report["renders"].append(m)
+    with open(os.path.join(draft_dir, "report.json"), "w") as f:
+        json.dump(report, f, indent=1)
+    log("draft done: %s" % draft_dir)
+    sys.exit(0)
 
 # the bake source keeps every part at full detail: decimating first and baking from the decimated mesh threw away all
 # of a seed's fine detail (the free pistol's 280k-face TRELLIS body came out melted at 40k with nothing to bake back,
@@ -2173,15 +2514,9 @@ for o, r in liner_parts:
     bpy.ops.object.join()
 report["lining"] = {"parts": [r["name"] for _o, r in liner_parts]} if liner_parts else None
 # a rebuilt canopy's frame band: the body's planned paint, a slot of its own
-body_spec = next((q for q in args["parts"] if q.get("body")), {})
 for o, r in frame_parts:
-    fm = bpy.data.materials.get("MI_%s_Frame" % NAME) or bpy.data.materials.new("MI_%s_Frame" % NAME)
-    fb = next(n for n in fm.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-    fb.inputs["Base Color"].default_value = (*planned_linear((body_spec.get("material") or {}).get("color") or "#495058"), 1.0)
-    fb.inputs["Roughness"].default_value = 0.5
-    fb.inputs["Metallic"].default_value = 0.0
     o.data.materials.clear()
-    o.data.materials.append(fm)
+    o.data.materials.append(frame_material())
     blib.select_only([lod0, o])
     bpy.context.view_layer.objects.active = lod0
     bpy.ops.object.join()
@@ -2231,25 +2566,61 @@ bm.free()
 report["collision"] = {"type": "convex", "triangles": blib.tri_count(hull)}
 
 
-def part_box(*words):
-    for r in report["parts"]:
-        if any(w in r["name"].lower() for w in words):
-            return Vector(r["box_min"]), Vector(r["box_max"])
-    return None
+# ---------------------------------------------------------------- sockets and the origin
+if IS_WEAPON:
+    report["sockets"], report["muzzle"] = weapon_sockets([lod0], lo, hi)
+    log("muzzle: %s; sockets %s" % (report["muzzle"], [s["name"] for s in report["sockets"]]))
 
 
-if (args.get("spec") or {}).get("category") == "weapon":
-    sockets = []
-    b = part_box("brake", "muzzle", "suppressor", "flash", "barrel")
-    sockets.append({"name": "Muzzle", "location": [round(v, 4) for v in ((hi.x if b is None else b[1].x), 0.0,
-                                                                          (0.0 if b is None else (b[0].z + b[1].z) / 2))]})
-    g = part_box("grip")
-    if g is not None:
-        sockets.append({"name": "Grip", "location": [round(v, 4) for v in ((g[0] + g[1]) / 2)]})
-    s = part_box("rail", "sight", "optic", "scope")
-    if s is not None:
-        sockets.append({"name": "Sight", "location": [round((s[0].x + s[1].x) / 2, 4), 0.0, round(s[1].z, 4)]})
-    report["sockets"] = sockets
+def origin_point(mode, o):
+    """Where the exported pivot goes, in the asset frame (the plan's centre is the default). "bottom" puts a vehicle on
+    the ground plane; "mount" is the top centre of a pylon-mounted weapon's plate (Proteus's hardpoints, 2026-10-01: the
+    plate's middle along X from its top 2% slab; a plate a degree off level put the topmost corner 5 cm off). -> Vector"""
+    lo_, hi_ = blib.dims(o)
+    c = (lo_ + hi_) * 0.5
+    if mode == "bottom":
+        return Vector((c.x, c.y, lo_.z))
+    if mode == "top":
+        return Vector((c.x, c.y, hi_.z))
+    if mode == "rear":
+        return Vector((lo_.x, c.y, c.z))
+    if mode == "front":
+        return Vector((hi_.x, c.y, c.z))
+    if mode == "mount":
+        co = np.empty(len(o.data.vertices) * 3, np.float32)
+        o.data.vertices.foreach_get("co", co)
+        co = co.reshape(-1, 3)
+        slab = co[co[:, 2] > hi_.z - 0.02 * (hi_.z - lo_.z)]
+        return Vector(((float(slab[:, 0].min()) + float(slab[:, 0].max())) / 2, c.y, hi_.z))
+    if mode == "grip":
+        g = next((q for q in report.get("sockets") or [] if q["name"] == "Grip"), None)
+        if g is None:
+            log("origin grip asked for but no part or zone is named Grip: kept at the centre")
+            return Vector((0.0, 0.0, 0.0))
+        return Vector(g["location"])
+    return Vector((0.0, 0.0, 0.0))
+
+
+ORIGIN = str(args.get("origin") or "centre")
+pivot = origin_point(ORIGIN, lod0)
+if pivot.length > 1e-9:
+    for ob in (lod0, lod1, lod2, hull):
+        ob.data.transform(Matrix.Translation(-pivot))
+    for q in report.get("sockets") or []:
+        q["location"] = [round(q["location"][i] - pivot[i], 4) for i in range(3)]
+    lo, hi = blib.dims(lod0)
+report["origin"] = {"mode": ORIGIN, "at_in_plan_frame_m": [round(v, 4) for v in pivot]}
+# sockets as SOCKET_ empties under the mesh: Unreal makes them static-mesh sockets on import; they were only a list in
+# report.json, and Proteus placed its muzzles by hand (2026-10-01)
+socket_objs = []
+for q in report.get("sockets") or []:
+    e = bpy.data.objects.new("SOCKET_" + q["name"], None)
+    bpy.context.collection.objects.link(e)
+    e.empty_display_type = "ARROWS"
+    e.empty_display_size = max(0.01, 0.03 * (hi.x - lo.x))
+    e.location = q["location"]
+    e.parent = lod0
+    socket_objs.append(e)
 
 # ---------------------------------------------------------------- renders: previews, detail views, the check views
 blib.setup_render(int(args.get("render_size", 768)), 48, look="preview")
@@ -2264,6 +2635,12 @@ for tag, x0, x1 in (("front", hi.x - span * 0.4, hi.x), ("rear", lo.x, lo.x + sp
     st.render("iso", os.path.join(OUT, name))
     st.close()
     detail.append(name)
+if report.get("sockets"):
+    # a weapon's muzzle end-on: where the open bore - or a lens, a cap, a glow in it - shows (owner, 2026-10-01: "the
+    # laser cannon has some orange tip on it, should just be hollow")
+    m = render_muzzle(lod0, report["sockets"], lo, hi, os.path.join(OUT, "preview_detail_muzzle.png"), hidden=[hull, lod1, lod2])
+    if m:
+        detail.append(m)
 report["detail_renders"] = detail
 # orthographic side and front on white, framed on the silhouette like the reference pictures, for the check step
 blib.setup_render(int(args.get("check_size", 1024)), 16, look="probe")
@@ -2285,19 +2662,7 @@ for o in (hull, lod1, lod2):
     o.hide_render = False
 
 # ---------------------------------------------------------------- exports
-fbx_kw = dict(use_selection=True, apply_unit_scale=True, apply_scale_options="FBX_SCALE_NONE", axis_forward="-Z",
-              axis_up="Y", mesh_smooth_type="FACE", use_mesh_modifiers=True, path_mode="STRIP", embed_textures=False,
-              add_leaf_bones=False, bake_anim=False)
-blib.select_only([lod0, hull])
-p = os.path.join(OUT, "SM_%s.fbx" % NAME)
-bpy.ops.export_scene.fbx(filepath=p, **fbx_kw)
-report["files"].append(os.path.basename(p))
-for o in (lod1, lod2):
-    blib.select_only([o])
-    p = os.path.join(OUT, o.name + ".fbx")
-    bpy.ops.export_scene.fbx(filepath=p, **fbx_kw)
-    report["files"].append(os.path.basename(p))
-blib.select_only([lod0])
+blib.select_only([lod0] + socket_objs)
 p = os.path.join(OUT, "SM_%s.glb" % NAME)
 bpy.ops.export_scene.gltf(filepath=p, use_selection=True, export_format="GLB", export_yup=True)
 report["files"].append(os.path.basename(p))
@@ -2315,6 +2680,56 @@ report["files"].append(os.path.basename(p))
 report["files"] += [m["file"] for m in report["maps"]]
 report["engine"] = args.get("engine", "unreal")
 report["materials"] = [m.name for m in lod0.data.materials if m]
+# The FBX is written in centimetres with no scale on any node (2026-10-01, Proteus): Blender's exporter otherwise puts
+# its metre -> centimetre factor of 100 on the nodes, and Unreal's Interchange made that a x100 root bone on a rigged
+# weapon ("the weapons are massive"). The meshes are scaled to centimetres here and global_scale 0.01 cancels the
+# exporter's own x100, so the file is raw centimetres with UnitScaleFactor 1, sockets included. The .blend and the GLB
+# above stay in metres.
+CM = 100.0
+for ob in (lod0, lod1, lod2, hull):
+    ob.data.transform(Matrix.Scale(CM, 4))
+for e in socket_objs:
+    e.location = e.location * CM
+    e.empty_display_size *= CM
+fbx_kw = dict(use_selection=True, apply_unit_scale=True, global_scale=0.01, apply_scale_options="FBX_SCALE_NONE",
+              axis_forward="-Z", axis_up="Y", mesh_smooth_type="FACE", use_mesh_modifiers=True, path_mode="STRIP",
+              embed_textures=False, add_leaf_bones=False, bake_anim=False)
+blib.select_only([lod0, hull] + socket_objs)
+fbx_main = os.path.join(OUT, "SM_%s.fbx" % NAME)
+bpy.ops.export_scene.fbx(filepath=fbx_main, **fbx_kw)
+report["files"].append(os.path.basename(fbx_main))
+for o in (lod1, lod2):
+    blib.select_only([o])
+    p = os.path.join(OUT, o.name + ".fbx")
+    bpy.ops.export_scene.fbx(filepath=p, **fbx_kw)
+    report["files"].append(os.path.basename(p))
+report["fbx"] = {"units": "cm", "unit_scale_factor": 1.0, "sockets": ["SOCKET_" + q["name"] for q in report.get("sockets") or []],
+                 "frame": "Blender +X forward, +Y left, +Z up; Unreal reads X forward, Y right, Z up"}
+
+
+def fbx_check(path, want_m, sockets):
+    """The exported FBX read back the way an importer reads it: its size must be the asset's size in metres and its
+    sockets must all be there (a x100 file reads 100 times too long). Replaces the scene, so it runs last."""
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.fbx(filepath=path)
+    meshes = [o for o in bpy.context.scene.objects if o.type == "MESH" and not o.name.startswith("UCX_")]
+    if not meshes:
+        return {"ok": False, "why": "no mesh read back"}
+    bounds = [blib.dims(o) for o in meshes]
+    got = [max(b[1][i] for b in bounds) - min(b[0][i] for b in bounds) for i in range(3)]
+    ok = all(abs(g - w) <= 0.01 * max(w, 1e-3) for g, w in zip(sorted(got), sorted(want_m)))
+    found = {o.name.split(".")[0] for o in bpy.context.scene.objects if o.type == "EMPTY" and o.name.startswith("SOCKET_")}
+    missing = [n for n in ("SOCKET_" + q["name"] for q in sockets) if n not in found]
+    # Blender's importer scales a centimetre file's root nodes by 0.01: a root read back at 0.01 had scale 1 in the
+    # file; the x100 trap (a node scale of 100 that Unreal turns into a root bone) reads back at 1.0
+    roots = [o for o in meshes if o.parent is None]
+    node_scale = round(max(roots[0].matrix_world.to_scale()) / 0.01, 3) if roots else None
+    return {"ok": ok and not missing and node_scale is not None and abs(node_scale - 1.0) < 0.01,
+            "dims_m": [round(v, 4) for v in got], "node_scale": node_scale, "sockets_read": len(found), "missing": missing}
+
+
+report["fbx_check"] = fbx_check(fbx_main, report["dimensions_m"], report.get("sockets") or [])
+log("fbx read back: %s" % report["fbx_check"])
 # the delivery gate (Tonetta's gate.py, 2026-09-29): measured, reported, never silently passed
 warn = []
 if report["lods"] and report["lods"][0]["triangles"] > int(args["tri_budget"]) * 1.05:
@@ -2335,6 +2750,12 @@ if report.get("roughness_mean") is not None and report["roughness_mean"] < 0.3:
     warn.append("mean roughness %.2f reads as glaze (under 0.3)" % report["roughness_mean"])
 if (report.get("collision") or {}).get("triangles", 0) > 256:
     warn.append("collision hull %d tris (over 256)" % report["collision"]["triangles"])
+mz = report.get("muzzle")
+if mz is not None and not mz.get("open"):
+    warn.append("the muzzle looks closed: %s end-on (preview_detail_muzzle.png); a shot must be able to leave the gun"
+                % ("no recess" if not mz.get("found") else "only a pit %s mm deep" % ", ".join(str(b["depth_mm"]) for b in mz["bores"])))
+if not (report.get("fbx_check") or {}).get("ok", True):
+    warn.append("the FBX does not read back at the asset's size or with its sockets: %s" % report["fbx_check"])
 report["gate"] = {"ok": not warn, "warnings": warn}
 log("gate: %s" % ("ok" if not warn else "; ".join(warn)))
 with open(os.path.join(OUT, "report.json"), "w") as f:

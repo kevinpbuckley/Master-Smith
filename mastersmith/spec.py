@@ -18,11 +18,15 @@ def assembly_wanted(spec):
 
 
 def weapon_has_glass(description):
-    """True when the caption describes an optic, lens or light on the weapon, ignoring negated mentions ("no scope")."""
+    """True when the caption describes an optic, lens or light on the weapon, ignoring negated mentions ("no scope").
+    A laser counts only as an aiming module: "laser cannon" asked for glass and the gate warned that none was made on
+    a gun with no window in it (2026-10-01)."""
     import re
     text = re.sub(r"\b(no|without|never)(\s+an?|\s+any)?\s+(scope|optic|optics|sight|sights|lens|laser|light|flashlight)s?\b",
                   " ", (description or "").lower())
-    return re.search(r"\b(scope|optic|optics|red[ -]dot|holograph\w*|reflex sight|lens|laser|flashlight|weapon light)\b", text) is not None
+    laser = r"laser[ -](sight|module|pointer|designator|aiming|aim)\w*|aiming laser|laser/light"
+    return re.search(r"\b(scope|optic|optics|red[ -]dot|holograph\w*|reflex sight|lens|%s|flashlight|weapon light)\b" % laser,
+                     text) is not None
 
 
 DEFAULT_TRIS = {"weapon": 60000, "vehicle": 120000, "aircraft": 120000, "helicopter": 120000, "character": 80000, "prop": 30000, "environment": 80000}
