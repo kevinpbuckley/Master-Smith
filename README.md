@@ -32,7 +32,9 @@ claude                                                # or codex after linking s
 ```
 
 Link shared skills once per checkout before starting Codex. On Windows, run
-`./scripts/setup-skills.ps1` in PowerShell. It creates a directory junction without administrator rights.
+`./scripts/setup-skills.ps1` in PowerShell. It creates a directory junction without administrator rights;
+`-User` also links each skill into `~/.codex/skills`, so `$forge` is offered whichever folder Codex starts in.
+Codex reads [CODEX.md](CODEX.md) for its own notes (sandbox, output truncation, co-author line).
 On macOS/Linux, run `mkdir -p .agents && ln -s ../.claude/skills .agents/skills` instead.
 The local link is ignored by Git; `.claude/skills` is the tracked source for both agents, including future skills.
 Run setup again if you move the Windows checkout. Setup leaves any existing unrelated directory intact;
@@ -50,7 +52,8 @@ reads the six-view sheet before it calls anything good. You can interrupt at any
 ## How a build goes
 
 ```
-ms new <Name> --category weapon --size 0.68 --description "..."   out/<Name>/brief.json
+ms new <Name> --category weapon --size 0.68 --description "..."   out/<Name>/brief.json (--from briefs.json: several)
+ms clone <Old> <New>                                             rebuild from a job: its pictures, tuned plan and other parts
 ms picture / ms view                                             ref/: the hero picture, side and front views  (approve them)
 ms grid                                                          plan/: silhouette-cropped views with a percent grid
    (the agent writes plan/plan_draft.json: one box per part, materials, zones)
@@ -58,9 +61,14 @@ ms plan                                                          validates it, m
 ms part-pictures <Part>                                          parts/<Part>/side.png + quarter.png (~$0.16)
 ms mesh <Part>                                                   seed.glb from TRELLIS (free), registered to side.png
 ms register <Part> --yaw/--pitch                                 a correction after looking at seed_render.png
-ms assemble                                                      delivery/: SM_<Name>.glb + LODs + maps, previews, preview_views.png, preview.html
+ms assemble [--draft]                                            delivery/: SM_<Name>.glb + LODs + maps (FBX in cm with SOCKET_ empties), previews,
+                                                                 preview_views.png, preview.html, and the preview link; --draft: a minute, no bake
+ms closeup                                                       one close-up: a box, glass hidden or red, unlit, clay, cut open
+ms rig                                                           a weapon rigged for an engine: bones at the muzzles, clips, cm
 ms preview                                                       serves and opens the page: 3D viewer, six views, every part beside its seed
 ms package                                                       README.txt, manifest, zip
+ms batch <command> <jobs...> / ms bench --model <key>             several jobs at once / the owner's standard test set
+ms status / ms note                                              what a job has, the models picked, the money spent, the owner's notes
 ```
 
 Every part's pictures are kept in `out/<Name>/parts/<Part>/`, so the same asset can be meshed again later with a
@@ -71,11 +79,12 @@ body's bore, splits material zones (rubber pads, bare steel, glass), tints to th
 sharpens planar faces, bakes the full-detail parts into one atlas, builds LOD0/1/2 and a convex hull, and renders
 the previews and the six orthographic views the review is judged on.
 
-For generated surfaces that look overly glossy or rippled, use
-`ms assemble out/<Name> --finish-profile restrained`. This optional profile reduces normal and bump strength,
-raises roughness by material finish, and caps the baked bevel at 1.5 mm. Material zones follow the actual width
-of a kept-depth seed. It preserves seed geometry, so malformed sights, muzzles, windows, and lettering still
-need targeted repair. Review the six views against the previous build before retaining the result.
+The finish is the restrained profile by default (since 2026-10-02; `--finish-profile standard` for the old one): it
+reduces normal and bump strength, raises roughness by material finish, and caps the baked bevel at 1.5 mm, which took
+the "gooey" look off the Tripo benchmark's rifles and shotgun. Material zones follow the actual width of a kept-depth
+seed. It preserves seed geometry, so malformed sights, muzzles, windows, and lettering still need targeted repair.
+On a whole-object seed the reference pictures print only inside lettering boxes and the seed's colour cast is
+graded to the picture (`--projection full` for the old per-pixel projection).
 
 ## Layout
 
@@ -84,7 +93,9 @@ AGENTS.md                  the rules any coding agent follows here; CLAUDE.md im
 .claude/skills/forge/      the shared build recipe (/forge in Claude Code, $forge in Codex)
 .agents/skills            local link to .claude/skills for Codex discovery
 scripts/setup-skills.ps1   creates the shared skill link on Windows
-mastersmith/ms.py          the tools: new, picture, view, grid, plan, part-pictures, mesh, register, fit, brush, sdf, assemble, sheet, preview, package, status
+mastersmith/ms.py          the tools: new, clone, picture, view, grid, plan, seed, part-pictures, mesh, register, fit, brush, sdf, assemble,
+                           closeup, rig, sheet, refs, results, preview, package, batch, bench, note, status
+mastersmith/jobs.py        clone, batch and the benchmark set (bench.json); ledger.py the per-job decisions.json
 mastersmith/sculpt.py      headless sculpting in numpy: brushes (inflate, move, smooth, flatten, crease) and silhouette fitting
 mastersmith/sdfkit.py      exact parts as signed distance functions (primitives, CSG, smooth blends, repeat) meshed by marching cubes
 mastersmith/config.py      keys, paths, model routing

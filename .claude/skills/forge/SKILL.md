@@ -14,11 +14,24 @@ told otherwise and focus on letting user decide which seeding and models to use 
 back with blender skills"). On the M4A1 one Hi3D v3 multi-view request scored 6.5; the same model part by part 4.5
 for 11x the money, Tripo parts 2.5-3. The part assembly is at the end, for when the owner asks for it.
 
+Keep the owner in the loop (AGENTS.md rule 12): answer their question before the next tool call, a one-line status
+with the preview link at least every ~15 minutes or two assembles, and stop to show them after three assembles on the
+same defect. Anything over a minute runs in the background.
+
 ## 0. Pictures that already exist are used, never redrawn without asking
 Before ANY step that draws: `$PY status out/<Name>` (or `ls out/<Name>/ref out/<Name>/parts/*/`) and look at what is
 there. `ref/ref_*.png` (and any `parts/<Part>/side.png`, `quarter.png`, `build.py`) are the asset's source, kept on
 purpose. When they exist, show the owner the list and ASK whether to use them or draw again; use them unless told
-otherwise. The tools refuse to draw over an existing picture; `--redraw` only after the owner said so.
+otherwise. The tools refuse to draw over an existing picture; `--redraw` only after the owner said so. `status` also
+prints the models the owner picked, what has been spent and the owner's notes (`decisions.json`): read it after a
+compacted context instead of guessing; record a decision the moment it is made with `$PY note out/<Name> "..."`.
+
+**Re-running a job** (another seed model, a benchmark, a rebuild with the current code): `$PY clone out/<Old>
+<New>` - the pictures, the tuned plan (zones, glass, lettering) and every other part's seed come along, so only the
+seed changes; `--keep-seed` to re-assemble the same seed for free. Never rebuild a tuned job from a fresh plan
+(2026-09-30: the re-run Havoc lost its cockpit insert and canopy shell and fell from 9 to 5). The owner's standard
+test set is `$PY bench --model <key>` (six assets, says the cost and waits for `--yes`) or `$PY bench --keep-seed`
+(the same seeds, the current code, free); then score each against its baseline in `mastersmith/bench.json`.
 
 ## 1. Brief
 `$PY new <Name> --category weapon|vehicle|aircraft|helicopter|prop --size <longest side, m> --description "..."`
@@ -30,7 +43,10 @@ fuselage (rotors overhang); a gunship 12-18. `--tris 100000` for a hero asset.
 `$PY models` lists every seed and picture model with what one call costs (built in: Hi3D v3, Tripo, Meshy, TRELLIS.2
 and FLUX.2 on this PC; plus any registered local model). Show the owner the two short lists and ASK which picture
 model draws the references and which seed model meshes the object, with your recommendation (hero picture nano-pro,
-views nano; seed hi3d-mv, the best so far). Do not pick silently. A local model the owner runs on this machine is
+views nano; seed: Tripo from the hero, $0.60, for a first or benchmark run - it tied Hi3D multi-view on the M4A1 and
+beat Tripo multi-view on the Havoc; `hi3d-mv`, $2.10, when the owner wants the best whatever it costs - it made the
+eight Proteus weapons; AGENTS.md, What costs money). Do not pick silently; `note` the answer. A Codex session reads
+"which trillio" as a question too: ask which model is meant, with the prices. A local model the owner runs on this machine is
 registered once: `$PY models add <key> --kind seed --command "<exe> {image} {out} ..."` ({images} for several views,
 `--inputs multiview`; a picture model takes {prompt} or {prompt_file}, {refs}, {out}).
 
@@ -46,9 +62,18 @@ registered once: `$PY models add <key> --kind seed --command "<exe> {image} {out
   and `--which front`; vehicles and aircraft also `--which back` and `--which top`. A multi-view seed is only as good
   as these: the same object, level and orthographic. A sheet of several views in one picture fuses into one mesh;
   strong perspective seeds a foreshortened mesh; a generated mechanism is not to be trusted.
-- Read each picture. Redraw with `--fixes "..."` when the design drifted; move a replaced draft into `ref/unused/`
-  (never delete it). One line per job in `ref/notes.txt`, then `$PY refs out/<Name> [more jobs]` serves every picture
-  with Approve / Redraw: give the owner the URL and WAIT unless told to skip it. Choices land in `ref/review.json`.
+- A muzzle is an open dark bore in every prompt and brief: never "a lens", "a crystal", "a glowing tip" or "a cap" in
+  a muzzle (AGENTS.md rule 2; the laser cannon's ruby lens was the agent's own words, 2026-10-01). Glow belongs on a
+  coil, a band or a lamp, never in a bore.
+- Read each picture: `$PY refs out/<Name> [more jobs] --sheet --no-open` writes `<job>/ref_sheet.png` with every
+  picture labelled, the checklist and what the pixels can warn (a long gun's muzzle on the left). What drifted on the
+  Proteus weapons (9 of 38 pictures redrawn, 2026-09-30): heroes drawn three-quarter or facing left, a back view that
+  was the front drawn again, a muzzle drawn closed or with a window in it, three tubes drawn as four in a diamond
+  (accepted without a word - say it to the owner). Redraw with `--fixes "..."` when the design drifted; move a
+  replaced draft into `ref/unused/` (never delete it). A weapon's back view often fails: when it is dropped, plan a
+  `"flat"` zone on the rear cap (the mesher printed the muzzle onto it).
+- One line per job in `ref/notes.txt`, then `$PY refs out/<Name> [more jobs]` serves every picture with Approve /
+  Redraw: give the owner the URL and WAIT unless told to skip it. Choices land in `ref/review.json`.
 
 ## 4. Grid and seed the whole object
 - `$PY grid out/<Name> --side ref/ref_side.png --front ref/ref_front.png` (a weapon: `--side ref/ref_0.png`) ->
@@ -99,7 +124,17 @@ different, smaller change. Look at the six views after each pass and keep only w
   lit AND unlit (base colour only): shading ghosts come from the seed's normal map or leftover slivers, not the paint.
 - **Shattered-looking glass** (the pick left opaque shards between glass faces): `"shell": true` on the glass zone
   rebuilds the canopy as one clean shell with a painted frame band and crease bars (AGENTS.md, Materials). Check it
-  with the glass hidden and the frame bright once: what is left behind the glass should be the cockpit only.
+  with the glass hidden and the frame bright once: what is left behind the glass should be the cockpit only. Only a
+  single pane still opaque after that (a windscreen) takes `"pick": "fitted"` with a pane surface you fitted to its
+  frame (AGENTS.md, The plan JSON); two failed glass passes on one canopy: restore the opaque canopy and show the owner.
+- **Looking closely** without a probe script: `$PY closeup out/<Name> --box x0,x1,zt,zb --view left` (a box off the
+  side grid), `--highlight glass` (the picked glass red), `--hide glass` (what is behind it), `--highlight lining`,
+  `--highlight <Zone>` (a zone's faces red), `--unlit` (the paint alone: lettering ghosts from the normal map show as
+  what they are), `--clay` (the shape alone), `--section y=0.2` (cut open, the near side away). Read each one.
+- **Nudging boxes** (a cockpit insert 1% lower, a glass pick, a zone's edge): `$PY assemble out/<Name> --draft` stops
+  before the bake (about a minute instead of 5-15) and renders the placed parts with their glass, lining and muzzle
+  into `delivery/draft/`, with `pokes_out`, `glass_zones` and the muzzle in `draft/report.json`. The full assemble
+  runs once, when the draft reads right (the Havoc took ~18 full assembles for 1% nudges, 2026-09-29).
 - **Cockpit behind glass**: the walls seen through the canopy are lined from behind (a dark matte inside) so the far
   panels' backs and their mirrored lettering do not show. A pane modelled with a thickness has its inner skin taken
   as glass too (it was lined black). Show the lining bright once (`MI_<Name>_Interior`) to see what it covers.
@@ -115,10 +150,14 @@ different, smaller change. Look at the six views after each pass and keep only w
   is the undo. Compare before and after; keep it only when it reads better.
 
 ## 6. Assemble and review
-`$PY assemble out/<Name>` (5-15 min) -> `delivery/SM_<Name>.glb`, previews, `preview_views.png`, `preview.html`;
-`--no-bevel` drops the baked edge bevel, `--drop-floaters` deletes only far, small islands (measured in the report
-either way). After EVERY assemble that is reported, run `$PY preview out/<Name> --no-open` and put its URL in the
-message: a delivery message without a live preview link is incomplete (owner, 2026-09-29). Every page is on ONE site and
+`$PY assemble out/<Name>` (5-15 min, in the background) -> `delivery/SM_<Name>.glb`, previews, `preview_views.png`,
+`preview.html`, and it prints the preview link; `--no-bevel` drops the baked edge bevel, `--drop-floaters` deletes only
+far, small islands (measured in the report either way), `--origin` sets the pivot (a vehicle: `bottom`; a pylon
+weapon: `mount`), `--tubes N` names a launcher's loaded tubes. The finish is the restrained profile (AGENTS.md rule 4)
+and a kept texture takes the pictures only in its lettering boxes, its colour cast graded to the picture
+(`--projection full` for the old way). After EVERY assemble that is reported, put the preview link in the message
+(`$PY preview out/<Name> --no-open` prints it again): a delivery message without a live preview link is incomplete
+(owner, 2026-09-29: "where's my preview link?"). Every page is on ONE site and
 port (owner, 2026-09-29): http://127.0.0.1:8765/ lists every build, /results shows them with their six views, /refs the
 reference review, and each preview is http://127.0.0.1:8765/<Name>/delivery/preview.html with a nav bar back.
 Read `preview_views.png` and every `preview_*.png` yourself, and `delivery/report.json`'s `gate` (warnings) and
@@ -126,7 +165,9 @@ Read `preview_views.png` and every `preview_*.png` yourself, and `delivery/repor
 way); SIDE proportions and ground contact; TOP symmetry and centring (paired parts are proved from TOP, BOTTOM or FRONT,
 never called single from the SIDE); BOTTOM open hulls and missing faces; the iso previews hide gaps. Check, in this order:
 1. Function (common sense): barrel, muzzle, sights and receiver on one axis from the FRONT and the TOP; the bore at
-   the muzzle's centre; wheels on the ground; nothing floating, nothing poking through.
+   the muzzle's centre and open (`preview_detail_muzzle.png` end-on, `report.json` `muzzle`; the gate warns when it is
+   closed - a lens, a cap or a glow in a bore is a defect); wheels on the ground; nothing floating, nothing poking
+   through.
 2. Proportions against the side picture and the real sizes (a grip 30-35 mm across, a bore 5.6-7.6 mm, a car 4.5 x
    1.8 x 1.45 m on 0.65 m wheels 2.7 m apart). Detail follows attention: the business end, the front and the cockpit.
 3. Materials: steel dark and reflective, rubber matt, glass see-through with the cockpit behind it, polymer satin,
@@ -136,20 +177,39 @@ never called single from the SIDE); BOTTOM open hulls and missing faces; the iso
 5. Surfaces: the picture's white background as pale patches, or colours printed in the wrong place, mean the
    picture projection misfired: `assemble --no-projection`.
 6. Before and after: compare the delivery with the raw seed's six views (§4). A part lost, markings lost, a coloured
-   model turned grey or glass turned opaque is a defect caused by a pass: that pass is dropped, not repaired again.
+   model turned grey or washed out, its surface detail flattened, or glass turned opaque is a defect caused by a pass:
+   that pass is dropped, not repaired again.
 Write the review from a part list (what the pictures show, and what is deliberately absent; a part the pictures do
 not show is a defect even if the real-world cousin has it): defects worst first, each naming the part and the view and
 what is wrong (not how to fix it) - three real problems beat twelve observations; what no view can prove goes in an
-"unverifiable" list. Score it /10; do not call it good under 7 without saying why. If nothing improved since the last
-review, change the approach, not the effort.
+"unverifiable" list. If nothing improved since the last review, change the approach, not the effort.
+Score it /10 against the owner's anchors, not against your last build (2026-09-29: a parts batch self-scored 7-8; the
+owner put its M4A1 at 3):
+- 3: the Tripo-parts M4A1 with code parts (out/M4A1) - parts misaligned from the TOP, a plasticky mix of surfaces.
+- 5: the Tripo-benchmark Apache, shotgun and Havoc of 2026-09-30 - an opaque canopy, a raised tail wheel, garbled
+  lettering, a closed-looking muzzle, a blue cast.
+- 6.5: one Hi3D multi-view or one Tripo seed of the M4A1 with zones (out/M4A1_hi3d_whole, out/M4A1_tripo_whole) -
+  coherent, soft sights and controls, glossy.
+- 9: out/HavocGunship_tripo_whole - clean glass with the cockpit behind it, the lettering whole on both sides, the
+  reference's colours.
+A first assemble of a seed is usually 5-7. 8 or more needs every reference feature present from all six views,
+nothing misaligned from the TOP, nothing seen through glass but the cockpit, and the colours on the reference's. Write
+`delivery/scorecard.json` (`{"score", "spent", "defects", "unverifiable"}`); the pages show it as "self" until the
+owner scores it (`"owner_score"`).
 
 ## 7. Package
 `$PY package out/<Name>` -> `delivery/<Name>.zip`, printing the delivery gate's warnings (LOD0 within the budget
 x1.05, BaseColor/Normal/ORM present, size within +-10% of the brief, glass present when asked for, mean roughness
->= 0.3, UCX hull <= 256 triangles). The delivery message carries, in this order: the preview URL (from a `preview` run
-started after the last assemble), the GLB path, the zip path, the score /10 with defects by view, and what was spent.
-A batch: write `delivery/scorecard.json` (`{"score", "spent", "defects", "unverifiable"}`) per asset, then
-`$PY results out/A out/B ...` gives the builds page for just those (http://127.0.0.1:8765/results?jobs=A,B).
+>= 0.3, UCX hull <= 256 triangles, the muzzle open, the FBX read back at size with unit node scale). The delivery
+message carries, in this order: the preview URL, the GLB path, the zip path, the score /10 with defects by view, the
+pivot and sockets for a game asset, and what was spent. The same when another project takes the asset (the Proteus
+weapons went without previews, scores or zips, 2026-09-30).
+A batch: `$PY batch assemble out/A out/B --parallel 2` (a log per job, one line each; a spending command needs
+`--yes`), write `delivery/scorecard.json` per asset, then `$PY results out/A out/B ...` gives the builds page for just
+those (http://127.0.0.1:8765/results?jobs=A,B). Several briefs at once: `$PY new --from briefs.json`.
+For an engine (AGENTS.md, Unreal handoff): the FBX is centimetres with `SOCKET_` empties; a rigged weapon is
+`$PY rig out/<Name> [--origin mount] [--barrel 0.6,0.74] [--loop jet]` -> `delivery/rig/`; check the size, pivot and
+sockets in the engine before calling it done.
 
 ## Assembly of parts (only when the owner asks)
 The earlier way, kept for owners who want it: every part drawn alone, meshed alone and fitted into its box.

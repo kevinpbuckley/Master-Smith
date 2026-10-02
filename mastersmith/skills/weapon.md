@@ -26,14 +26,24 @@ weapon's far side is its profile mirrored by default (`mirror_as_third_view`), b
 Describe colours from the photo, part by part: a magazine or grip that shows the same grey as the body
 IS grey, never "black steel" by habit. The review holds the model to the caption.
 
-Finishing: the long axis becomes +X (forward), origin at the centre of the body, real length in metres
-(a pistol ~0.2 m, a carbine 0.75-0.9 m, a rifle 0.9-1.1 m, a sniper rifle 1.1-1.3 m, a rocket launcher ~1.0 m;
-a grip is a 30-35 mm cylinder, a bore 5.6-7.6 mm). Collision is a convex hull; a weapon is one static mesh with
-Muzzle and grip sockets - there is no rig pipeline in `ms`.
+The muzzle is an open dark bore in the caption, every prompt and the plan: never a lens, a crystal, a plug, a cap or a
+glow in it - an energy weapon's beam and a gun's flash are the engine's effects (owner 2026-10-01: the laser cannon's
+orange tip "should just be hollow"; the brief had asked for "a glowing ruby-red crystal lens set inside the muzzle").
+Put glow on a coil, a band or a lamp. A weapon's back view often fails (the editor draws the front again): drop it and
+plan a `"flat"` zone on the rear cap if the mesher printed the muzzle there.
+
+Finishing: the long axis becomes +X (forward), real length in metres (a pistol ~0.2 m, a carbine 0.75-0.9 m, a rifle
+0.9-1.1 m, a sniper rifle 1.1-1.3 m, a rocket launcher ~1.0 m; a grip is a 30-35 mm cylinder, a bore 5.6-7.6 mm).
+Collision is a convex hull. The pivot is the centre unless the game says otherwise (`assemble --origin mount` for a
+pylon or hardpoint weapon: the top centre of its plate; `--origin grip` for a handheld one). `assemble` measures the
+muzzle end-on and writes `SOCKET_Muzzle` (or `Muzzle_0..n` for several bores; `--tubes N` for loaded tubes), and
+`Grip` and `Sight` from parts or zones named so, into the FBX (centimetres). `ms rig` makes the skeletal weapon:
+Root/Body/(Barrel)/Muzzle bones, Idle/Fire/Equip(/FiringLoop) clips (AGENTS.md, Unreal handoff).
 
 Materials: satin gunmetal ~0.58 roughness on bare steel, ~0.75 on polymer; barrel, muzzle device, sights and bolt
 are `metal` zones on a whole seed (materials.md).
 
-Realism check: barrel, muzzle, sights and receiver on one axis from the front and the top; the muzzle round;
-the scope glass reads as glass; metal has a low-to-mid roughness with variation. A wrong outline gets a
+Realism check: barrel, muzzle, sights and receiver on one axis from the front and the top; the muzzle round and
+open (`preview_detail_muzzle.png` end-on, the gate's muzzle warning); the scope glass reads as glass; metal has a
+low-to-mid roughness with variation. A wrong outline gets a
 targeted fix first (`ms fit`, `ms brush`); a new picture or a new seed only when the shape is unsuitable.
