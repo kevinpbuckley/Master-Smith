@@ -28,8 +28,10 @@ OUT_DIR = DATA_DIR / "out"
 
 BLENDER_BIN = os.environ.get("BLENDER_BIN", r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe")
 # Every Blender run: headless, and never the scripts a .blend carries (-Y), whatever the user's "Auto Run Python
-# Scripts" preference says - customers hand us .blend files.
-BLENDER_FLAGS = ["-b", "-Y"]
+# Scripts" preference says - customers hand us .blend files. --factory-startup: none of the user's add-ons either (the
+# BlenderMCP add-on loaded in every headless run and printed "cannot start server in background mode", which agents
+# read as an error, 2026-09-29/30); the glTF and FBX add-ons are on in factory settings and the scripts pick CPU Cycles.
+BLENDER_FLAGS = ["-b", "--factory-startup", "-Y"]
 
 # --- the few model calls the helpers still make (the three-quarter picture check, the old planner/review paths).
 # Who answers them: a coding agent on this PC on the owner's own subscription, "claude-code" (`claude -p`) or "codex"

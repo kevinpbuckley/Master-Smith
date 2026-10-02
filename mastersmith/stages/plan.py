@@ -323,12 +323,64 @@ def clean_material(mat):
     finish = str(mat.get("finish") or "").lower()
     if finish not in FINISHES:
         finish = "metal" if mat.get("metal") else "glass" if mat.get("glass") else "polymer"
-    return {"color": colour, "finish": finish, "metal": bool(mat.get("metal")) or finish == "metal",
-            "roughness": round(rough, 3), "glass": bool(mat.get("glass")) or finish == "glass",
-            "keep_texture": bool(mat.get("keep_texture")),
-            # 2026-09-29: "color_lock" keeps the planned colour when the box is mostly a neighbour (the barrel run
-            # back through the handguard sampled the handguard's grey)
-            "color_lock": bool(mat.get("color_lock"))}
+    out = {"color": colour, "finish": finish, "metal": bool(mat.get("metal")) or finish == "metal",
+           "roughness": round(rough, 3), "glass": bool(mat.get("glass")) or finish == "glass",
+           "keep_texture": bool(mat.get("keep_texture")),
+           # 2026-09-29: "color_lock" keeps the planned colour when the box is mostly a neighbour (the barrel run
+           # back through the handguard sampled the handguard's grey)
+           "color_lock": bool(mat.get("color_lock"))}
+    # an emissive material's glow strength (AGENTS.md: {"finish": "emissive", "strength": 8}) was dropped here, so
+    # every lamp glowed at the default whatever the plan said (2026-10-02)
+    if finish == "emissive" and isinstance(mat.get("strength"), (int, float)) and not isinstance(mat.get("strength"), bool):
+        out["strength"] = round(min(50.0, max(0.5, float(mat["strength"]))), 2)
+    return out
+
+
+# Every key a plan may carry, so `ms plan` can say what it ignored. validate_plan dropped unknown keys without a word
+# and was patched six times on 2026-09-29 for keys the agent had already written (pick, keep, lettering, line, shell).
+TOP_KEYS = {"parts", "notes", "overall_width_m"}
+PART_KEYS = {"name", "what", "method", "side_box", "front_span", "material", "zones", "reference_detail", "skin",
+             "edge_break", "interior", "centreline", "lettering"}
+ZONE_KEYS = {"name", "side_box", "front_span", "material", "pick", "keep", "strength", "fill", "line", "shell", "flat",
+             "glow", "vertices", "triangles", "tolerance", "bounds"}
+MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength"}
+GLOW_KEYS = {"hue", "hue_tol", "min_sat", "min_val"}
+PICKS = ("auto", "dark", "pale", "lit", "box", "atlas", "fitted")
+# what a validated plan.json carries besides the plan (fed back through `ms plan` it is not "ignored")
+DERIVED = {"box_min", "box_max", "color_planned", "pbr_set", "dropped", "dims_m", "side", "front", "side_grid",
+           "front_grid", "ignored"}
+
+
+def unknown_keys(where, d, known):
+    """'ignored: <where>.<key>' for every key of `d` the validator does not know."""
+    if not isinstance(d, dict):
+        return []
+    return ["%s.%s (not a plan key)" % (where, k) for k in d if k not in known and k not in DERIVED]
+
+
+def fitted_panes(z):
+    """A "fitted" glass zone's pane surface, checked: vertices [[x, y, z]...] in the asset frame (metres), triangles
+    [[i, j, k]...], tolerance (metres either side of the pane) and optional bounds [[lo], [hi]]. -> dict or a reason"""
+    import numpy as np
+    try:
+        v = np.asarray(z.get("vertices"), dtype=float)
+        t = np.asarray(z.get("triangles"), dtype=int)
+        tol = float(z.get("tolerance"))
+    except (TypeError, ValueError):
+        return "fitted needs vertices, triangles and tolerance"
+    if v.ndim != 2 or v.shape[1] != 3 or t.ndim != 2 or t.shape[1] != 3 or not len(t):
+        return "fitted vertices must be [[x, y, z], ...] and triangles [[i, j, k], ...]"
+    if t.min() < 0 or t.max() >= len(v) or not np.isfinite(v).all() or not (0 < tol < 1):
+        return "fitted triangles index past the vertices, or the tolerance is not a small positive number of metres"
+    out = {"vertices": v.round(5).tolist(), "triangles": t.tolist(), "tolerance": tol}
+    if z.get("bounds") is not None:
+        try:
+            b = np.asarray(z["bounds"], dtype=float)
+            assert b.shape == (2, 3)
+            out["bounds"] = b.round(5).tolist()
+        except (TypeError, ValueError, AssertionError):
+            return "fitted bounds must be [[x, y, z], [x, y, z]]"
+    return out
 
 
 def clean_glow(glow):
@@ -350,13 +402,18 @@ def clean_glow(glow):
 
 def validate_plan(raw, dims, max_parts=None):
     """The builder's JSON -> a clean plan: unique names, a known method, a material, boxes in metres. Parts whose
-    numbers make no sense are dropped with the reason; a plan with fewer than two parts is refused."""
+    numbers make no sense are dropped with the reason; a plan with no usable part is refused (one part is the
+    whole-object seed). Every key or value it does not take is listed in "ignored", never dropped silently."""
     max_parts = max_parts or config.ASSEMBLY_MAX_PARTS
-    parts, dropped, taken = [], [], set()
+    parts, dropped, taken, ignored = [], [], set(), []
+    ignored += unknown_keys("plan", raw, TOP_KEYS)
     for p in (raw or {}).get("parts") or []:
         if not isinstance(p, dict):
+            ignored.append("plan.parts: %r is not a part" % (p,))
             continue
         name = clean_name(p.get("name"), taken)
+        ignored += unknown_keys(name, p, PART_KEYS)
+        ignored += unknown_keys(name + ".material", p.get("material"), MATERIAL_KEYS)
         try:
             box_min, box_max = to_metres(p.get("side_box") or [], p.get("front_span") or [], dims)
         except (ValueError, TypeError) as exc:
@@ -375,48 +432,84 @@ def validate_plan(raw, dims, max_parts=None):
         # 2026-09-29: "skin" (a code part dressed in its own diffused mesh's texture), "edge_break" (false keeps a code
         # part's edges razor sharp), "interior" (a cockpit or cabin inside the body, checked to fit in it) and an
         # explicit "centreline" pass through to the assembler
+        if str(p.get("method") or "code").lower() not in ("code", "vendor"):
+            ignored.append("%s.method=%r (code or vendor; taken as %s)" % (name, p.get("method"), part["method"]))
         for key in ("skin", "edge_break", "interior", "centreline"):
             if key in p:
                 part[key] = bool(p[key])
         # 2026-09-29: "lettering", side boxes (percent of the side grid) around painted words: the picture prints
         # there at full strength over the mesher's own copy, and reads the right way round on the far side
         boxes = []
-        for b in (p.get("lettering") or [])[:12]:
+        for k, b in enumerate(p.get("lettering") or []):
             try:
                 x0, x1, z0, z1 = (pct(v) for v in b)
             except (TypeError, ValueError):
+                ignored.append("%s.lettering[%d]=%r (four percents: x0, x1, z_top, z_bottom)" % (name, k, b))
                 continue
-            if None not in (x0, x1, z0, z1) and x1 > x0 and z1 > z0:
+            if k >= 12:
+                ignored.append("%s.lettering[%d] (12 boxes at most)" % (name, k))
+            elif None not in (x0, x1, z0, z1) and x1 > x0 and z1 > z0:
                 boxes.append([x0, x1, z0, z1])
+            else:
+                ignored.append("%s.lettering[%d]=%r (x1 > x0 and z_bottom > z_top)" % (name, k, b))
         if boxes:
             part["lettering"] = boxes
+        if p.get("zones") and part["method"] != "vendor":
+            ignored.append("%s.zones (zones are for vendor parts; a code part is one material)" % name)
         if part["method"] == "vendor":
             zones = []
-            for z in (p.get("zones") or [])[:12]:
-                if not isinstance(z, dict):
+            for k, z in enumerate(p.get("zones") or []):
+                zn = "%s.zones[%s]" % (name, z.get("name") if isinstance(z, dict) else k)
+                if not isinstance(z, dict) or k >= 12:
+                    ignored.append("%s (%s)" % (zn, "not a zone" if not isinstance(z, dict) else "12 zones at most"))
                     continue
+                ignored += unknown_keys(zn, z, ZONE_KEYS)
+                ignored += unknown_keys(zn + ".material", z.get("material"), MATERIAL_KEYS)
                 try:
                     zmin, zmax = to_metres(z.get("side_box") or [], z.get("front_span") or p["front_span"], dims)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError) as exc:
+                    ignored.append("%s dropped: its box %s" % (zn, exc))
                     continue
                 zone = {"name": clean_name(z.get("name"), set()), "box_min": zmin, "box_max": zmax,
                         "side_box": [pct(v) for v in z["side_box"]], "material": clean_material(z.get("material"))}
-                # 2026-09-29: how a glass zone's faces are picked (auto / dark / pale / lit / box / atlas), how many
-                # patches it keeps, whether holes in its frame get a glass shell and the walls seen through it a
-                # lining, and an emissive zone's strength
-                if z.get("pick") in ("auto", "dark", "pale", "lit", "box", "atlas"):
-                    zone["pick"] = z["pick"]
+                # 2026-09-29: how a glass zone's faces are picked (auto / dark / pale / lit / box / atlas / fitted),
+                # how many patches it keeps, whether holes in its frame get a glass shell and the walls seen through
+                # it a lining, and an emissive zone's strength
+                if "pick" in z:
+                    if z["pick"] in PICKS:
+                        zone["pick"] = z["pick"]
+                    else:
+                        ignored.append("%s.pick=%r (one of %s)" % (zn, z["pick"], ", ".join(PICKS)))
+                if zone.get("pick") == "fitted":
+                    # 2026-09-30: a pane surface fitted to the frame by hand replaces an opaque windscreen; it used to
+                    # live only in a hand-edited plan.json, which the next `ms plan` wiped
+                    panes = fitted_panes(z)
+                    if isinstance(panes, str):
+                        ignored.append("%s dropped: %s" % (zn, panes))
+                        continue
+                    zone.update(panes)
                 for key in ("keep", "strength"):
-                    if isinstance(z.get(key), (int, float)):
-                        zone[key] = z[key]
+                    if key in z:
+                        if isinstance(z[key], (int, float)) and not isinstance(z[key], bool):
+                            zone[key] = z[key]
+                        else:
+                            ignored.append("%s.%s=%r (a number)" % (zn, key, z[key]))
                 for key in ("fill", "line", "shell", "flat"):  # shell the frame's holes; line the cockpit's backs;
                                                                 # "shell": the whole canopy one clean shell; "flat":
                                                                 # the planned colour only, none of the texture
-                    if isinstance(z.get(key), bool):
-                        zone[key] = z[key]
-                glow = clean_glow(z.get("glow"))
-                if glow:
-                    zone["glow"] = glow
+                    if key in z:
+                        if isinstance(z[key], bool):
+                            zone[key] = z[key]
+                        else:
+                            ignored.append("%s.%s=%r (true or false)" % (zn, key, z[key]))
+                if "glow" in z:
+                    glow = clean_glow(z.get("glow"))
+                    if glow:
+                        zone["glow"] = glow
+                        if isinstance(z["glow"], dict):
+                            ignored += unknown_keys(zn + ".glow", z["glow"], GLOW_KEYS)
+                    else:
+                        ignored.append("%s.glow=%r (a hue in degrees, or #rrggbb)" % (zn, z["glow"]))
                 zones.append(zone)
             part["zones"] = zones
         parts.append(part)
@@ -427,7 +520,7 @@ def validate_plan(raw, dims, max_parts=None):
     if len(parts) < 1:
         raise ValueError("the plan has no usable part")
     return {"parts": parts, "dropped": dropped, "notes": str((raw or {}).get("notes") or "")[:800],
-            "dims_m": [round(v, 4) for v in dims]}
+            "dims_m": [round(v, 4) for v in dims], "ignored": ignored}
 
 
 def pick_views(ref, category):

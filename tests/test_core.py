@@ -58,6 +58,10 @@ def test_estimate_is_the_worst_case_and_multiview_costs_more():
 def test_weapon_glass_follows_the_caption():
     assert Spec(name="R", description="a carbine with a 4x ACOG scope on the rail", category="weapon").glass is True
     assert Spec(name="R", description="a bullpup carbine, no sling, no hands, no scope.", category="weapon").glass is False
+    # a laser cannon is not a laser sight (2026-10-01: the gate warned "glass was asked for but none was made")
+    assert Spec(name="L", description="a ship-mounted laser cannon with a cream shroud", category="weapon").glass is False
+    assert Spec(name="L", description="a carbine with a laser sight under the rail", category="weapon").glass is True
+    assert Spec(name="L", description="a pistol with a laser module", category="weapon").glass is True
     assert Spec(name="R", description="a plain pump shotgun with a wooden stock", category="weapon").glass is False
     assert Spec(name="R", description="a pistol with a red-dot sight and a weapon light", category="weapon").glass is True
     assert Spec(name="R", description="a plain rifle", category="weapon", glass=True).glass is True      # an explicit ask wins

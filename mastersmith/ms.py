@@ -248,6 +248,11 @@ def cmd_plan(a):
                                               [z["name"] for z in p.get("zones") or []]))
     for d in plan.get("dropped") or []:
         print("  dropped %s: %s" % (d["name"], d["reason"]))
+    for w in plan.get("ignored") or []:
+        print("  IGNORED %s" % w)
+    if plan.get("ignored"):
+        print("  %d key(s) or value(s) above were NOT taken: fix the draft (AGENTS.md, The plan JSON) or they do nothing"
+              % len(plan["ignored"]))
 
 
 def cmd_build(a):
@@ -1123,6 +1128,13 @@ def cmd_status(a):
 
 
 def main(argv=None):
+    # line by line even into a file or a pipe: a background `ms seed > log` showed nothing until it ended (2026-09-29);
+    # UTF-8 so a model's em dash does not stop a run on a cp1252 console
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(prog="ms", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("new"); s.add_argument("name"); s.add_argument("--category", default="prop"); s.add_argument("--size", type=float, required=True)
