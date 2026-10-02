@@ -189,6 +189,7 @@ an assemble, 2026-09-29).
 | `bench --model <key> [--yes] \| --keep-seed [--only A,B] [--tag T]` | the owner's standard set (`mastersmith/bench.json`): each asset cloned from its best-tuned job, seeded (says the cost and stops without `--yes`), assembled; a summary in `out/_bench/` and the results link; then score each against its baseline |
 | `batch <command> <job> <job> ... [--parallel 2] [--args "..."] [--yes]` | one command over several jobs, a log per job (`<job>/batch_<command>.log`), one line each; a spending command needs `--yes` after the owner agreed |
 | `note <job> "the owner picked tripo"` | the owner's decision in `decisions.json`, beside every paid call's cost; `ms status` prints them |
+| `open <job> [--part Body] [--rig]` | the delivery (or a part's seed, a copy kept first; or the rig) in Blender's own window with the user's add-ons (BlenderMCP), for work by hand or a live MCP session; every other Blender run is headless with factory settings |
 | `picture <job> --out ref/ref_0.png --prompt "..." [--ref file] [--model nano\|nano-pro\|local]` | draws a picture |
 | `view <job> --which side\|front\|back\|top\|quarter --from ref/ref_0.png [--mirror] [--fixes "..."]` | one standard view of the same object |
 | `grid <job> --side ref/ref_side.png [--front ref/ref_front.png] [--mirror]` | crops to the silhouette, draws the percent grids, writes dims.json |

@@ -49,7 +49,7 @@ def _v(path):
 
 def delivered_jobs(out_dir):
     """Every job with a delivery and a brief (the service-era folders from before 2026-09-28 have no brief)."""
-    return sorted(d for d in os.listdir(out_dir) if os.path.isfile(os.path.join(out_dir, d, "delivery", "report.json"))
+    return sorted(d for d in os.listdir(out_dir) if not d.startswith("_") and os.path.isfile(os.path.join(out_dir, d, "delivery", "report.json"))
                   and os.path.isfile(os.path.join(out_dir, d, "brief.json")))
 
 

@@ -72,6 +72,9 @@ registered once: `$PY models add <key> --kind seed --command "<exe> {image} {out
   (accepted without a word - say it to the owner). Redraw with `--fixes "..."` when the design drifted; move a
   replaced draft into `ref/unused/` (never delete it). A weapon's back view often fails: when it is dropped, plan a
   `"flat"` zone on the rear cap (the mesher printed the muzzle onto it).
+- The picture model has limits worth knowing: it drew tandem seats side by side three times, refused a barrel drawn
+  alone (content filter) and returned 422 on a three-quarter edit (2026-09-29). Reword ("a steel tube", "the seats one
+  behind the other, the rear one higher") instead of sending the same prompt again.
 - One line per job in `ref/notes.txt`, then `$PY refs out/<Name> [more jobs]` serves every picture with Approve /
   Redraw: give the owner the URL and WAIT unless told to skip it. Choices land in `ref/review.json`.
 
@@ -117,7 +120,9 @@ different, smaller change. Look at the six views after each pass and keep only w
   was a closed lump; plan box read off the grid, cabin's walls and sill, 2 Nano pictures and a Tripo mesh ($0.76).
   Then look at three things: the report's `pokes_out` (the share of the insert a ray sideways or down sees leave the
   hull; under 3%), the side close-ups (a tub rim above the sill blacks out the windows: sink the box), and the
-  windscreen (a glare shield past the sloping glass: pull the box's front back).
+  windscreen (a glare shield past the sloping glass: pull the box's front back). On a hollow hull `ms cabin`'s floor
+  rays can find nothing to stand on (the Havoc, 2026-09-29): set the box off the side grid by hand and settle it with
+  `assemble --draft` and its `pokes_out`, a few percent at a time.
 - **Markings are paint**: stencils, numbers, stripes and painted vents stay in the texture, never geometry. A word
   the seed blurred, embossed or mirrored gets a `"lettering"` box on the part (percent off the side grid, generous):
   the picture's word prints whole on both sides and the relief is flattened. Check it in a close-up of each side,
@@ -219,8 +224,12 @@ The earlier way, kept for owners who want it: every part drawn alone, meshed alo
 - Part pictures ($0.16 a part): `$PY part-pictures out/<Name> <Part>`; read both. The body's side picture is the
   approved view with the other parts erased; a side picture drawn facing backwards is turned round automatically.
 - Code parts (free): `"method": "code"` and `parts/<Part>/build.py` (`def build(kit, L, W, H)`, hskit.py), `$PY build`.
+  The file is exactly ONE top-level function, `def build(kit, L, W, H)` - helpers go inside it, nothing is imported but
+  `math`, no name starts with `_` (codecheck.py refuses anything else; it surprised two builders, 2026-09-29).
   A code part's box is its TIGHT silhouette. `"skin": true` bakes the part's own diffused mesh's texture onto it.
   Machined parts meshed by diffusion come back wrong (the all-diffused M4A1 lost its barrel, its magazine a shell).
+  Known on part builds: a fitted part's texture stretches where no picture reached (the magazine's torn bottom), and
+  the wear pass speckles a crinkly mesher muzzle brake or rail white.
 - Mesh and register: `$PY mesh out/<Name> <Part> --vendor <seed model>`; read `seed_render.png` beside the pictures.
 - Part review gate before assembling: part, pass/fail, what differs, for the owner; drop a code part the seed
   already carries (a duplicate rail stood 6 mm off the handguard).

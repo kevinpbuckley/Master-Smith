@@ -1292,6 +1292,31 @@ def cmd_rig(a):
           "Muzzle bones are the sockets." % job.spec.name)
 
 
+def cmd_open(a):
+    """A job's Blender file opened in Blender's own window, the user's preferences and add-ons on (the BlenderMCP
+    add-on included), for work by hand or through a live Blender MCP session (2026-09-29: the session that asked for
+    this had no way in but a headless script). The headless runs keep factory settings. A part's registered.blend is
+    the seed the assembler reads: a copy is kept first (rule 10)."""
+    job = Job(a.job)
+    if a.part:
+        path = job.path("parts", a.part, "registered.blend")
+        backup = job.path("parts", a.part, "registered_before_open.blend")
+        if os.path.exists(path) and not os.path.exists(backup):
+            shutil.copy2(path, backup)
+            print("kept a copy of the seed: %s (copy it back to undo what you change by hand)" % backup)
+    elif a.rig:
+        path = job.path("delivery", "rig", "SK_%s.blend" % job.spec.name)
+    else:
+        path = job.path("delivery", "SM_%s.blend" % job.spec.name)
+    if not os.path.exists(path):
+        sys.exit("no %s yet" % path)
+    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+    subprocess.Popen([config.BLENDER_BIN, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+    print("opened in Blender: %s" % path)
+    if a.part:
+        print("Save over registered.blend only for a change you mean the assembler to use; then ms assemble.")
+
+
 def cmd_note(a):
     """The owner's decision in their words, kept with the job (ms status prints it): models picked, references
     approved, what to change. A compacted context loses the conversation; the job folder keeps this."""
@@ -1432,6 +1457,9 @@ def main(argv=None):
     s.set_defaults(fn=cmd_bench)
     s = sub.add_parser("note", help="the owner's decision, kept with the job"); s.add_argument("job"); s.add_argument("text", nargs="+")
     s.set_defaults(fn=cmd_note)
+    s = sub.add_parser("open", help="the delivery (or a part's seed, or the rig) in Blender's window, the user's add-ons on")
+    s.add_argument("job"); s.add_argument("--part", help="a part's registered.blend (a copy is kept first)")
+    s.add_argument("--rig", action="store_true", help="delivery/rig/SK_<Name>.blend"); s.set_defaults(fn=cmd_open)
     s = sub.add_parser("closeup", help="one close-up of the delivery: a box, a view, glass hidden or red, unlit, clay, a cut")
     s.add_argument("job"); s.add_argument("--box", help="x0,x1,z_top,z_bottom in side-grid percents")
     s.add_argument("--view", default="iso", choices=("iso", "iso_rear", "iso_low", "left", "right", "front", "back", "top", "bottom"))
