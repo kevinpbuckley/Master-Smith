@@ -130,11 +130,17 @@ def decimate_to(o, target):
     if have <= target:
         return have
     weld_seams(o)
-    m = o.modifiers.new("dec", "DECIMATE")
-    m.ratio = max(0.02, target / float(have))
-    m.use_collapse_triangulate = True
-    blib.select_only([o])
-    bpy.ops.object.modifier_apply(modifier="dec")
+    # each pass takes at most 98%: a 149k conch seed stopped at 2,980 triangles of its 2,000 (2026-10-03), so a
+    # second pass takes the rest
+    for _ in range(3):
+        have = blib.tri_count(o)
+        if have <= target * 1.02:
+            break
+        m = o.modifiers.new("dec", "DECIMATE")
+        m.ratio = max(0.02, target / float(have))
+        m.use_collapse_triangulate = True
+        blib.select_only([o])
+        bpy.ops.object.modifier_apply(modifier="dec")
     return blib.tri_count(o)
 
 
