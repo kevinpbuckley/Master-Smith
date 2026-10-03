@@ -49,3 +49,31 @@ def test_normals_baked_from_a_thin_sheets_back_face_are_turned_out():
     assert np.allclose(px[0, 1, :3], [0.4, 0.6, 0.95])            # (-0.2, 0.2, 0.9): out of the surface
     assert np.allclose(px[0, 0, :3], [0.5, 0.5, 1.0])
     assert np.allclose(px[1, 1, :3], [0.5, 0.5, 0.0])
+
+
+def _silhouette():
+    path = Path(__file__).resolve().parents[1] / "mastersmith/blender/silhouette.py"
+    spec = importlib.util.spec_from_file_location("silhouette", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_lattice_is_registered_by_its_envelope():
+    s = _silhouette()
+    fan = np.zeros((96, 96), bool)
+    for k in range(8, 88, 8):                          # a fan of thin branches: a lattice of one-pixel lines
+        fan[k, 10:86] = True
+        fan[10:86, k] = True
+    moved = np.roll(np.roll(fan, 2, axis=0), 2, axis=1)  # the same fan, two pixels off
+    assert s.fill_ratio(fan) < 0.45
+    assert s.iou(fan, moved) < 0.3                     # raw: near noise
+    assert s.iou(s.envelope(fan), s.envelope(moved)) > 0.9
+    solid = np.zeros((96, 96), bool)
+    solid[20:80, 10:90] = True
+    assert s.fill_ratio(solid) > 0.9
+    ring = np.zeros((40, 40), bool)
+    ring[5:35, 5:35] = True
+    ring[10:30, 10:30] = False
+    assert s.fill_holes(ring)[20, 20]                  # a hole inside is filled, the outside is not
+    assert not s.fill_holes(ring)[0, 0]

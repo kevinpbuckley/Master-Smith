@@ -105,6 +105,15 @@ probe.data = ob.data.copy()
 bpy.context.collection.objects.link(probe)
 tris = blib.tri_count(probe)
 if tris > 4000:
+    # welded first: a Tripo seed is split along every UV seam and the unwelded collapse tore thin branches and leaves
+    # out of the probe's silhouette (2026-10-03, as in assemble.py's decimate_to)
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(probe.data)
+    lo_, hi_ = blib.dims(probe)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=max((hi_ - lo_).length * 1e-6, 1e-9))
+    bm.to_mesh(probe.data)
+    bm.free()
     m = probe.modifiers.new("dec", "DECIMATE")
     m.ratio = 4000.0 / tris
     blib.select_only([probe])
@@ -246,11 +255,17 @@ if pic_lum is None:
     face_lum = None
 
 
+import silhouette  # noqa: E402 - pure numpy, tested
+# a lattice (a sea fan, kelp, a branching coral) is compared by its envelope: two lattices overlap by chance
+SPARSE = silhouette.fill_ratio(target) < 0.45
+target_cmp = silhouette.envelope(target) if SPARSE else target
+
+
 def score_all(rots):
     out = []
     for rot in rots:
         sil, aspect = side_mask(verts @ rot.T, faces)
-        iou = (sil & target).sum() / float(max((sil | target).sum(), 1))
+        iou = silhouette.iou(silhouette.envelope(sil) if SPARSE else sil, target_cmp)
         out.append((iou - 0.35 * abs(np.log(aspect / t_aspect)), iou, aspect, rot))
     return sorted(out, key=lambda s: -s[0])
 
