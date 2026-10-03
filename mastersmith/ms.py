@@ -238,6 +238,8 @@ def cmd_grid(a):
     else:
         dims = (float(job.spec.size_m), float(a.width or job.spec.size_m * side_px[1] / side_px[0] * 0.3),
                 float(job.spec.size_m) * side_px[1] / float(side_px[0]))
+    if job.spec.category == "nature":
+        dims = planmod.longest_side(dims, job.spec.size_m)
     json.dump({"dims_m": [round(v, 4) for v in dims]}, open(os.path.join(work, "dims.json"), "w"))
     print("gridded side view:", side_g)
     if a.front:
@@ -393,10 +395,18 @@ def cmd_seed(a):
     if a.replan or not os.path.exists(plan_path):
         dims = json.load(open(job.path("plan", "dims.json")))["dims_m"]
         finish = {"weapon": "metal", "prop": "painted"}.get(job.spec.category, "painted")
+        mat = {"color": "#808080", "finish": finish, "keep_texture": True}
+        if job.spec.category == "nature":
+            mat.update(metal=False, roughness=0.7)      # skin, leaf, shell and stone: never Tripo's glaze or chrome
         raw = {"parts": [{"name": a.part, "what": job.spec.description[:400], "method": "vendor", "side_box": [0, 100, 0, 100],
-                          "front_span": [0, 100], "material": {"color": "#808080", "finish": finish, "keep_texture": True}}],
+                          "front_span": [0, 100], "material": mat}],
                "notes": "one seed for the whole object (%s)" % m["label"]}
-        json.dump(planmod.validate_plan(raw, dims), open(plan_path, "w"), indent=1)
+        plan = planmod.validate_plan(raw, dims)
+        # the pictures, as `ms plan` records them: without them `assemble` straight after a seed stopped on a KeyError
+        # and every Training Pool job ran `ms plan` first (2026-10-02)
+        plan["side"] = job.path("plan", "side.png")
+        plan["front"] = job.path("plan", "front.png") if os.path.exists(job.path("plan", "front.png")) else None
+        json.dump(plan, open(plan_path, "w"), indent=1)
         if not os.path.exists(job.path("plan", "plan_draft.json")) or a.replan:
             json.dump(raw, open(job.path("plan", "plan_draft.json"), "w"), indent=1)
         print("plan: one part, %s, keeping the seed's own texture (plan/plan_draft.json)" % a.part)
@@ -895,6 +905,16 @@ def _projection_inputs(job, plan, parts):
 def cmd_assemble(a):
     job = Job(a.job)
     plan = _plan(job)
+    nature = job.spec.category == "nature"
+    if nature:
+        # a fish, a kelp, a coral or a rock is no machined part: the sharpening, the baked bevel, the code edge break, the
+        # metal and polymer smart materials and the cast-surface grain each damaged one of the Training Pool pilots
+        # (2026-10-02: glossy creases on the fish, grain on the leaves); its size is its longest side
+        # nor the picture projection and its colour grade: a plant on white read as a pale blue picture and the grade
+        # washed the gold-olive kelp to grey (saturation x0.69, blue x1.36, 2026-10-03)
+        a.no_sharpen = a.no_bevel = a.no_edge_break = a.no_materials = a.no_surface_detail = a.no_projection = True
+        print("nature: no sharpening, bevel, edge break, smart materials, surface grain or picture projection; sized by "
+              "its longest side")
     want = [p.strip().lower() for p in a.parts.split(",")] if a.parts else None
     # the body is the biggest box by volume: by length alone an all-diffused rifle's barrel (334 mm, 17 mm across) was
     # taken for the body, kept in its short seed's proportions and vanished inside the handguard (2026-09-29)
@@ -960,7 +980,7 @@ def cmd_assemble(a):
             "bevel_m": 0.0 if a.no_bevel else (min(0.0015, 0.0005 * float(plan["dims_m"][0]))
                 if a.finish_profile == "restrained" else 0.002 * float(plan["dims_m"][0])),
             "finish_profile": a.finish_profile, "drop_floaters": bool(a.drop_floaters), "origin": a.origin,
-            "draft": bool(a.draft), "tubes": a.tubes}
+            "draft": bool(a.draft), "tubes": a.tubes, "surface_detail": not a.no_surface_detail, "size_longest": nature}
     _blender(job, "assemble.py", args, "assemble_draft" if a.draft else "assemble")
     if a.draft:
         d = os.path.join(delivery, "draft")
@@ -1530,6 +1550,8 @@ def main(argv=None):
                    help="restrained (default since 2026-10-02): bevel 0.05%% of the length up to 1.5 mm, weaker relief, "
                         "matte floors by finish; standard: the 0.2%% bevel and full relief of before")
     s.add_argument("--drop-floaters", action="store_true", help="delete the far, small loose islands of a seed (they are reported anyway)")
+    s.add_argument("--no-surface-detail", action="store_true", help="no procedural cast-surface wear and grain on a seed (always "
+                   "off for a nature brief)")
     s.set_defaults(fn=cmd_assemble)
     s = sub.add_parser("sheet"); s.add_argument("glb"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
     s = sub.add_parser("models"); s.add_argument("action", nargs="?", default="list", choices=("list", "add", "remove"))

@@ -30,7 +30,11 @@ read it before the first command; it covers the sandbox, output truncation and t
 - `mastersmith/bench.json` the owner's standard test set ("the test we have been running": the bullpup, M4A1, tank,
   Apache, shotgun and seeded Havoc), each from its best-tuned job, with its baseline score (`ms bench`).
 - `mastersmith/skills/<category>.md` what a good asset of that category is (weapon, vehicle, aircraft, helicopter,
-  prop, character, environment). Read the one for the job's category before planning.
+  prop, character, environment, nature). Read the one for the job's category before planning. `nature` (rocks, coral,
+  plants, shells, fish; 2026-10-03) is finished by `assemble` without sharpening, bevels, smart materials, surface grain
+  or picture projection, and sized as one by its longest side. Every seed's UV-seam copies are welded before decimating
+  (a Tripo seed is split along every seam; unwelded, the 8k coral had ~5,600 open edges), and baked normals that face
+  into the surface (a thin leaf's back face) are turned out (`report.json` `normal_inward_share`).
 - `mastersmith/blender/` the Blender scripts: `register_part.py` (turn the seed to match its picture),
   `assemble.py` (fit, tint, zones, glass, sharpen, bore alignment, bake, LODs, previews), `six_views.py`.
 - `.env` holds FAL_KEY (git-ignored). NEVER print, echo, cat or grep the keys; never put them in a message.

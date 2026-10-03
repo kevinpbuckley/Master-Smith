@@ -107,10 +107,29 @@ def fit(o, p):
     return {"scale": [round(v, 4) for v in scale], "proportion": [round(v / s, 3) for v in scale]}
 
 
+def weld_seams(o):
+    """Merge the copies of each seam vertex (positions identical; UVs and normals are per corner and stay). A Tripo seed
+    is split along every UV seam - 10-19k open edges on the Training Pool pilots - and the collapse decimator kept each
+    island's rim on its own: the 8k LOD0 of a coral or a kelp came out with ~5,600 open edges, torn leaves and black
+    bake holes (2026-10-03). Welded first it decimates as one closed surface. -> vertices merged"""
+    lo, hi = blib.dims(o)
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    n = len(bm.verts)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=max((hi - lo).length * 1e-6, 1e-9))
+    merged = n - len(bm.verts)
+    if merged:
+        bm.to_mesh(o.data)
+        o.data.update()
+    bm.free()
+    return merged
+
+
 def decimate_to(o, target):
     have = blib.tri_count(o)
     if have <= target:
         return have
+    weld_seams(o)
     m = o.modifiers.new("dec", "DECIMATE")
     m.ratio = max(0.02, target / float(have))
     m.use_collapse_triangulate = True
@@ -2125,6 +2144,21 @@ def frame_material():
 
 
 IS_WEAPON = (args.get("spec") or {}).get("category") == "weapon"
+SIZE_LONGEST = bool(args.get("size_longest"))
+
+if SIZE_LONGEST and float((args.get("spec") or {}).get("size_m") or 0) > 0:
+    # a natural object's brief size is its longest side, whichever axis that is (spec.size_m): the body keeps the
+    # seed's depth, and a coral seeded deeper than its side picture came out 1.09 m for a 0.9 m brief (2026-10-03).
+    # One uniform scale about the asset centre, so its proportions are the seed's.
+    every = [o for o, _r in parts + glass_parts + liner_parts + frame_parts]
+    bounds = [blib.dims(o) for o in every]
+    extent = max(max(b[1][i] for b in bounds) - min(b[0][i] for b in bounds) for i in range(3))
+    factor = float(args["spec"]["size_m"]) / max(extent, 1e-9)
+    for o in every:
+        o.data.transform(o.matrix_world.inverted() @ Matrix.Scale(factor, 4) @ o.matrix_world)
+        o.data.update()
+    report["size_longest"] = {"scale": round(factor, 4), "longest_m": round(float(args["spec"]["size_m"]), 4)}
+    log("natural object: scaled x%.4f so its longest side is the brief's %.3f m" % (factor, float(args["spec"]["size_m"])))
 
 if args.get("draft"):
     # `assemble --draft` (2026-10-02): the Havoc's glass and cockpit took ~18 full assembles of 5-9 min each for 1%
@@ -2441,6 +2475,13 @@ covered = pixels(ao)[:, :, 0] > 0.001            # texels a part landed on; the 
 report["roughness_mean"] = round(float(px[:, :, 1][covered].mean()), 3) if covered.any() else None
 report["metallic_mean"] = round(float(px[:, :, 2][covered].mean()), 3) if covered.any() else None
 report["atlas_coverage"] = round(float(covered.mean()), 3)
+from normalfix import flip_inward  # noqa: E402 - pure numpy, tested
+_npx = pixels(normal).copy()
+report["normal_inward_share"] = round(flip_inward(_npx, covered), 4)
+normal.pixels.foreach_set(_npx.ravel())
+if report["normal_inward_share"]:
+    log("normal map: %.2f%% of the texels faced into the surface (a thin sheet's back face) and were turned out"
+        % (report["normal_inward_share"] * 100))
 
 
 def dilate(img, covered, steps=None):
@@ -2737,8 +2778,9 @@ if report["lods"] and report["lods"][0]["triangles"] > int(args["tri_budget"]) *
 roles = {m["role"] for m in report["maps"]}
 warn += ["no %s map" % r for r in ("BC", "N", "ORM") if r not in roles]
 want = float((args.get("spec") or {}).get("size_m") or 0)
-if want and report.get("dimensions_m") and abs(report["dimensions_m"][0] - want) > 0.1 * want:
-    warn.append("length %.3f m is more than 10%% off the brief's %.3f m" % (report["dimensions_m"][0], want))
+got = max(report["dimensions_m"]) if SIZE_LONGEST and report.get("dimensions_m") else (report.get("dimensions_m") or [0])[0]
+if want and report.get("dimensions_m") and abs(got - want) > 0.1 * want:
+    warn.append("%s %.3f m is more than 10%% off the brief's %.3f m" % ("longest side" if SIZE_LONGEST else "length", got, want))
 if ((args.get("spec") or {}).get("glass") or any((z.get("material") or {}).get("glass") for q in args["parts"] for z in q.get("zones") or [])) \
         and not report.get("glass"):
     warn.append("glass was asked for but none was made")

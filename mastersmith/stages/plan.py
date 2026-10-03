@@ -128,6 +128,13 @@ def object_dims(length_m, side_px, front_px):
     return float(length_m), float(width), float(height)
 
 
+def longest_side(dims, size_m):
+    """(L, W, H) scaled as one so the longest of the three is the brief's size: a nature brief's size is its longest
+    side (a 4.4 m kelp stands taller than it is long, a coral is wider than deep), not its length."""
+    k = float(size_m) / max(max(dims), 1e-9)
+    return tuple(float(v) * k for v in dims)
+
+
 def pct(v):
     try:
         return min(100.0, max(0.0, float(v)))
