@@ -1,0 +1,78 @@
+{
+ "what": "a built MetaHuman's baked material instances (MH_Navigator, UE 5.8.3, 2026-10-04): texture parameter -> texture asset; mh-bake's maps replace the BC and N ones",
+ "materials": {
+  "MI_Body_Baked": {
+   "parent": "/MetaHumanCharacter/Lookdev_UHM/Skin/Materials/Baked/MI_Head_Baked_LOD0.MI_Head_Baked_LOD0",
+   "textures": {
+    "Micro Skin Details Mask": "T_Skin_Microtiling_M.T_Skin_Microtiling_M",
+    "Basecolor Baked": "T_Body_BC.T_Body_BC",
+    "Scatter Baked": "T_Body_Scatter.T_Body_Scatter",
+    "Normal Baked": "T_Body_N.T_Body_N",
+    "SRMF Baked": "T_Body_SRMF.T_Body_SRMF"
+   },
+   "scalars": {
+    "Micro Skin Tiling": 70.0,
+    "Micro MaskA Strength": 1.0,
+    "Micro MaskD Strength": 0.0,
+    "Micro MaskB Strength": 1.0
+   }
+  },
+  "MI_Face_Skin_Baked_LOD3": {
+   "parent": "/MetaHumanCharacter/Lookdev_UHM/Skin/Materials/Baked/MI_Head_Baked_LOD2.MI_Head_Baked_LOD2",
+   "textures": {
+    "Normal Baked": "T_Head_LOD3_N.T_Head_LOD3_N",
+    "SRMF Baked": "T_Head_LOD3_SRMF.T_Head_LOD3_SRMF",
+    "Basecolor Baked": "T_Head_LOD3_BC.T_Head_LOD3_BC",
+    "Scatter Baked": "T_Head_LOD3_Scatter.T_Head_LOD3_Scatter",
+    "Normal LOD Baked": "T_BakedNormal_LOD3.T_BakedNormal_LOD3"
+   },
+   "scalars": {}
+  },
+  "MI_Face_Skin_Baked_LOD5to7": {
+   "parent": "/Game/Proteus/Characters/MetaHumans/Navigator/Navigator/Face/Materials/MI_Face_Skin_Baked_LOD3.MI_Face_Skin_Baked_LOD3",
+   "textures": {
+    "Normal Baked": "T_Head_LOD5to7_N.T_Head_LOD5to7_N",
+    "SRMF Baked": "T_Head_LOD5to7_SRMF.T_Head_LOD5to7_SRMF",
+    "Basecolor Baked": "T_Head_LOD5to7_BC.T_Head_LOD5to7_BC",
+    "Scatter Baked": "T_Head_LOD5to7_Scatter.T_Head_LOD5to7_Scatter",
+    "Normal LOD Baked": "T_BakedNormal_LOD5.T_BakedNormal_LOD5"
+   },
+   "scalars": {}
+  },
+  "MI_EyeL_Baked": {
+   "parent": "/MetaHumanCharacter/Lookdev_UHM/Eye/Materials/MI_eye_eyeball_unified_MH_preset_left.MI_eye_eyeball_unified_MH_preset_left",
+   "textures": {
+    "Iris Normal Baked": "T_EyeIrisL_N.T_EyeIrisL_N",
+    "Iris Basecolor Baked": "T_EyeIrisL_BC.T_EyeIrisL_BC",
+    "Sclera Normal Baked": "T_EyeScleraL_N.T_EyeScleraL_N",
+    "Sclera Basecolor Baked": "T_EyeScleraL_BC.T_EyeScleraL_BC"
+   },
+   "scalars": {
+    "Pupil Feather Strength": 0.68,
+    "Iris Rotation": 0.0801,
+    "Sclera Rotation": 0.1599,
+    "Sclera Irritation Area Size": 0.205,
+    "Sclera Irritation Veins Opacity": 0.4,
+    "Iris Primary Color Hue": 0.35,
+    "Iris Primary Color Value": 0.6,
+    "Iris Secondary Color Hue": 0.35,
+    "Iris Secondary Color Value": 0.6,
+    "Cloudy Eye Intensity": 2.0,
+    "Cloudy Eye Variation": 0.6464,
+    "Cloudy Eye Size": 0.4088,
+    "Cloudy Eye Softness": 0.3272,
+    "Melanosis Ring Opacity Variation Rotation": 0.1088
+   }
+  },
+  "MI_Teeth_Baked": {
+   "parent": "/MetaHumanCharacter/Lookdev_UHM/Teeth/Materials/MI_teeth_unified_MH_preset.MI_teeth_unified_MH_preset",
+   "textures": {
+    "Basecolor Baked": "T_Teeth_BC.T_Teeth_BC",
+    "Scatter Baked": "T_Teeth_Scatter.T_Teeth_Scatter",
+    "SRM Baked": "T_Teeth_SRM.T_Teeth_SRM",
+    "Normal Baked": "T_Teeth_N.T_Teeth_N"
+   },
+   "scalars": {}
+  }
+ }
+}

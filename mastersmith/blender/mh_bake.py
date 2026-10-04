@@ -130,7 +130,8 @@ mat_index = np.empty(len(me.polygons), np.int32)
 me.polygons.foreach_get("material_index", mat_index)
 slot_names = [s.material.name.lower() if s.material else "" for s in target.material_slots]
 report["posed_material_slots"] = slot_names
-# on tile 1001 only the skin: teeth, eyes, lashes, shells keep MetaHuman's own maps
+# on tile 1001 only the skin: teeth, eyes, lashes, shells keep MetaHuman's own maps. A mesh generated from the posed
+# DNA carries ONE slot ("worldgridmaterial", 2026-10-04): then the tiles alone tell head from body, which is fine
 skin_slots = {i for i, n in enumerate(slot_names) if not any(k in n for k in ("teeth", "eye", "lash", "saliva", "cartilage", "shell", "edge", "hide"))}
 is_body = tile_u >= 1
 is_head = (tile_u < 1) & np.isin(mat_index, list(skin_slots))

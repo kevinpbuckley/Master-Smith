@@ -329,8 +329,12 @@ on the MetaHuman topology and `ms mh-attach` rigs hair, horns and armour to its 
   custom mesh > Combined > Auto Solve (`ConformToTargetMeshes`, fingers checked, Manual Solve key points when fused),
   **Save Pose** = the posed DNA (`ExportPosedDNA`; the baking target, BEFORE the A-pose commit), Create Full Rig and
   Download Texture Sources (cloud, Epic login), Build -> `/Game/MetaHumans/<Name>/BP_<Name>`; export the posed DNA's
-  skeletal mesh and the built body mesh as FBX into `delivery/metahuman/in/`. The MCP's generic asset export crashed
-  the editor's Python on a skeletal mesh (2026-10-04): export by hand until a guarded wrapper exists.
+  skeletal mesh and the built body mesh as FBX into `delivery/metahuman/in/`. Through the MCP (VibeMetaHumans,
+  extended 2026-10-04 and proved on the template self-test): `import_from_custom_mesh`, `save_posed_dna`,
+  `generate_skeletal_mesh_from_dna`, `export_fbx` (guarded: an asset whose sections point past its material slots is
+  refused instead of asserting), `commit_a_pose`, then `import_texture` / `set_material_texture` /
+  `attach_skeletal_mesh_to_blueprint` for the way back. Never call Unreal's raw FBX exporter from Python on a MetaHuman
+  asset: `archetype_SkelMesh` took the interpreter down twice.
 - **Textures**: a built MetaHuman reads `Body/Baked/T_Body_BC` (8k) `_N` `_SRMF` and `Face/Baked/T_Head_LOD3_BC` `_N`
   `_SRMF` (LOD0-4; `T_Head_LOD5to7_*` beyond), eyes and teeth their own. `mh-bake`'s maps replace BC and N; its normal
   maps are OpenGL (+Y): Flip Green Channel on import. Body UVs live on UDIM 1002: a Blender bake or an AI retexture

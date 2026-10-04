@@ -47,8 +47,7 @@ installed, an Epic account signed in (the auto-rig and the texture sources are c
    the static mesh; **Auto Solve** (2 minutes on a 4070). Watch the fingers and the armpits: a fused hand is corrected
    in **Manual Solve** by moving or adding key points (ctrl + mouse buttons, hotkeys shown in the panel), then **Solve
    Body**. The MCP: `MetaHumanCharacterService.create_character`; the solve is the subsystem's
-   `ConformToTargetMeshes(character, TargetMeshKey(combined_mesh), ConformTargetParams(b_auto_solve=True))` - no service
-   wrapper yet (ask the owner to add `import_from_custom_mesh`; see the end).
+   `import_from_custom_mesh` (the face tracked on a render, auto solve), see the end.
 3. **Manual Solve > Save Pose**: the POSED DNA (the solved MetaHuman still in the seed's pose) into the character's
    folder. This is the baking target; the next tab re-poses the character into the MetaHuman A-pose
    (`CommitPosedStateAsAPose`), after which a bake no longer lines up. MCP: `ExportPosedDNA`.
@@ -105,17 +104,32 @@ defects by view, and the delivery message: what is in `delivery/metahuman/` (the
 accessories), what was spent (pictures and seeds only; the MetaHuman steps are free with an Epic account), and the Unreal
 steps that remain if the editor was not connected.
 
-## When the MCP is connected: what to use and what to ask the owner for
-Use: `MetaHumanSetupService.get_status / list_assets`, `MetaHumanCharacterService.create_character / get_summary /
-get_body_constraints / set_body_constraints / add_wardrobe_item / request_auto_rig / request_texture_sources / build /
-spawn_in_level / export_dna`, `MetaHumanObjectService.list_functions("MetaHumanCharacterEditorSubsystem") /
-describe_struct`, and `execute_python_code` on the subsystem itself (`unreal.get_editor_subsystem(
-unreal.MetaHumanCharacterEditorSubsystem)`: `conform_to_target_meshes`, `commit_posed_state_as_a_pose`,
-`get_mesh_data_for_conforming`, `get_preset_body_key_points`, `fit_state_to_target_vertices`), and
+## When the MCP is connected: the whole editor side in eight calls
+`MetaHumanCharacterService` (VibeMetaHumans, extended 2026-10-04 for this pipeline; its `metahuman-creator` skill
+has the full example). `execute_python_code`, `svc = unreal.MetaHumanCharacterService`:
+1. Import the conform GLB: an `AssetImportTask` on `delivery/metahuman/<Name>_conform.glb` into
+   `/Game/<Project>/Characters/<Name>/` (Interchange puts the mesh under `.../<Name>_conform/StaticMeshes/`). It
+   lands facing +Y, feet on z=0, centimetres: what the solver wants (checked 2026-10-04).
+2. `svc.create_character(folder, "MH_<Name>", "")`, then `svc.import_from_custom_mesh(character, static_mesh, "",
+   True, True, 1024)`: the face is tracked on a front-on render, the body and head solved (1-3 minutes, blocking).
+   Read `warnings` (feet off the floor, metres, facing) and `face_tracking`; a failed tracking leaves the archetype
+   face - fix the mesh (bald, facing +Y) and run again.
+3. `svc.save_posed_dna(character, static_mesh, "", folder, "<job>/delivery/metahuman/in", "<Name>_Posed")` BEFORE
+   anything else: the baking target. Then `svc.generate_skeletal_mesh_from_dna(folder + "/<Name>_Posed", folder,
+   "SKM_<Name>_Posed", "body")` and `svc.export_fbx(that, "<job>/delivery/metahuman/in/<Name>_Posed.fbx")` for
+   `ms mh-bake`.
+4. `svc.commit_a_pose(character, static_mesh, "")`, eyes and teeth (`set_eye_color`, `set_settings "head"`),
+   `request_auto_rig(character, "JointsOnly", True)`, `request_texture_sources(character, True)` (both cloud, Epic
+   login), `build(character, "Cinematic", "Cinematic", "/Game/MetaHumans", "")` -> `BP_<Name>`.
+5. `svc.export_fbx("/Game/MetaHumans/<Name>/Body/SKM_MH_<Name>_BodyMesh", "<job>/delivery/metahuman/in/SKM_MH_<Name>_BodyMesh.fbx")`
+   for `ms mh-attach`.
+6. The baked maps back: `svc.import_texture(png, "/Game/MetaHumans/<Name>/Body/Baked", "T_<Name>_Body_N", "normal",
+   True)` (the green flip for Blender's OpenGL normals; "color" for BC) and `svc.set_material_texture(MI_Body_Baked,
+   "Normal Baked", texture)`; the head onto `MI_Face_Skin_Baked_LOD3` ("Basecolor Baked", "Normal Baked").
+7. The accessories: import `SK_<Name>_<Part>.fbx` as a skeletal mesh on the MetaHuman body skeleton
+   (`metahuman_base_skel`), then `svc.attach_skeletal_mesh_to_blueprint(BP, "<Part>", SK, "Body", True)`.
+8. `svc.spawn_in_level(character, location, rotation, False)` or place `BP_<Name>`, and look.
+Still by hand: an Epic login for the cloud steps, and saving (`EditorAssetLibrary.save_asset`, or the MCP's auto-save).
+Lower-level when needed: `MetaHumanObjectService.list_functions("MetaHumanCharacterEditorSubsystem")`, the subsystem
+in Python (`conform_to_target_meshes`, `get_mesh_data_for_conforming`, `get_preset_body_key_points`), and
 `MetaHumanCharacterExportBlueprintLibrary.export_posed_dna / export_geometry / export_dcc`.
-Missing wrappers worth adding to the MCP (the owner offered, 2026-10-04): `import_from_custom_mesh(character,
-static_mesh, parts=combined|body+head, auto_solve)` around ConformToTargetMeshes with the face landmark tracking the UI
-does; `save_posed_dna(character, folder)` (ExportPosedDNA); `commit_apose(character)`; `generate_skeletal_mesh_from_dna
-(dna_asset, folder)`; a guarded `export_fbx(asset, path)` (the generic exporter crashed Python on a skeletal mesh);
-`import_texture(png, folder, normal=True)` and `set_material_texture(mi, parameter, texture)`;
-`attach_skeletal_mesh_to_blueprint(bp, component, mesh)`.
