@@ -24,3 +24,24 @@ coral and sponge 2-8k, shells 1-2k, a fish 4-8k, a large rock 8-16k. A Tripo see
 seam; `assemble` welds the seams before it decimates (unwelded, the 8k coral came out with 5,600 open edges, 2026-10-03).
 Thin leaves and fins are the hard part: Read `preview_views.png` for holes, black patches on blades and fins that have
 gone missing before calling it good. Roughness ~0.7 (a fish's wet skin 0.5); nothing metallic.
+
+**Wind masks** (2026-10-03): every nature asset carries them in its vertex colour (FBX only - a glTF viewer would
+multiply them into the base colour): R the distance ALONG the surface from the holdfast (0 root, 1 farthest tip),
+G blade flutter on the thin parts, B a random phase per blade. The engine's plant material bends by R (a slow wave
+running up the stalk) and flaps each blade by G along its own normal at phase B. Height alone made a swept kelp's level
+blades move as one rigid block, and UE's SimpleGrassWind moves a vertex a few centimetres - visible on a grass card,
+nothing on a 2-8 m kelp (owner: "a bit too rigid", then "not moving"). `report.json` `wind_masks` gives the blade count;
+check a plant by rendering the attribute (`WindMask`) as colour: black holdfast, grading along the stipe, each blade
+its own hue. True Pivot Painter 2 needs the blades cut apart - only worth it for a hero plant.
+
+**Registration**: a lattice (a sea fan, kelp, branching coral) is compared by its envelope, so it registers upright
+(the sea fan was rolled onto its side at IoU 0.20). `ms seed` tries the four upright turns only; a seed that comes back
+turned in its own frame (the workboat sat 35 degrees askew) needs `ms register <job> Body` - the default `--from
+quarter` sweeps the yaw along the long axis. Read `preview_views.png` from the top for it.
+
+**In a level**: read as game dressing, not specimens - corals and sponges at 1.5-3x real size, shells 1.3-2x, kelp at
+its height; plants and shells never collide, rocks keep their convex hull, an arch or a hull you can pass through
+takes complex-as-simple collision. Set every object down on the ground itself (a trace against the landscape only),
+sunk by a share of its height (rocks ~18%, wrecks ~15%, plants 3-5%) and tilted to the slope by a share (rocks follow
+it, plants stay nearly upright); a model fitted into another model's old placement floated where that one had stood on
+something else. Meadows are clumps (three tufts within half a metre, clumps ~1.6 m apart), not an even sprinkle.
