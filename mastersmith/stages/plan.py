@@ -353,7 +353,7 @@ def clean_material(mat):
 # and was patched six times on 2026-09-29 for keys the agent had already written (pick, keep, lettering, line, shell).
 TOP_KEYS = {"parts", "notes", "overall_width_m"}
 PART_KEYS = {"name", "what", "method", "side_box", "front_span", "material", "zones", "reference_detail", "skin",
-             "edge_break", "interior", "centreline", "lettering", "carve"}
+             "edge_break", "interior", "centreline", "lettering", "carve", "projection"}
 ZONE_KEYS = {"name", "side_box", "front_span", "material", "pick", "keep", "strength", "fill", "line", "shell", "flat",
              "glow", "vertices", "triangles", "tolerance", "bounds", "segment"}
 MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha"}
@@ -463,6 +463,10 @@ def validate_plan(raw, dims, max_parts=None):
         for key in ("skin", "edge_break", "interior", "centreline", "carve"):
             if key in p:
                 part[key] = bool(p[key])
+        # 2026-10-04: "projection": false keeps the approved pictures off a part (the Kestrel's exact sdf nozzle took
+        # the side view's blurred brass ring as a yellow smear; it is bare steel by plan)
+        if p.get("projection") is False:
+            part["no_projection"] = True
         # 2026-09-29: "lettering", side boxes (percent of the side grid) around painted words: the picture prints
         # there at full strength over the mesher's own copy, and reads the right way round on the far side
         boxes = []

@@ -959,7 +959,7 @@ def cmd_assemble(a):
         parts.append({"name": p["name"], "kind": "vendor", "box_min": p["box_min"], "box_max": p["box_max"], "material": p["material"],
                       "fitted": os.path.exists(os.path.join(d, "fit_report.json")), "interior": bool(p.get("interior")), "body": is_largest,
                       "centreline": bool(p.get("centreline")), "zones": p.get("zones") or [], "blend": blend, "yaw": 0,
-                      "carve": bool(p.get("carve")) and not is_largest,
+                      "carve": bool(p.get("carve")) and not is_largest, "no_projection": bool(p.get("no_projection")),
                       "keep_depth": bool(fit.get("keep_depth")) and is_largest, "fill_box": not is_largest,
                       "lettering": p.get("lettering") or []})
     if not parts:

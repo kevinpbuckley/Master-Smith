@@ -2053,8 +2053,9 @@ if args.get("projection"):
     front_line = lo_all.x + 0.55 * (hi_all.x - lo_all.x)     # the front picture: parts that sit wholly in the front 45%
     for o, r in parts:
         spec = next((p for p in args["parts"] if p["name"] == r["name"]), {})
-        if (spec.get("material") or {}).get("glass") or spec.get("interior"):
-            continue                 # a cockpit insert is not in the side picture's paint (it is behind the glass)
+        if (spec.get("material") or {}).get("glass") or spec.get("interior") or spec.get("no_projection"):
+            continue                 # a cockpit insert is not in the side picture's paint (it is behind the glass);
+                                     # "projection": false in the plan keeps the pictures off a part (2026-10-04)
         pm_ = spec.get("material") or {}
         mode = proj.get("mode", "full")
         spec["letters_only"] = mode == "letters" or (mode == "auto" and bool(pm_.get("keep_texture")) and not pm_.get("color_lock"))
