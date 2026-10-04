@@ -31,6 +31,11 @@ deterministic thing and writes into a job folder under out/<Name>/:
     python -m mastersmith.ms results [out/A out/B] [--no-open]     (every delivered job on one page, links to each preview)
     python -m mastersmith.ms package out/BullpupCarbine
     python -m mastersmith.ms status out/BullpupCarbine
+    python -m mastersmith.ms mh-conform out/Dryad [--strip hair,lashes] [--extra parts/Head/seed.glb]   (a character seed as the
+                                             combined mesh Unreal 5.8's MetaHuman conform takes, checked against the A-pose)
+    python -m mastersmith.ms mh-bake out/Dryad --posed delivery/metahuman/in/Dryad_Posed.fbx   (the seed's colour and normal
+                                             baked onto the posed MetaHuman mesh Unreal generated from the conformed DNA)
+    python -m mastersmith.ms mh-attach out/Dryad Hair --built delivery/metahuman/in/SKM_Dryad_Body.fbx --bone head
 """
 import argparse
 import glob
@@ -1488,6 +1493,112 @@ def cmd_rig(a):
           "Muzzle bones are the sockets." % job.spec.name)
 
 
+def _mh_dir(job):
+    d = job.path("delivery", "metahuman")
+    os.makedirs(os.path.join(d, "in"), exist_ok=True)
+    return d
+
+
+def cmd_mh_conform(a):
+    """A character seed as the ONE combined mesh Unreal 5.8's "custom mesh to MetaHuman" conform takes (the owner's
+    video, 2026-10-04): Z up, facing -Y, feet on the floor, the brief's height, transforms applied, hair / lashes /
+    accessories stripped by name; the A-pose measured off its silhouette and judged against the MetaHuman template
+    (mastersmith/metahuman), front and side overlays on the template -> delivery/metahuman/<Name>_conform.glb"""
+    from .metahuman import template as mh
+    job = Job(a.job)
+    if job.spec.category != "character":
+        print("note: %s is a %s; the conform is for a humanoid character" % (job.spec.name, job.spec.category))
+    src = a.source
+    if not src:
+        for cand in (job.path("parts", a.part, "registered.blend"), job.path("parts", a.part, "seed.glb")):
+            if os.path.exists(cand):
+                src = cand
+                break
+    if not src or not os.path.exists(src):
+        sys.exit("no seed for %s (ms seed first, or --source <mesh>)" % a.part)
+    out = _mh_dir(job)
+    height = a.height if a.height is not None else job.spec.size_m
+    args = {"source": src, "extra": [p for p in (a.extra or "").split(",") if p], "name": job.spec.name, "height_m": height,
+            "out_dir": out, "template_glb": os.path.join(mh.TEMPLATES, "MH_Template.glb"),
+            "template_json": os.path.join(mh.TEMPLATES, "template.json"),
+            "strip": [s for s in (a.strip or "").split(",") if s]}
+    _blender(job, "mh_conform.py", args, "mh_conform", timeout=1200)
+    rep = json.load(open(os.path.join(out, "conform_report.json"), encoding="utf-8"))
+    verdict = mh.check_pose(rep)
+    rep["pose_check"] = verdict
+    json.dump(rep, open(os.path.join(out, "conform_report.json"), "w", encoding="utf-8"), indent=1)
+    print("conform mesh -> %s (%.2f m, %d tris)" % (os.path.join(out, rep["glb"]), rep["height_m"], rep["triangles"]))
+    print("  A-pose: arms %s / %s deg (template %.0f), armpit gap %.0f mm, knee gap %.0f mm, finger tips %s, head %s%s" % (
+        rep.get("arm_angle_deg_l"), rep.get("arm_angle_deg_r"), mh.load()["apose"]["arm_angle_deg"], rep.get("armpit_gap_m", 0) * 1000,
+        rep.get("leg_gap_m", 0) * 1000, rep.get("finger_tips"), rep.get("head_present"), ", hair suspected" if rep.get("hair_suspected") else ""))
+    for p in verdict["problems"]:
+        print("  PROBLEM " + p)
+    for n in verdict["notes"]:
+        print("  note " + n)
+    print("  overlays: " + ", ".join(os.path.join(out, r) for r in rep["renders"].values()) + "  (white: the seed; red: the template where the seed does not cover it)")
+    print("Read both overlays. Then in Unreal 5.8 (the metahuman skill): import the GLB, MetaHuman Character > Import > from custom "
+          "mesh > Combined, Auto Solve, Manual Solve > Save Pose (the posed DNA), then the rig and the texture sources.")
+    ledger.record(job.dir, "mh-conform", glb=rep["glb"], height_m=rep["height_m"], ok=verdict["ok"], problems=verdict["problems"])
+
+
+def cmd_mh_bake(a):
+    """The seed's colour and surface detail baked onto the POSED MetaHuman mesh Unreal generated from the conformed DNA
+    (Mesh to MetaHuman > Save Pose > Generate Skeletal Mesh > Asset Actions > Export), head on UDIM 1001 and body on
+    1002 moved onto 0-1 -> delivery/metahuman/T_<Name>_<Head|Body>_<BC|N>.png and a preview."""
+    job = Job(a.job)
+    out = _mh_dir(job)
+    src = a.source or os.path.join(out, "%s_conform.glb" % job.spec.name)
+    if not os.path.exists(src):
+        sys.exit("no conform mesh at %s: ms mh-conform first, or --source <the textured seed>" % src)
+    posed = a.posed if os.path.isabs(a.posed) else job.path(a.posed)
+    if not os.path.exists(posed):
+        sys.exit("no posed FBX at %s: export the skeletal mesh Unreal generated from the posed DNA into delivery/metahuman/in/" % posed)
+    args = {"source": src, "posed_fbx": posed, "name": job.spec.name, "out_dir": out, "resolution": a.resolution,
+            "cage_m": a.cage / 1000.0, "maps": ["color", "normal"] if not a.color_only else ["color"]}
+    _blender(job, "mh_bake.py", args, "mh_bake", timeout=3600)
+    rep = json.load(open(os.path.join(out, "bake_report.json"), encoding="utf-8"))
+    al = rep["alignment"]
+    print("baked -> %s" % out)
+    for name, m in rep["maps"].items():
+        print("  %s: %dpx, %.0f%% of the texels written (%s)" % (name, m["resolution"], m["coverage"] * 100, m["convention"]))
+    print("  alignment: seed %.3f m, posed mesh %.3f m, centres off by %s m" % (al["source_height_m"], al["posed_height_m"], al["centre_offset_m"]))
+    print("  faces: %s" % rep["face_split"])
+    print("  previews: " + ", ".join(os.path.join(out, r) for r in rep["renders"].values()))
+    print("  " + rep["unreal"])
+    ledger.record(job.dir, "mh-bake", maps=sorted(rep["maps"]), alignment=al)
+
+
+def cmd_mh_attach(a):
+    """An accessory (hair, horns, ears, armour) weighted onto the built MetaHuman's skeleton and exported as a skeletal
+    mesh in centimetres, no leaf bones, read back -> delivery/metahuman/SK_<Name>_<Part>.fbx. Drop it onto the
+    MetaHuman Blueprint's Body component in Unreal."""
+    job = Job(a.job)
+    out = _mh_dir(job)
+    built = a.built if os.path.isabs(a.built) else job.path(a.built)
+    if not os.path.exists(built):
+        sys.exit("no built MetaHuman FBX at %s: export the built body (or face) skeletal mesh into delivery/metahuman/in/" % built)
+    acc = a.source
+    if not acc:
+        for cand in (job.path("parts", a.part, "registered.blend"), job.path("parts", a.part, "seed.glb")):
+            if os.path.exists(cand):
+                acc = cand
+                break
+    if not acc or not os.path.exists(acc):
+        sys.exit("no mesh for %s (a part with a seed, or --source <mesh in the conform's frame>)" % a.part)
+    args = {"built_fbx": built, "accessory": acc, "name": job.spec.name, "part": a.part, "out_dir": out, "bone": a.bone,
+            "offset_m": [float(v) for v in a.offset.split(",")] if a.offset else [0, 0, 0], "decimate_to": a.decimate_to}
+    _blender(job, "mh_attach.py", args, "mh_attach_%s" % a.part, timeout=1200)
+    rep = json.load(open(os.path.join(out, "attach_report.json"), encoding="utf-8"))
+    print("attached %s -> %s (%d tris, weights %s)" % (a.part, os.path.join(out, rep["fbx"]), rep["triangles"], rep["weights"]))
+    print("  read back: %s" % rep["fbx_check"])
+    print("  renders: " + ", ".join(os.path.join(out, r) for r in rep["renders"].values()))
+    if not rep["fbx_check"].get("ok"):
+        sys.exit("the FBX does not read back at size with a unit root: do not hand it to the engine")
+    print("In Unreal: import %s as a skeletal mesh ON the MetaHuman's body skeleton (pick it in the import dialog), then drag it "
+          "onto the MetaHuman Blueprint's Body component." % rep["fbx"])
+    ledger.record(job.dir, "mh-attach", part=a.part, fbx=rep["fbx"], weights=rep["weights"])
+
+
 def cmd_open(a):
     """A job's Blender file opened in Blender's own window, the user's preferences and add-ons on (the BlenderMCP
     add-on included), for work by hand or through a live Blender MCP session (2026-09-29: the session that asked for
@@ -1674,6 +1785,27 @@ def main(argv=None):
     s.add_argument("--idle", choices=("coil",), help="a coil's slow pulse at idle")
     s.add_argument("--no-glow", action="store_true", help="leave the emissive map out (a muzzle that must not glow)")
     s.set_defaults(fn=cmd_rig)
+    s = sub.add_parser("mh-conform", help="a character seed as the combined mesh Unreal 5.8's MetaHuman conform takes, A-pose checked")
+    s.add_argument("job"); s.add_argument("--part", default="Body", help="the part whose seed is the body (default Body)")
+    s.add_argument("--source", help="a mesh file instead of the part's seed (.glb/.fbx/.obj/.blend)")
+    s.add_argument("--extra", help="more meshes to join, comma-separated (a separate high-poly head)")
+    s.add_argument("--strip", help="object-name substrings to drop before joining: hair,lash,weapon")
+    s.add_argument("--height", type=float, help="the character's height in metres (default: the brief's size)")
+    s.set_defaults(fn=cmd_mh_conform)
+    s = sub.add_parser("mh-bake", help="the seed's colour and normal baked onto the posed MetaHuman mesh exported from Unreal")
+    s.add_argument("job"); s.add_argument("--posed", required=True, help="the skeletal mesh FBX Unreal generated from the POSED DNA")
+    s.add_argument("--source", help="the textured seed (default delivery/metahuman/<Name>_conform.glb)")
+    s.add_argument("--resolution", type=int, default=4096); s.add_argument("--cage", type=float, default=12.0, help="ray cage in mm")
+    s.add_argument("--color-only", action="store_true")
+    s.set_defaults(fn=cmd_mh_bake)
+    s = sub.add_parser("mh-attach", help="an accessory weighted onto the built MetaHuman's skeleton, exported as a skeletal mesh")
+    s.add_argument("job"); s.add_argument("part", help="the part (its seed is the accessory) and the FBX's name")
+    s.add_argument("--built", required=True, help="the built MetaHuman's body or face skeletal mesh FBX exported from Unreal")
+    s.add_argument("--source", help="a mesh file instead of the part's seed, in the conform's frame")
+    s.add_argument("--bone", default="head", help="head | <bone> | transfer (the MetaHuman mesh's own weights)")
+    s.add_argument("--offset", help="x,y,z metres to move the accessory first")
+    s.add_argument("--decimate-to", type=int, default=0, help="triangles to decimate the accessory to (0 = keep)")
+    s.set_defaults(fn=cmd_mh_attach)
     s = sub.add_parser("picture"); s.add_argument("job"); s.add_argument("--out", required=True); s.add_argument("--prompt", required=True)
     s.add_argument("--ref", action="append"); s.add_argument("--model", default="nano"); s.add_argument("--aspect", default="4:3")
     s.add_argument("--redraw", action="store_true", help="draw over an existing picture (ask the owner first)"); s.set_defaults(fn=cmd_picture)

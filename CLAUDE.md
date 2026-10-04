@@ -2,7 +2,9 @@
 
 # Claude Code specifics
 
-- The build recipe is the `forge` skill: `/forge <what to make>` (`.claude/skills/forge/SKILL.md`).
+- The build recipe is the `forge` skill: `/forge <what to make>` (`.claude/skills/forge/SKILL.md`); a humanoid
+  character for Unreal's MetaHuman is the `metahuman` skill (`.claude/skills/metahuman/SKILL.md`). The Unreal MCP is
+  a convenience when it is connected, never a dependency: the templates and the three `mh-` tools work without it.
 - Commit messages end with the `Co-Authored-By: Claude <model> <noreply@anthropic.com>` line of the model in use
   (as the session's attribution reminder gives it).
 - Look at pictures and renders with the Read tool; it shows the image. Never print secrets from `.env`.

@@ -35,6 +35,8 @@ test set is `$PY bench --model <key>` (six assets, says the cost and waits for `
 
 ## 1. Brief
 `$PY new <Name> --category weapon|vehicle|aircraft|helicopter|prop --size <longest side, m> --description "..."`
+(a humanoid character is `--category character --size <height>` and follows the `metahuman` skill instead:
+`.claude/skills/metahuman/SKILL.md`, since 2026-10-04)
 Sizes (the category skills have more): a pistol ~0.2 m, a carbine 0.75-0.9, a rifle 0.9-1.1, a sniper rifle
 1.1-1.3; a car 4.5, a truck 5-6, a main battle tank 8-10 with the gun; a fighter ~15; an attack helicopter 14-18
 fuselage (rotors overhang); a gunship 12-18. `--tris 100000` for a hero asset.

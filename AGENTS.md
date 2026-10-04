@@ -36,7 +36,11 @@ read it before the first command; it covers the sandbox, output truncation and t
   (a Tripo seed is split along every seam; unwelded, the 8k coral had ~5,600 open edges), and baked normals that face
   into the surface (a thin leaf's back face) are turned out (`report.json` `normal_inward_share`).
 - `mastersmith/blender/` the Blender scripts: `register_part.py` (turn the seed to match its picture),
-  `assemble.py` (fit, tint, zones, glass, sharpen, bore alignment, bake, LODs, previews), `six_views.py`.
+  `assemble.py` (fit, tint, zones, glass, sharpen, bore alignment, bake, LODs, previews), `six_views.py`,
+  `mh_conform.py` / `mh_bake.py` / `mh_attach.py` (the MetaHuman handoff).
+- `mastersmith/metahuman/` the MetaHuman templates exported from Unreal 5.8.3 (body, face, head, skeletons, measured
+  numbers) and `template.py`; `out/<Name>/delivery/metahuman/` a character's conform GLB, baked T_ maps, SK_ accessory
+  FBX, and `in/` for the FBX the editor exports back (the posed DNA's mesh, the built body).
 - `.env` holds FAL_KEY (git-ignored). NEVER print, echo, cat or grep the keys; never put them in a message.
 - Local models: TRELLIS.2 (`trellis-cli.exe`, E:/local-models) meshes for free; FLUX.2 klein draws locally
   (`--model local`, weak). Any other model running on this machine is registered by its command line
@@ -223,6 +227,9 @@ an assemble, 2026-09-29).
 | `assemble <job> [--draft] [--projection auto\|full\|letters\|off] [--origin centre\|bottom\|top\|rear\|front\|mount\|grip] [--tubes N] [--finish-profile restrained\|standard] [--parts A,B] [--no-sharpen] [--no-bevel] [--drop-floaters]` | fits, tints, zones, glass cut-outs, bakes (BaseColor, Normal with the bevel, ORM, Emissive), LODs, previews, six views, the muzzle close-up, sockets, exports (GLB and .blend in metres, FBX in centimetres, read back); `report.json` carries `islands` (loose pieces far from the body, open edges, non-manifold share - measured, not deleted; `--drop-floaters` deletes only far, small ones), `muzzle`, `sockets`, `fbx_check` and the delivery `gate`; prints the preview link. `--draft` stops before the bake (about a minute): renders of the placed parts with their glass, lining and muzzle into `delivery/draft/`, the delivery untouched. `--tubes N`: a launcher's loaded or capped tubes as Muzzle_0..N-1 |
 | `closeup <job> [--box x0,x1,zt,zb] [--view iso\|left\|right\|front\|back\|top\|bottom\|iso_rear] [--unlit] [--clay] [--hide glass,lining] [--highlight glass\|lining\|frame\|<zone>] [--section y=0.1]` | one close-up of the delivery the way a review needs it: a box off the side grid, the glass hidden or red, a zone's faces red, the paint unlit, clay, or cut open -> `delivery/closeups/`. It replaces the throwaway probe scripts (17 on the Havoc, 2026-09-29) |
 | `rig <job> [--origin keep\|mount\|...] [--barrel 0.6,0.74] [--recoil 0.05] [--kick 0] [--loop jet\|coil] [--idle coil] [--no-glow]` | a delivered weapon rigged for an engine: Root/Body/(Barrel)/Muzzle bones at the measured muzzles, rigid skin, Idle/Fire/Equip(/FiringLoop) clips, `SK_<Name>.fbx` and `A_<Name>_<Clip>.fbx` in centimetres with no node scale, read back, the T_ maps beside them -> `delivery/rig/` |
+| `mh-conform <job> [--part Body] [--source mesh] [--extra a.glb,b.glb] [--strip hair,lash] [--height 1.78]` | a character seed as the ONE combined mesh Unreal 5.8's MetaHuman conform takes (2026-10-04): Z up, facing -Y, feet on the floor, the brief's height, transforms applied, named objects stripped; the A-pose measured off the silhouette and judged against the MetaHuman template (`pose_check`: closed armpit, T-pose, legs too close, fused fingers, hair, no head, height off); front and side overlays on the template -> `delivery/metahuman/<Name>_conform.glb`, `conform_report.json`, `conform_<front\|side>.png` |
+| `mh-bake <job> --posed delivery/metahuman/in/<Name>_Posed.fbx [--source mesh] [--resolution 4096] [--cage 12] [--color-only]` | the seed's colour and normal baked onto the POSED MetaHuman mesh Unreal generated from the conformed DNA (same pose): head skin on UDIM 1001, body tile 1002 moved onto 0-1 -> `T_<Name>_<Head\|Body>_<BC\|N>.png`, `bake_report.json` (alignment, coverage), `bake_preview_*.png`; the `_N` maps are OpenGL: Flip Green Channel on import |
+| `mh-attach <job> <Part> --built delivery/metahuman/in/SKM_MH_<Name>_BodyMesh.fbx [--source mesh] [--bone head\|<bone>\|transfer] [--offset x,y,z] [--decimate-to N]` | an accessory (hair, horns, armour: the part's seed or a mesh in the conform's frame) weighted onto the built MetaHuman's skeleton - 100% on one bone or the MetaHuman mesh's own weights - and exported as `SK_<Name>_<Part>.fbx` in centimetres, the skeleton named root, no leaf bones, read back; renders of it on the body. Dropped onto the MetaHuman Blueprint's Body component |
 | `sheet <file.glb>` | six views of any GLB |
 | `refs [<job> ...] [--no-open] [--sheet]` | serves the reference pictures of the listed jobs (all jobs when none) on one local page with Approve / Redraw and a note per picture; the owner's choices land in `ref/review.json` (`ms status` prints them). Drafts moved to `ref/unused/` are not shown; `ref/notes.txt` is shown above a job's pictures. `--sheet` writes `<job>/ref_sheet.png` (every picture labelled, with the checklist and the warnings the pixels give: a long gun's muzzle on the left) for you to Read before the owner sees them |
 | `results [<job> ...] [--no-open]` | every delivered job (or the listed ones) on one local page: six views, score and defects from `delivery/scorecard.json` (`{"score", "spent", "tonetta", "defects"}`, written by the agent after its review), cost, links to each job's 3D preview, GLB and zip, all from one port |
@@ -303,6 +310,40 @@ What the eight Proteus weapons taught (2026-10-01), now in `assemble` and `ms ri
 - **Check in the engine** before calling it done: the imported bounds against the brief's size, where the pivot sits on
   its mount, a shot leaving the muzzle socket. A muzzle flash, a flame or a beam is sized to the new muzzle (the
   flamethrower's old VFX came out "too big" on a 5 cm nozzle).
+
+## MetaHuman handoff (humanoid characters, since 2026-10-04)
+
+A humanoid character is built to become an Unreal 5.8 MetaHuman (the owner's video, "Turn ANY Character into an Animated
+Metahuman"): `ms` makes the pictures and the seed, `ms mh-conform` the one combined mesh the editor's "Import > from
+custom mesh" conform takes, and after the editor has conformed, rigged and built it, `ms mh-bake` puts the seed's look
+on the MetaHuman topology and `ms mh-attach` rigs hair, horns and armour to its skeleton. The recipe is
+`.claude/skills/metahuman/SKILL.md`; what a good input is, `mastersmith/skills/character.md`.
+- **The editor is not part of a build.** What Master Smith needs of it is in `mastersmith/metahuman/`: the body identity
+  template `SKM_Body.fbx` (the MetaHuman A-pose, 1.31 m to the neck seam, UDIM 1002, 342 bones), the face archetype
+  `SKM_Face.fbx` (UDIM 1001, 875 bones, 15 material slots), the head template `SM_MH_Head.fbx`, every bone in
+  component space (`*.skeleton.json`), `template.json` and the silhouettes (measured by `blender/mh_template.py`),
+  `MH_Template.glb` for the overlays; `template.py` reads them (arms 24 degrees from vertical, feet 26 cm apart,
+  1.72 m). Exported from UE 5.8.3 through the Unreal MCP on 2026-10-04; re-export only if Epic changes the templates.
+- **The editor's steps** (by hand, or the MCP's `MetaHumanCharacterService` / `MetaHumanObjectService` and the
+  `MetaHumanCharacterEditorSubsystem` in `execute_python_code`): import the GLB, MetaHuman Character > Import > from
+  custom mesh > Combined > Auto Solve (`ConformToTargetMeshes`, fingers checked, Manual Solve key points when fused),
+  **Save Pose** = the posed DNA (`ExportPosedDNA`; the baking target, BEFORE the A-pose commit), Create Full Rig and
+  Download Texture Sources (cloud, Epic login), Build -> `/Game/MetaHumans/<Name>/BP_<Name>`; export the posed DNA's
+  skeletal mesh and the built body mesh as FBX into `delivery/metahuman/in/`. The MCP's generic asset export crashed
+  the editor's Python on a skeletal mesh (2026-10-04): export by hand until a guarded wrapper exists.
+- **Textures**: a built MetaHuman reads `Body/Baked/T_Body_BC` (8k) `_N` `_SRMF` and `Face/Baked/T_Head_LOD3_BC` `_N`
+  `_SRMF` (LOD0-4; `T_Head_LOD5to7_*` beyond), eyes and teeth their own. `mh-bake`'s maps replace BC and N; its normal
+  maps are OpenGL (+Y): Flip Green Channel on import. Body UVs live on UDIM 1002: a Blender bake or an AI retexture
+  needs them shifted by -1 first (the tools do it).
+- **Skeleton**: `metahuman_base_skel` (root, pelvis, spine_01-05, neck_01-02, head, clavicle/upperarm/lowerarm/hand,
+  thigh/calf/foot/ball, five fingers x3 per hand, plus twist, corrective and muscle helpers); the face
+  `Face_Archetype_Skeleton` (FACIAL_* bones). An accessory FBX for it: the armature named root, no leaf bones,
+  centimetres, read back (`mh-attach`). "head" and the finger tips are leaf bones: never import a MetaHuman FBX with
+  Blender's leaf-bone filter on (322 of 342 bones came through, 2026-10-04).
+- **Blueprint**: Root > Body (SkeletalMesh) > Face (SkeletalMesh) > grooms (Hair, Eyebrows, Fuzz, Eyelashes,
+  Mustache, Beard), a MetaHuman component and an LODSync; an accessory is a SkeletalMesh component under Body.
+- **Check in the engine** before calling it done: the size against the brief, the feet on the floor, nothing through
+  the body in idle and walk, the accessories following, the face rig moving (Live Link or MetaHuman Animator).
 
 ## Sculpting without a mouse
 
