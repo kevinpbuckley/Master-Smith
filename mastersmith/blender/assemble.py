@@ -2585,6 +2585,43 @@ def lod_copy(src, ratio, name):
     return o
 
 
+if args.get("wind_masks"):
+    # a nature asset's wind masks in its vertex colour (2026-10-03, windmask.py): R the distance along the surface from
+    # the holdfast, G blade flutter, B a phase per blade - made on LOD0 so the decimated LODs carry them
+    from mathutils.bvhtree import BVHTree
+    from windmask import masks as wind_masks  # noqa: E402 - pure numpy, tested
+    me = lod0.data
+    n = len(me.vertices)
+    co = np.empty(n * 3, np.float64)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    nrm = np.empty(n * 3, np.float64)
+    me.vertices.foreach_get("normal", nrm)
+    nrm = nrm.reshape(-1, 3)
+    ed = np.empty(len(me.edges) * 2, np.int64)
+    me.edges.foreach_get("vertices", ed)
+    ed = ed.reshape(-1, 2)
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    tree = BVHTree.FromBMesh(bm)
+    span = float(np.linalg.norm(co.max(axis=0) - co.min(axis=0)))
+    eps = 1e-4 * span
+    thick = np.full(n, np.inf)
+    for i in range(n):
+        d = Vector(nrm[i])
+        hit = tree.ray_cast(Vector(co[i]) - d * eps, -d, span)
+        if hit[0] is not None:
+            thick[i] = hit[3] + eps
+    bm.free()
+    stem, flutter, phase = wind_masks(co, ed, thick)
+    attr = me.color_attributes.new("WindMask", "FLOAT_COLOR", "POINT")
+    attr.data.foreach_set("color", np.stack([stem, flutter, phase, np.ones(n, np.float32)], axis=1).ravel())
+    me.color_attributes.active_color = attr
+    me.color_attributes.render_color_index = list(me.color_attributes).index(attr)
+    report["wind_masks"] = {"stem_max": round(float(stem.max()), 3), "flutter_share": round(float((flutter > 0.4).mean()), 3),
+                            "blades": int(len(np.unique(phase[flutter > 0.4]))) if (flutter > 0.4).any() else 0}
+    log("wind masks: %s" % report["wind_masks"])
+
 lod1 = lod_copy(lod0, 0.5, "SM_%s_LOD1" % NAME)
 lod2 = lod_copy(lod1, 0.5, "SM_%s_LOD2" % NAME)
 for i, o in enumerate((lod0, lod1, lod2)):
@@ -2711,7 +2748,11 @@ for o in (hull, lod1, lod2):
 # ---------------------------------------------------------------- exports
 blib.select_only([lod0] + socket_objs)
 p = os.path.join(OUT, "SM_%s.glb" % NAME)
-bpy.ops.export_scene.gltf(filepath=p, use_selection=True, export_format="GLB", export_yup=True)
+try:
+    # the wind masks stay out of the GLB: a glTF viewer multiplies COLOR_0 into the base colour and tinted the plants
+    bpy.ops.export_scene.gltf(filepath=p, use_selection=True, export_format="GLB", export_yup=True, export_vertex_color="NONE")
+except TypeError:
+    bpy.ops.export_scene.gltf(filepath=p, use_selection=True, export_format="GLB", export_yup=True)
 report["files"].append(os.path.basename(p))
 if args.get("spec"):
     txt = bpy.data.texts.new("ms_spec.json")
@@ -2741,6 +2782,8 @@ for e in socket_objs:
 fbx_kw = dict(use_selection=True, apply_unit_scale=True, global_scale=0.01, apply_scale_options="FBX_SCALE_NONE",
               axis_forward="-Z", axis_up="Y", mesh_smooth_type="FACE", use_mesh_modifiers=True, path_mode="STRIP",
               embed_textures=False, add_leaf_bones=False, bake_anim=False)
+if args.get("wind_masks"):
+    fbx_kw["colors_type"] = "LINEAR"           # mask values, not colours: no sRGB curve on the way to Unreal
 blib.select_only([lod0, hull] + socket_objs)
 fbx_main = os.path.join(OUT, "SM_%s.fbx" % NAME)
 bpy.ops.export_scene.fbx(filepath=fbx_main, **fbx_kw)

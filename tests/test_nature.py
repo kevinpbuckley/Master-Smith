@@ -77,3 +77,32 @@ def test_a_lattice_is_registered_by_its_envelope():
     ring[10:30, 10:30] = False
     assert s.fill_holes(ring)[20, 20]                  # a hole inside is filled, the outside is not
     assert not s.fill_holes(ring)[0, 0]
+
+
+def _windmask():
+    path = Path(__file__).resolve().parents[1] / "mastersmith/blender/windmask.py"
+    spec = importlib.util.spec_from_file_location("windmask", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_wind_masks_follow_the_plant_not_its_height():
+    w = _windmask()
+    # a stalk 0..10 up the middle, and two level blades leaving its top to either side
+    verts = [(0.0, 0.0, float(z)) for z in range(11)]
+    left = [(-float(x), 0.0, 10.0) for x in range(1, 11)]
+    right = [(float(x), 0.0, 10.0) for x in range(1, 11)]
+    verts = np.array(verts + left + right)
+    edges = [(i, i + 1) for i in range(10)]
+    edges += [(10, 11)] + [(11 + i, 12 + i) for i in range(9)]
+    edges += [(10, 21)] + [(21 + i, 22 + i) for i in range(9)]
+    edges = np.array(edges)
+    thickness = np.array([1.0] * 11 + [0.01] * 20)        # a thick stalk, paper-thin blades
+    stem, flutter, phase = w.masks(verts, edges, thickness)
+    assert stem[0] == 0.0 and abs(stem[-1] - 1.0) < 1e-6
+    assert stem[20] > stem[15] > stem[11] > stem[10]      # the level blade bends more toward its tip
+    assert flutter[:11].max() < 0.01                       # the stalk does not flutter
+    assert flutter[15] > 0.9 and flutter[25] > 0.9         # the blades do
+    assert phase[12] == phase[19] and phase[22] == phase[29]   # one phase along a blade
+    assert phase[15] != phase[25]                          # the two blades out of step

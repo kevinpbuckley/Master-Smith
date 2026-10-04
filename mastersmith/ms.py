@@ -980,7 +980,8 @@ def cmd_assemble(a):
             "bevel_m": 0.0 if a.no_bevel else (min(0.0015, 0.0005 * float(plan["dims_m"][0]))
                 if a.finish_profile == "restrained" else 0.002 * float(plan["dims_m"][0])),
             "finish_profile": a.finish_profile, "drop_floaters": bool(a.drop_floaters), "origin": a.origin,
-            "draft": bool(a.draft), "tubes": a.tubes, "surface_detail": not a.no_surface_detail, "size_longest": nature}
+            "draft": bool(a.draft), "tubes": a.tubes, "surface_detail": not a.no_surface_detail, "size_longest": nature,
+            "wind_masks": nature}
     _blender(job, "assemble.py", args, "assemble_draft" if a.draft else "assemble")
     if a.draft:
         d = os.path.join(delivery, "draft")
