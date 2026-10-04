@@ -1230,10 +1230,13 @@ for p in args["parts"]:
         interiors = [q for q in args["parts"] if q.get("interior") and q is not p]
         carvers = [q for q in args["parts"] if q.get("carve") and q is not p]
         if p.get("body") and carvers:
-            # 2026-10-04: a replacement part ("carve": true) takes the body's faces inside its box with it - the
-            # Kestrel's seed nozzle was a soft drum with melted rings ("gooey", owner) and an exact sdf nozzle sits
-            # in its box instead. Measured by face centre, the box as planned (the 1-2% overlap keeps the join
-            # covered); the seed file is not touched (rule 10). Reported per part so a carve that ate a wing shows.
+            # 2026-10-04: a replacement part ("carve": true) takes the body's faces under it with it - the Kestrel's
+            # seed nozzle was a soft drum with melted rings ("gooey", owner) and an exact sdf nozzle sits in its box
+            # instead. Carved by the part's own solid outline (its convex hull, fitted into its box as the part will
+            # be, grown by a small margin for the seed's slivers), not its box: the box took the fuselage deck above
+            # the nozzle too and the hull was open from behind ("there's space I can see through thru the back").
+            # The seed file is not touched (rule 10). Reported per part so a carve that ate a wing shows.
+            from mathutils.bvhtree import BVHTree
             me = o.data
             nf = len(me.polygons)
             cen = np.empty(nf * 3, np.float32)
@@ -1242,7 +1245,24 @@ for p in args["parts"]:
             gone = np.zeros(nf, bool)
             rec["carved_for"] = {}
             for q in carvers:
-                inside = np.all((cen >= np.array(q["box_min"])) & (cen <= np.array(q["box_max"])), axis=1)
+                tmp = import_part(q)
+                fit(tmp, q)
+                hb = bmesh.new()
+                hb.from_mesh(tmp.data)
+                hull = bmesh.ops.convex_hull(hb, input=hb.verts)
+                bmesh.ops.delete(hb, geom=[g for g in hull["geom_interior"] if isinstance(g, bmesh.types.BMVert)], context="VERTS")
+                tree = BVHTree.FromBMesh(hb)
+                ext = Vector(q["box_max"]) - Vector(q["box_min"])
+                margin = 0.02 * min(ext)
+                inside = np.zeros(nf, bool)
+                inbox = np.all((cen >= np.array(q["box_min"]) - margin) & (cen <= np.array(q["box_max"]) + margin), axis=1)
+                for i in np.nonzero(inbox)[0]:
+                    c = Vector(cen[i])
+                    loc, nrm, _idx, dist = tree.find_nearest(c)
+                    if loc is not None and (dist <= margin or (c - loc).dot(nrm) < 0):
+                        inside[i] = True
+                hb.free()
+                bpy.data.objects.remove(tmp, do_unlink=True)
                 rec["carved_for"][q["name"]] = int(inside.sum())
                 gone |= inside
             if gone.any():
