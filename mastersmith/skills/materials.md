@@ -42,6 +42,11 @@ blended, seen from both sides. Never set alpha on the seed's own material (the w
 | frosted pane | the tint | 0.60 | 0.45 |
 | visor, goggles | 0.05, 0.03, 0.01 | 0.45 | 0.05 |
 
+A glass zone whose material sets `"alpha"` gets a pane of its own from that table: its colour as the tint, its alpha
+(clamped 0.2-0.7) and its roughness (the Kestrel's canopy: `#060808`, 0.62, 0.08 - dark enough not to see inside,
+owner 2026-10-04); without it every pane is the canopy default. An opaque island the pick encloses on every side
+(a highlight painted across a pane) is taken as glass (`enclosed` in the report).
+
 Whatever the glass shows has to exist (a canopy over an empty shell shows the hull's back faces): see the cockpit
 contents in the aircraft, helicopter and vehicle skills. A lamp is an emissive core inside a glass shell; the glass is
 never the emissive part.

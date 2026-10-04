@@ -340,6 +340,12 @@ def clean_material(mat):
     # every lamp glowed at the default whatever the plan said (2026-10-02)
     if finish == "emissive" and isinstance(mat.get("strength"), (int, float)) and not isinstance(mat.get("strength"), bool):
         out["strength"] = round(min(50.0, max(0.5, float(mat["strength"]))), 2)
+    # 2026-10-04: a glass zone's own pane (materials.md's table: tinted or armoured glass is near-black at alpha
+    # 0.55). "alpha" set on a glass material makes the pane from its colour, alpha and roughness instead of the
+    # default canopy glass; the owner asked for a Kestrel canopy "dark so you can't see inside". Clamped to the band
+    # where a pane still reads as glass (under 0.2 it vanishes, over 0.7 it is paint).
+    if out["glass"] and isinstance(mat.get("alpha"), (int, float)) and not isinstance(mat.get("alpha"), bool):
+        out["alpha"] = round(min(0.7, max(0.2, float(mat["alpha"]))), 3)
     return out
 
 
@@ -350,7 +356,7 @@ PART_KEYS = {"name", "what", "method", "side_box", "front_span", "material", "zo
              "edge_break", "interior", "centreline", "lettering"}
 ZONE_KEYS = {"name", "side_box", "front_span", "material", "pick", "keep", "strength", "fill", "line", "shell", "flat",
              "glow", "vertices", "triangles", "tolerance", "bounds"}
-MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength"}
+MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha"}
 GLOW_KEYS = {"hue", "hue_tol", "min_sat", "min_val"}
 PICKS = ("auto", "dark", "pale", "lit", "box", "atlas", "fitted")
 # what a validated plan.json carries besides the plan (fed back through `ms plan` it is not "ignored")

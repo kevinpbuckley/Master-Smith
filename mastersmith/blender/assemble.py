@@ -818,6 +818,28 @@ from glasskit import (  # noqa: E402 - the glass and cockpit passes, shared with
     cut_out, line_interior, interior_material, glass_material, delete_faces, cockpit_contents)
 
 
+def zone_glass_kw(z):
+    """A glass zone's own pane, when its plan material sets "alpha" (materials.md's table: tinted or armoured glass
+    is near-black at 0.55): the material's colour as the tint (no albedo floor: glass is darker than paint), its
+    alpha and its roughness. {} means the default canopy glass. 2026-10-04: the owner asked for a canopy dark enough
+    not to see inside, and the pane's tint and alpha were fixed in glass_material."""
+    zm = z.get("material") or {}
+    a = zm.get("alpha")
+    if not isinstance(a, (int, float)) or isinstance(a, bool):
+        return {}
+    kw = {"alpha": float(a), "rough": float(zm.get("roughness", 0.05))}
+    h = str(zm.get("color") or "").lstrip("#")
+    if len(h) == 6 and h.lower() != "808080":
+        from colour import srgb_to_linear
+        kw["tint"] = tuple(srgb_to_linear(int(h[i:i + 2], 16) / 255.0) for i in (0, 2, 4))
+    return kw
+
+
+def zone_glass_material(zname, kw):
+    """The glass material for a zone: the asset's one pane when `kw` is empty, else a pane of its own named for it."""
+    return glass_material("MI_%s_Glass" % NAME) if not kw else glass_material("MI_%s_Glass_%s" % (NAME, zname), **kw)
+
+
 def lift_roughness(mats, floor=0.35, trigger=0.40):
     """A kept texture's roughness brought off glaze: when its mean is under 0.40 it becomes 0.35 + 0.65 r (Tonetta's
     seed pass; Tripo seeds measured 0.17-0.27 and read as glazed plastic, 2026-09-29). -> the means it found"""
@@ -1230,10 +1252,12 @@ for p in args["parts"]:
                     made.append((cut_out(o, mask, "Glass_" + zname), ""))
                 if panes is not None:
                     made.append((pane_object(o, panes, "Panes_" + zname), ".panes"))
+                gkw = zone_glass_kw(z)
                 for g, tag in made:
                     g.data.materials.clear()
-                    g.data.materials.append(glass_material("MI_%s_Glass" % NAME))
-                    glass_parts.append((g, {"name": "%s.%s%s" % (p["name"], z.get("name", "glass"), tag), "kind": "glass", **gstats}))
+                    g.data.materials.append(zone_glass_material(zname, gkw))
+                    glass_parts.append((g, {"name": "%s.%s%s" % (p["name"], z.get("name", "glass"), tag), "kind": "glass",
+                                            "zone": zname, "glass_kw": gkw, **gstats}))
                 if made:
                     report.setdefault("glass_zones", []).append({"part": p["name"], "zone": z.get("name"), **gstats})
                     if z.get("line", True):
@@ -2545,7 +2569,7 @@ bpy.data.objects.remove(high, do_unlink=True)
 
 # glass parts keep a glass slot of their own, outside the atlas
 for o, r in glass_parts:
-    g = glass_material("MI_%s_Glass" % NAME)
+    g = zone_glass_material(r.get("zone", "glass"), r.get("glass_kw") or {})
     o.data.materials.clear()
     o.data.materials.append(g)
     blib.select_only([lod0, o])

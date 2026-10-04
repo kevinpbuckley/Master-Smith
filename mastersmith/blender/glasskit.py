@@ -487,6 +487,23 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     ids, counts = np.unique(roots[grown], return_counts=True)
     mask = grown & np.isin(roots, ids[np.argsort(-counts)[:keep]]) if len(ids) else grown
     kept = np.sort(counts)[::-1][:keep] if len(ids) else np.array([0])
+    # 2026-10-04: an opaque island the glass encloses on every side is glass too - a highlight or a dark streak the
+    # mesher painted across a pane fails the colour test and, bigger than the two-neighbour rule closes, stayed as an
+    # opaque shard between the Kestrel's panes (261 faces). An island touching anything that is not glass (the frame,
+    # the hull outside the box) is a real frame piece and stays. Capped at a fifth of the glass so a whole hood
+    # ringed by panes cannot be swallowed.
+    enclosed = 0
+    hole = inbox & outside & ~mask
+    if hole.any() and mask.any():
+        hroots = components(n, fa, fb, hole)
+        edge_a, edge_b = fa[hole[fa] & ~hole[fb]], fb[hole[fa] & ~hole[fb]]     # island face -> non-island neighbour
+        open_root = np.unique(hroots[edge_a[~mask[edge_b]]])                    # islands with a non-glass neighbour
+        for r in np.unique(hroots[hole]):
+            comp = hole & (hroots == r)
+            if r in open_root or comp.sum() > 0.2 * mask.sum():
+                continue
+            mask |= comp
+            enclosed += int(comp.sum())
     panes_kept = mask.copy()                     # the outer panes the colour pick settled on (the envelope's source)
     # a pane modelled with a thickness has an inner skin just behind it, whatever it is painted: glass too. Left
     # opaque, the Havoc's inner skins were lined dark and read as black panels in every window (2026-09-29). Behind
@@ -588,7 +605,7 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     return mask, {"mode": mode, "styles_m2": {k: round(v[3], 2) for k, v in styles.items()}, "faces": faces, "islands": int(min(len(ids), keep)), "islands_found": int(len(ids)),
                   "largest_share": round(share, 3), "coverage": round(coverage, 3),
                   "dropped": np.sort(counts)[::-1][keep:keep + 6].tolist() if len(ids) else [], "interior_left_opaque": interior - inner,
-                  "inner_skin": inner, "fragments": fragments, "rebuilt": bool(rebuild and panes is not None),
+                  "inner_skin": inner, "enclosed": enclosed, "fragments": fragments, "rebuilt": bool(rebuild and panes is not None),
                   "shell_faces": int(len(panes[1])) if panes is not None else 0,
                   "share_of_part": round(part_share, 4), "pane_faces": int(len(panes[1])) if panes is not None else 0,
                   "ok": bool(panes is not None and len(panes[1]) >= 50) if rebuild else

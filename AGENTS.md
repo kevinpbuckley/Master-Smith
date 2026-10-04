@@ -168,7 +168,9 @@ the Havoc's 9/10 canopy); `"pick": "fitted"` only for one pane that stays opaque
 surface you fitted to the frame yourself and checked in a close-up: `"vertices": [[x, y, z], ...]` (metres, the asset
 frame), `"triangles": [[i, j, k], ...]`, `"tolerance"` (metres either side of the pane) and optional `"bounds": [[lo],
 [hi]]`; only the thin skin under it goes, the frame and the cockpit stay (the Havoc's windscreen, 2026-10-01). Two
-failed glass passes on one canopy: restore the seed's opaque canopy and show the owner (rule 10). An
+failed glass passes on one canopy: restore the seed's opaque canopy and show the owner (rule 10). A glass zone's
+material with `"alpha"` (0.2-0.7) makes its own pane from its colour, alpha and roughness: dark armoured glass is
+`#060808`, 0.62, 0.08 (the Kestrel, 2026-10-04); opaque islands the pick encloses are taken as glass. An
 `emissive` zone glows at `"strength"` 6-12 (on the zone or its material) and is baked into T_<Name>_E. With `"glow"` it glows only where the
 texture already shows the glow's colour: `{"hue": degrees, "hue_tol": 20, "min_sat": 0.35, "min_val": 0.35}` or
 `"#rrggbb"` (2026-09-30: a ray gun's lens, violet bands between gunmetal rings, a torpedo's lit tip); the rest of

@@ -53,3 +53,13 @@ def test_emissive_strength_and_fitted_panes_pass_through():
     assert zones["Windscreen"]["triangles"] == [[0, 1, 2]] and len(zones["Windscreen"]["bounds"]) == 2
     assert zones["Lamp"]["material"]["strength"] == 9
     assert "Broken" not in zones and any("Broken" in w and "dropped" in w for w in plan["ignored"])
+
+
+def test_glass_alpha_passes_through_clamped():
+    """2026-10-04: a glass zone's own pane (alpha, colour, roughness) reaches the assembler; non-glass drops it."""
+    assert "alpha" in planmod.MATERIAL_KEYS
+    m = planmod.clean_material({"finish": "glass", "color": "#060808", "alpha": 0.6, "roughness": 0.08})
+    assert m["glass"] and m["alpha"] == 0.6 and m["roughness"] == 0.08 and m["color"] == "#060808"
+    assert planmod.clean_material({"finish": "glass", "alpha": 0.95})["alpha"] == 0.7
+    assert planmod.clean_material({"finish": "glass", "alpha": True}).get("alpha") is None
+    assert planmod.clean_material({"finish": "painted", "alpha": 0.5}).get("alpha") is None
