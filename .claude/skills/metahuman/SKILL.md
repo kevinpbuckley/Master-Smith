@@ -112,8 +112,9 @@ has the full example). `execute_python_code`, `svc = unreal.MetaHumanCharacterSe
    lands facing +Y, feet on z=0, centimetres: what the solver wants (checked 2026-10-04).
 2. `svc.create_character(folder, "MH_<Name>", "")`, then `svc.import_from_custom_mesh(character, static_mesh, "",
    True, True, 1024)`: the face is tracked on a front-on render, the body and head solved (1-3 minutes, blocking).
-   Read `warnings` (feet off the floor, metres, facing) and `face_tracking`; a failed tracking leaves the archetype
-   face - fix the mesh (bald, facing +Y) and run again.
+   Read `warnings` (feet off the floor, metres, facing) and `face_tracking` (curves, points, and `render`: the
+   front-on picture the tracker saw, in the project's `Saved/VibeMetaHumans/`); a failed tracking leaves the
+   archetype face - the seed needs eyes in its sockets and a bald head facing +Y; fix it and run again.
 3. `svc.save_posed_dna(character, static_mesh, "", folder, "<job>/delivery/metahuman/in", "<Name>_Posed")` BEFORE
    anything else: the baking target. Then `svc.generate_skeletal_mesh_from_dna(folder + "/<Name>_Posed", folder,
    "SKM_<Name>_Posed", "body")` and `svc.export_fbx(that, "<job>/delivery/metahuman/in/<Name>_Posed.fbx")` for
