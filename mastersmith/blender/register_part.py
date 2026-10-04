@@ -278,6 +278,23 @@ mode = "upright"
 if scores[0][1] < 0.5:
     scores = score_all(rotations())
     mode = "any"
+prior = None
+if args.get("front_yaw") is not None and not args.get("yaw_sweep"):
+    # 2026-10-04 (Mixar's per-engine front table): the vendor's usual front turned onto +X is a prior. The silhouette
+    # still decides; the prior only breaks a near-tie between the two ends (a box-like body reads the same end for
+    # end: the Mi-28 fuselage came back backwards twice at 0.92) and its agreement is recorded, so the table is
+    # checked against every seed instead of trusted
+    _a = np.radians(float(args["front_yaw"]))
+    want = np.array([[np.cos(_a), -np.sin(_a), 0], [np.sin(_a), np.cos(_a), 0], [0, 0, 1]])
+    pr = next((s for s in scores if np.allclose(s[3], want, atol=1e-6)), None) or score_all([want])[0]
+    flip = np.allclose(scores[0][3], np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]]) @ want, atol=1e-6)
+    prior = {"front_yaw": float(args["front_yaw"]), "iou": round(float(pr[1]), 3), "best_iou": round(float(scores[0][1]), 3),
+             "applied": False}
+    if flip and scores[0][1] - pr[1] < 0.05:
+        scores = [pr] + [s for s in scores if s is not pr]
+        prior["applied"] = True
+        mode += "+prior"
+    prior["agrees"] = bool(np.allclose(scores[0][3], want, atol=1e-6))
 if args.get("yaw_sweep"):
     # a seed made from a three-quarter picture comes out turned by that view's angle, not by a multiple of 90 degrees:
     # sweep the turn about the vertical in 5 degree steps, then 1 degree around the best
@@ -415,7 +432,7 @@ if args.get("out_render"):
     st.close()
 result = {"mode": mode, "iou": round(float(best[1]), 3), "score": round(float(best[0]), 3), "aspect": round(float(best[2]), 3),
           "target_aspect": round(float(t_aspect), 3), "runner_up_iou": round(float(scores[1][1]), 3), "shear": round(shear, 4),
-          "facing": facing, "symmetry": symmetry,
+          "facing": facing, "symmetry": symmetry, "prior": prior,
           "rotation": [[round(float(v), 4) if mode != "upright" and mode != "any" else int(v) for v in row] for row in best[3]]}
 json.dump(result, open(args["out_json"], "w"), indent=1)
 print("[register] best IoU %.3f (aspect %.2f vs %.2f), runner-up %.3f" % (best[1], best[2], t_aspect, scores[1][1]), flush=True)

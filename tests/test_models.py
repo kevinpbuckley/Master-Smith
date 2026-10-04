@@ -74,3 +74,25 @@ def test_a_one_part_plan_is_valid():
     plan = validate_plan({"parts": [{"name": "Body", "method": "vendor", "side_box": [0, 100, 0, 100], "front_span": [0, 100],
                                       "material": {"keep_texture": True}}]}, [0.84, 0.07, 0.26])
     assert len(plan["parts"]) == 1 and plan["parts"][0]["material"]["keep_texture"] is True
+
+
+def test_vendor_front_axis_and_segment_models():
+    # 2026-10-04 (Mixar's per-engine table): Tripo seeds face +X after import; registration takes it as a prior
+    assert models.resolve("tripo")["front"] == "+X" and models.resolve("tripo-mv")["front"] == "+X"
+    assert models.front_yaw("+X") == 0 and models.front_yaw("-Y") == 90 and models.front_yaw("+Y") == -90
+    assert models.front_yaw(None) is None and models.front_yaw("") is None
+    # the pictured view turns it: a side-view seed's muzzle lies on +Y (the bullpup, 2026-10-04), a back view faces away
+    assert models.front_yaw("+X", "left") == -90 and models.front_yaw("+X", "back") == 180
+    assert models.front_yaw("-Y", "left") == 0 and models.front_yaw("+X", "hero") is None
+    seg = models.resolve("hunyuan-part", kind="segment")
+    assert seg["endpoint"] == "fal-ai/hunyuan-3d/v3.1/part" and models.price_of(seg) == 0.45
+    with pytest.raises(KeyError):
+        models.resolve("hunyuan-part", kind="seed")
+
+
+def test_registered_model_may_say_which_way_it_faces(tmp_path):
+    reg = str(tmp_path / "local_models.json")
+    m = models.add("hy-local", "seed", "hy.exe --in {image} --out {out}", path=reg, front="-y")
+    assert m["front"] == "-Y" and models.all_models(reg)["hy-local"]["front"] == "-Y"
+    with pytest.raises(ValueError):
+        models.add("hy-bad", "seed", "hy.exe --in {image} --out {out}", path=reg, front="up")

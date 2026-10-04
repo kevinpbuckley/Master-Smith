@@ -58,7 +58,11 @@ registered once: `$PY models add <key> --kind seed --command "<exe> {image} {out
 - A hero picture: `$PY picture out/<Name> --out ref/ref_0.png --model <picture model> --prompt "..."` (`--ref` the
   owner's photo). Name the object first, then its construction and its materials as surfaces; one angle per prompt;
   plain background, even light, no text, watermark or people. Weapons: the hero is the side profile, muzzle right.
-- Standard views from it: `$PY view out/<Name> --which side --from ref/ref_0.png` (forward end RIGHT; `--mirror` if not)
+- Standard views from it, in one call: `$PY views out/<Name> --from ref/ref_0.png --which side,front,back,top` (a
+  weapon: `front,back,top`; its hero is the side) draws one turnaround sheet and splits it into `ref/ref_<view>.png`
+  (one picture's price for four views, every view the same object); a panel it refuses (empty, bled into its
+  neighbour) you draw alone with `view`; a "same picture" warning means a view was the hero drawn again.
+  One at a time: `$PY view out/<Name> --which side --from ref/ref_0.png` (forward end RIGHT; `--mirror` if not)
   and `--which front`; vehicles and aircraft also `--which back` and `--which top`. A multi-view seed is only as good
   as these: the same object, level and orthographic. A sheet of several views in one picture fuses into one mesh;
   strong perspective seeds a foreshortened mesh; a generated mechanism is not to be trusted.
@@ -97,6 +101,11 @@ The seed is the shape; these passes make it a game asset. Protect the seed: neve
 pass a check, strip parts or run "delete loose / remove small islands" on it (a latch and a bar are small islands too);
 copy the mesh before a carve; two failed tries at the same part mean the approach is wrong - restore it and try a
 different, smaller change. Look at the six views after each pass and keep only what helps.
+- **The seed's own part lines** (optional, $0.45): `$PY segment out/<Name>` sends a decimated copy of the seed to
+  Hunyuan3D-Part and labels every face of the seed with the part it came back in (`parts/Body/segments.json`,
+  `segments.png`, `segments_side.png`; the seed's geometry is untouched). Read the two renders, name the labels
+  (barrel, grip, magazine, canopy...), and give a zone `"segment": <label>` instead of a box: its faces follow the
+  seed's own edges, and a glass zone's colour pick runs inside them. Use it when boxes keep catching the wrong faces.
 - **Materials by zone**: in `plan/plan_draft.json` give the one part `zones` (percent boxes read off
   `plan/side_grid.png`) for every region in another material (materials.md): bare dark steel (barrel, muzzle device,
   sights, bolts), glass (canopy, windows, lenses, lamp covers), rubber (tyres, pads), `emissive` lights and screens
@@ -205,7 +214,9 @@ owner scores it (`"owner_score"`).
 ## 7. Package
 `$PY package out/<Name>` -> `delivery/<Name>.zip`, printing the delivery gate's warnings (LOD0 within the budget
 x1.05, BaseColor/Normal/ORM present, size within +-10% of the brief, glass present when asked for, mean roughness
->= 0.3, UCX hull <= 256 triangles, the muzzle open, the FBX read back at size with unit node scale). The delivery
+>= 0.3, UCX hull <= 256 triangles, the muzzle open, the FBX read back at size with unit node scale, the GLB read
+back without Blender - size, LOD0 triangles, sockets, embedded textures - and no part under 40% of the asset's texel
+density; `report.json` carries `glb_check` and `texel_density` in px/cm). The delivery
 message carries, in this order: the preview URL, the GLB path, the zip path, the score /10 with defects by view, the
 pivot and sockets for a game asset, and what was spent. The same when another project takes the asset (the Proteus
 weapons went without previews, scores or zips, 2026-09-30).

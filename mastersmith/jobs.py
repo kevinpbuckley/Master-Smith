@@ -22,7 +22,7 @@ PART_SOURCES = ("side.png", "quarter.png", "build.py", "sdf.py", "fit_card.png",
 SEED_FILES = ("seed.glb", "registered.blend", "registered_unfitted.blend", "registered_unbrushed.blend",
               "registered_before_retexture.blend", "retextured.glb", "registration.json", "seed_render.png",
               "seed_views.png", "fit.json", "fit_report.json", "import.json", "brush_report.json", "retexture.json")
-SPENDING = ("seed", "picture", "view", "mesh", "part-pictures", "retexture")
+SPENDING = ("seed", "picture", "view", "views", "mesh", "part-pictures", "retexture", "segment")
 BENCH_FILE = config.ROOT / "mastersmith" / "bench.json"
 
 

@@ -7,6 +7,10 @@ local_models.json (machine-specific, git-ignored). `ms models` lists them all wi
 registers one; `ms seed --model <key>` and `ms picture/view --model <key>` use them.
 
 A seed model takes pictures and returns a GLB: "single" takes one picture, "multiview" takes several named views.
+"front" is the axis a vendor's seed usually faces after Blender's glTF import (Mixar's per-engine table, 2026-10-04:
+Tripo +X, Hunyuan/TRELLIS/Rodin -Y); registration uses it as a prior to break a tie between the two ends and records
+whether the seed agreed (`prior` in registration.json). A segment model splits a registered seed into parts
+(`ms segment`) whose labels zones can name.
 A command's placeholders: {image} the primary picture, {images} every picture (quoted, space-separated), {out} the
 file to write (a .glb for a seed, a .png for a picture), {prompt} and {prompt_file} (pictures), {refs} (pictures'
 references), {work} a scratch folder. It must exit 0 and leave {out}."""
@@ -26,14 +30,17 @@ BUILTIN = {
     "hi3d": {"kind": "seed", "label": "Hi3D v3 (2048)", "endpoint": "hitem3d/hi3d/v3.0/image-to-3d", "inputs": "single",
              "notes": "crisp hard-surface geometry from one picture"},
     "tripo": {"kind": "seed", "label": "Tripo H3.1 detailed", "endpoint": "tripo3d/h3.1/image-to-3d", "inputs": "single",
-              "notes": "tied hi3d-mv on the M4A1 (6.5); from the hero, the Havoc's 9/10 seed; benchmark 5-7 (2026-09-30)"},
+              "front": "+X", "notes": "tied hi3d-mv on the M4A1 (6.5); from the hero, the Havoc's 9/10 seed; benchmark 5-7 (2026-09-30)"},
     "tripo-mv": {"kind": "seed", "label": "Tripo H3.1 multi-view", "endpoint": "tripo3d/h3.1/multiview-to-3d", "inputs": "multiview",
-                 "notes": "needs front, left, back and right views"},
+                 "front": "+X", "notes": "needs front, left, back and right views"},
     "meshy7": {"kind": "seed", "label": "Meshy v7", "endpoint": "fal-ai/meshy/v7/image-to-3d", "inputs": "single", "notes": "cheap"},
     "meshy7-mv": {"kind": "seed", "label": "Meshy v7 multi-image", "endpoint": "fal-ai/meshy/v7/multi-image-to-3d", "inputs": "multiview",
                   "notes": "cheap; up to four pictures in any order"},
     "trellis2": {"kind": "seed", "label": "TRELLIS.2 (this PC)", "endpoint": config.LOCAL_SEED_MODEL, "inputs": "single",
                  "notes": "free, 1.5-6.5 min; soft edges"},
+    "hunyuan-part": {"kind": "segment", "label": "Hunyuan3D-Part (P3-SAM)", "endpoint": "fal-ai/hunyuan-3d/v3.1/part",
+                     "inputs": "fbx", "notes": "splits a registered seed (sent decimated under 30k faces) into parts; "
+                                               "the labels are numbered, named by you after Reading segments.png"},
     "meshy-retexture": {"kind": "texture", "label": "Meshy v5 retexture", "endpoint": "fal-ai/meshy/v5/retexture",
                         "inputs": "single", "notes": "a new texture on every side of the seed, on its own UVs, guided by "
                                                      "the hero picture and the brief (Tonetta's retexture, 2026-09-29)"},
@@ -45,6 +52,26 @@ BUILTIN = {
 }
 ALIASES = {"local": "trellis2", "hitem3d3": "hi3d", "hitem3d3mv": "hi3d-mv", "local-picture": "flux2-klein"}
 SEED_FACES = 200000
+# the turn about the vertical (degrees) that brings a vendor's usual front onto the plan frame's +X (forward)
+FRONT_YAW = {"+X": 0.0, "-Y": 90.0, "+Y": -90.0, "-X": 180.0}
+
+
+# the forward end of the object relative to the side the picture shows: a front view faces the camera, a left-side
+# view has the forward end on the picture's right (+Y when the pictured side faces +X), a back view faces away
+VIEW_TURN = {"front": 0.0, "left": -90.0, "side": -90.0, "right": 90.0, "back": 180.0}
+
+
+def front_yaw(front, view="front"):
+    """Degrees to turn a seed whose PICTURED side faces `front` ("+X" for Tripo) so the object's forward end faces
+    +X, given which standard view the picture was (`view`). None when the vendor's front or the view is not known
+    (a three-quarter hero says nothing). 2026-10-04: the first draft turned the pictured side to +X and called the
+    bullpup's side-view seed wrong: its muzzle lay on +Y, as a side view's must."""
+    base = FRONT_YAW.get(str(front).upper()) if front else None
+    turn = VIEW_TURN.get(str(view).lower()) if view else None
+    if base is None or turn is None:
+        return None
+    yaw = (base + turn + 180.0) % 360.0 - 180.0
+    return 180.0 if yaw == -180.0 else yaw
 
 
 def registry_path():
@@ -75,8 +102,10 @@ def resolve(key, kind=None, path=None):
     return m
 
 
-def add(key, kind, command, label="", inputs="single", notes="", path=None):
+def add(key, kind, command, label="", inputs="single", notes="", path=None, front=None):
     """Register a local command model. -> the entry"""
+    if front and str(front).upper() not in FRONT_YAW:
+        raise ValueError("front is one of %s" % ", ".join(FRONT_YAW))
     if key in BUILTIN or key in ALIASES:
         raise ValueError("%s is a built-in model name; pick another" % key)
     if kind not in ("seed", "picture"):
@@ -92,6 +121,8 @@ def add(key, kind, command, label="", inputs="single", notes="", path=None):
     path = path or registry_path()
     reg = registered(path)
     reg[key] = {"kind": kind, "label": label or key, "command": command, "inputs": inputs, "notes": notes, "price": 0.0}
+    if front:
+        reg[key]["front"] = str(front).upper()
     json.dump(reg, open(path, "w", encoding="utf-8"), indent=1)
     return reg[key]
 
@@ -188,7 +219,7 @@ def price_of(m):
         return 0.0
     if m["kind"] == "picture":
         return pricing.image_price(m["endpoint"])
-    if m["kind"] == "texture":
+    if m["kind"] in ("texture", "segment"):
         return pricing.price(m["endpoint"])
     fake = {r: "u" for r in ("hero", "left", "right", "front", "back", "top")}
     try:

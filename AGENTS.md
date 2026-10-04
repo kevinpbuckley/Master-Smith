@@ -46,7 +46,9 @@ read it before the first command; it covers the sandbox, output truncation and t
 
 - `ms models` lists every model with its price; the OWNER picks the picture model and the seed model for each job
   (ask, with a recommendation; never pick silently; `ms note` the answer so it survives a compacted context).
-  Pictures: Nano Banana (`nano`) about $0.08, `nano-pro` $0.15, FLUX.2 klein on this PC free. A whole-object seed:
+  Pictures: Nano Banana (`nano`) about $0.08, `nano-pro` $0.15, FLUX.2 klein on this PC free (`ms views` draws up to
+  six standard views in ONE call: one picture's price instead of one per view). A segmentation of the seed into
+  labelled parts (`ms segment`, Hunyuan3D-Part on fal) $0.45. A whole-object seed:
   Hi3D v3 multi-view (`hi3d-mv`) $2.10; Tripo $0.60 (billed 2026-09-28; not $0.30); Meshy v7 $0.05; TRELLIS.2 on this
   PC free (TRELLIS.2-fast meshed an M4A1 in 44 s at silhouette overlap 0.82). What the builds showed (2026-09-29 to
   10-01): on the M4A1 one Tripo seed ($0.60) scored the same 6.5 as one Hi3D multi-view ($2.10); on the Havoc a Tripo
@@ -152,6 +154,11 @@ object's full width, centred parts symmetric about 50.
  ],
  "notes": "anything the assembly must respect"}
 ```
+A zone may name the seed's own part lines instead of a box: `"segment": 3` or `[3, 5]`, labels from
+`parts/<Part>/segments.json` after `ms segment` (2026-10-04); without a `side_box` it is exactly those faces, with one
+it is those faces inside the box. A glass zone with a segment colour-picks its panes inside the labelled faces. Its
+colour is sampled from the picture like any zone's (a red test zone on a black gun came out #3e3e3e, 2026-10-04):
+`"color_lock": true` keeps the planned colour.
 `zones` are areas of a part in a different material (rubber pad on a polymer stock, glass lens on a scope); on a
 whole-object seed they carry every material that is not the seed's own texture. A glass zone is cut out into a real
 see-through part: its faces are picked by the seed's texture colour inside the box (`"pick": "auto"`, the default on
@@ -198,15 +205,17 @@ an assemble, 2026-09-29).
 | `open <job> [--part Body] [--rig]` | the delivery (or a part's seed, a copy kept first; or the rig) in Blender's own window with the user's add-ons (BlenderMCP), for work by hand or a live MCP session; every other Blender run is headless with factory settings |
 | `picture <job> --out ref/ref_0.png --prompt "..." [--ref file] [--model nano\|nano-pro\|local]` | draws a picture |
 | `view <job> --which side\|front\|back\|top\|quarter --from ref/ref_0.png [--mirror] [--fixes "..."]` | one standard view of the same object |
+| `views <job> --from ref/ref_0.png [--which front,left,back,top] [--fixes "..."] [--mirror] [--sheet ref/x.png] [--model nano]` | several standard views from ONE picture call (2026-10-04, Mixar's turnaround sheet): a sheet of panels drawn from the hero, its panels FOUND (the model lays them out as it likes, lines and all) and read in rows into `ref/ref_<view>.png` in the order of `--which`; the sheet is kept as `ref/sheet_*.png`. A count that is not what was asked (a view missing, two panels run together) refuses every panel and says so; a view that looks like the hero or another view drawn again is warned about (the bullpup's "top" came back as its side). `--sheet` splits a sheet that exists (the owner's own turnaround) with no call. A weapon's hero is its side: `--which front,back,top` |
 | `grid <job> --side ref/ref_side.png [--front ref/ref_front.png] [--mirror]` | crops to the silhouette, draws the percent grids, writes dims.json |
-| `models [add <key> --kind seed\|picture --command "..." [--inputs multiview] \| remove <key>]` | every seed and picture model with its price (built in: Hi3D v3, Tripo, Meshy, TRELLIS.2, FLUX.2, Nano Banana); `add` registers a model that runs on this machine by its command line: `{image}` / `{images}` / `{out}` (seed), `{prompt}` / `{prompt_file}` / `{refs}` / `{out}` (picture) |
+| `models [add <key> --kind seed\|picture --command "..." [--inputs multiview] [--front +X] \| remove <key>]` | every seed, texture, segment and picture model with its price (built in: Hi3D v3, Tripo, Meshy, TRELLIS.2, FLUX.2, Nano Banana, Hunyuan3D-Part); `add` registers a model that runs on this machine by its command line: `{image}` / `{images}` / `{out}` (seed), `{prompt}` / `{prompt_file}` / `{refs}` / `{out}` (picture). `front` is the axis the PICTURED side faces on a vendor's seeds after import (Tripo +X; Mixar's table, 2026-10-04); with the view the seed was made from (a side view's forward end is on +Y) registration turns it into a prior that breaks a tie between the two ends and records `prior` (agrees / applied / disagrees) in registration.json |
 | `seed <job> --model <key> [--view hero\|left\|front] [--part Body] [--replan] [--reseed] [--mirror-far-side]` | the whole object in ONE request from the approved views (multi-view models get front, side and back; the far side is the side view mirrored only for weapons by default, since a vehicle's fuel door or an ejection port is one-sided - `--mirror-far-side` for a symmetric vehicle), registered to the gridded side view, with a one-part plan that keeps the seed's texture when there is none: the default build |
 | `retexture <job> [--model meshy-retexture] [--part Body] [--prompt "..."] [--no-picture]` | a paid pass the owner picks (Meshy v5 retexture, ~$0.30): the registered seed's geometry goes out with one UV layer and no maps, a new texture comes back on every side, guided by the hero picture and the brief, fitted onto the seed's bounds; `registered_before_retexture.blend` is the undo |
 | `plan <job> plan.json` | validates your plan, snaps thin parts, samples colours, writes plan/plan.json |
 | `part-pictures <job> <Part> [--fixes "..."] [--no-quarter] [--no-front] [--with-front] [--no-side]` | side picture of that part alone + its three-quarter picture. A side picture drawn facing the wrong way is turned round (kept in `unused/`). Only the body's three-quarter picture gets the whole-object front view (it made 8 of 13 parts come back as the whole rifle; `--with-front` for another part). An `interior` part is drawn as the insert that fills its box, with `fit_card.png` |
 | `build <job> <Part>` | a `"method": "code"` part: runs `parts/<Part>/build.py` (`def build(kit, L, W, H)`, kit in `mastersmith/blender/hskit.py`) -> `<Part>.blend` + side/front/iso renders |
 | `mesh <job> <Part> [--vendor local\|tripo\|hitem3d3] [--from quarter\|side]` | meshes the part and registers it |
-| `register <job> <Part> [--yaw deg] [--pitch deg] [--from side]` | registers again, with your correction |
+| `register <job> <Part> [--yaw deg] [--pitch deg] [--from side] [--front +X]` | registers again, with your correction |
+| `segment <job> [--part Body] [--model hunyuan-part] [--redo]` | the registered seed split into labelled parts (2026-10-04; $0.45): a welded copy decimated under 30k faces goes to the segmenter, every seed face takes the nearest returned part's label (the `ms_segment` face attribute in registered.blend; the geometry is untouched), `parts/<Part>/segments.json` lists each label's share and percent box, `segments.png` / `segments_side.png` show them in colours. Read them, name the labels, then zones name them with `"segment"` |
 | `fit <job> <Part> [--quarter] [--free]` | bends the registered seed through a coarse lattice until its outline lies on its side picture (and three-quarter picture), reports the overlap before/after and how far the surface turned; a fit that would crumple the surface or gains nothing is refused and the mesh left as it was (`--free`: the old per-vertex fit, which crumpled a Tripo fuselage by 1 m); `registered_unfitted.blend` is the undo |
 | `cabin <job> <Part> [--hull <Part>]` | measures the body's open cockpit well (floor, walls, sill) with rays on its registered seed placed as the assembler places it, prints the interior's box that fits (mm and plan percents) and draws `parts/<Part>/fit_card.png` |
 | `brush <job> <Part> --op inflate\|move\|smooth\|flatten\|crease --at front+0,0,-0.01 --radius 10 --strength 2` | one headless brush stroke (mm; anchors front/back/top/bottom/left/right/centre); logged in `brush_log.json`, `--replay` after a re-mesh |
@@ -219,7 +228,7 @@ an assemble, 2026-09-29).
 | `results [<job> ...] [--no-open]` | every delivered job (or the listed ones) on one local page: six views, score and defects from `delivery/scorecard.json` (`{"score", "spent", "tonetta", "defects"}`, written by the agent after its review), cost, links to each job's 3D preview, GLB and zip, all from one port |
 | `serve [--restart\|--stop] [--no-open]` | the ONE local site on port 8765 (`MASTERSMITH_PREVIEW_PORT`): the home page lists every build (score, 3D preview, six views, references, zip) and every job still without a build; `/results` the builds with their six views and defects, `/refs` the reference review; every page, the 3D previews included, carries the same nav bar. `preview`, `refs` and `results` start it when it is not running and restart it when its code changed; nothing else opens a port (owner, 2026-09-29) |
 | `preview <job> [--no-open]` | writes `delivery/preview.html` (3D viewer, six views, every part's pictures beside its seed) and opens it on the site: `http://127.0.0.1:8765/<Name>/delivery/preview.html` |
-| `package <job>` | README, manifest, zip in delivery/; prints the delivery gate's warnings (LOD0 within the budget x1.05, BaseColor/Normal/ORM present, size within +-10% of the brief, glass present when asked for, mean roughness >= 0.3, UCX hull <= 256 triangles) |
+| `package <job>` | README, manifest, zip in delivery/; prints the delivery gate's warnings (LOD0 within the budget x1.05, BaseColor/Normal/ORM present, size within +-10% of the brief, glass present when asked for, mean roughness >= 0.3, UCX hull <= 256 triangles, the muzzle open, the FBX read back at size, the GLB read back without Blender (`glb_check`: size, LOD0 triangles, sockets, embedded textures, one scene), a part's texel density not under 40% of the asset's mean (`texel_density`, px/cm per part by atlas tile)) |
 | `status <job>` | what the job has so far: pictures and their review, parts, delivery, score (self or owner), the models used, the money spent and the owner's notes (`decisions.json`) |
 
 `<job>` is `out/<Name>`. Every command prints where it wrote; Read those files.
@@ -274,6 +283,8 @@ Two passes in `assemble` make the surfaces (both on by default; `--no-projection
 ## Unreal handoff
 
 What the eight Proteus weapons taught (2026-10-01), now in `assemble` and `ms rig`:
+- **Tangents**: the FBX carries the tangents the normal map was baked against (`use_tspace`, 2026-10-04, Mixar's
+  Unreal preset): import with "Import Normals and Tangents" so the bake reads as Blender meant it at the seams.
 - **Units**: the FBX is written in centimetres with no scale on any node (`global_scale` 0.01 cancels the exporter's
   own x100); the GLB and the .blend stay in metres. `report.json`'s `fbx_check` reads the FBX back: its size must be
   the asset's and its root node scale 1 (`node_scale`). A rigged FBX left in metres came into Unreal 5.8's Interchange
@@ -321,7 +332,8 @@ plane (not world Y=0) by mirroring the intact side with scale -1, UVs kept.
 `.venv/Scripts/python.exe -m pytest tests -q` (about 15 s; the tests pin the LLM/no-spend env). Blender scripts
 cannot be unit-tested; keep their maths in a pure-numpy module the tests can load (`blender/muzzle.py`,
 `restrained_finish.py`), run the rest on a real job and look - on a `ms clone`, never on a job's own delivery. Every
-Blender run is `-b --factory-startup -Y` (no user add-ons: BlenderMCP printed errors in every headless run) and
+Blender run is `-b --factory-startup -Y --python-exit-code 1` (no user add-ons: BlenderMCP printed errors in every
+headless run; a script that raises exits 1 so the command fails instead of reading last run's files, 2026-10-04) and
 streams into `out/<Name>/<tag>.log` while it runs, with a header and a footer (`finished in N s, exit C`); a log
 without the footer is still running - the old log is gone, so it is never last run's traceback. Keep the code style:
 one-line docstrings that say why, dated notes for lessons learned. Shell hygiene (the logs of 2026-09-29/10-01:

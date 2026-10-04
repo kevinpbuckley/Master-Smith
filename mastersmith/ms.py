@@ -35,6 +35,7 @@ deterministic thing and writes into a job folder under out/<Name>/:
 import argparse
 import glob
 import json
+import math
 import os
 import shutil
 import socket
@@ -45,7 +46,7 @@ import webbrowser
 
 from PIL import Image, ImageOps
 
-from . import config, jobs as jobtools, ledger, models, picturecheck, pricing, refs_review, results_page, site
+from . import config, glbcheck, jobs as jobtools, ledger, models, picturecheck, pricing, refs_review, results_page, site
 from .fal import Fal, first_url
 from .images import Images
 from .spec import Spec
@@ -304,7 +305,7 @@ def cmd_models(a):
     if a.action == "add":
         if not a.key or not a.command:
             sys.exit('usage: ms models add <key> --kind seed|picture --command "exe {image} {out} ..." [--inputs multiview] [--label ...]')
-        m = models.add(a.key, a.kind, a.command, label=a.label or "", inputs=a.inputs, notes=a.notes or "")
+        m = models.add(a.key, a.kind, a.command, label=a.label or "", inputs=a.inputs, notes=a.notes or "", front=a.front)
         print("registered %s (%s, %s): %s -> %s" % (a.key, m["kind"], m["inputs"], m["command"], models.registry_path()))
         return
     if a.action == "remove":
@@ -312,12 +313,14 @@ def cmd_models(a):
         print("removed %s from %s" % (a.key, models.registry_path()))
         return
     rows = sorted(models.all_models().values(), key=lambda m: (m["kind"], m["source"], m["key"]))
-    for kind in ("seed", "texture", "picture"):
-        print("%s models (ms %s --model <key>):" % (kind, {"seed": "seed", "texture": "retexture"}.get(kind, "picture/view/part-pictures")))
+    for kind in ("seed", "texture", "segment", "picture"):
+        print("%s models (ms %s --model <key>):" % (kind, {"seed": "seed", "texture": "retexture", "segment": "segment"}.get(
+            kind, "picture/view/views/part-pictures")))
         for m in (r for r in rows if r["kind"] == kind):
             usd = models.price_of(m)
-            print("  %-13s %-30s %-9s %-10s %s" % (m["key"], m["label"], "free" if usd == 0 else ("$%.2f" % usd if usd else "unpriced"),
-                                                   m["inputs"], m.get("notes") or m.get("command", "")))
+            front = ("faces %s; " % m["front"]) if m.get("front") else ""
+            print("  %-13s %-30s %-9s %-10s %s%s" % (m["key"], m["label"], "free" if usd == 0 else ("$%.2f" % usd if usd else "unpriced"),
+                                                     m["inputs"], front, m.get("notes") or m.get("command", "")))
     print("aliases: " + ", ".join("%s = %s" % kv for kv in sorted(models.ALIASES.items())))
     print('register a local model: ms models add <key> --kind seed --command "<exe> {image} {out} ..."')
 
@@ -412,7 +415,8 @@ def cmd_seed(a):
         print("plan: one part, %s, keeping the seed's own texture (plan/plan_draft.json)" % a.part)
     shutil.copy2(job.path("plan", "side.png"), os.path.join(d, "side.png"))
     part = _part(_plan(job), a.part)
-    _do_register(job, part, d, False, 0, 0)
+    seed_view = "front" if m["inputs"] == "multiview" else primary     # a multi-view seed faces its front picture
+    _do_register(job, part, d, False, 0, 0, front_yaw=models.front_yaw(m.get("front"), seed_view))
     json.dump({"keep_depth": True}, open(os.path.join(d, "fit.json"), "w"))       # the model saw the depth from its views
     print("Next: Read seed_render.png; add zones to plan/plan_draft.json for the regions in another material (glass, "
           "bare steel, rubber), ms plan, then ms assemble.")
@@ -515,9 +519,10 @@ def cmd_mesh(a):
     _do_register(job, part, d, a.src == "quarter" and os.path.exists(os.path.join(d, "quarter.png")), 0, 0)
 
 
-def _do_register(job, part, d, sweep, yaw, pitch):
+def _do_register(job, part, d, sweep, yaw, pitch, front_yaw=None):
     side = os.path.join(d, "side.png")
-    reg = _register(job, part["name"], os.path.join(d, "seed.glb"), side, d, yaw_sweep=sweep, extra_yaw=yaw, extra_pitch=pitch)
+    reg = _register(job, part["name"], os.path.join(d, "seed.glb"), side, d, yaw_sweep=sweep, extra_yaw=yaw, extra_pitch=pitch,
+                    front_yaw=front_yaw)
     if not reg:
         print("registration failed (silhouette too different); try --from side or a manual --yaw/--pitch")
         return
@@ -525,6 +530,12 @@ def _do_register(job, part, d, sweep, yaw, pitch):
     json.dump(meta, open(os.path.join(d, "fit.json"), "w"))
     print("registered: mode %s, silhouette overlap %.2f (runner-up %.2f); render: %s" % (
         reg["mode"], reg["iou"], reg["runner_up_iou"], reg.get("render")))
+    if reg.get("prior"):
+        # the vendor's usual front (models.py "front", 2026-10-04): a tie-breaker, recorded either way
+        pr = reg["prior"]
+        verdict = ("agrees" if pr.get("agrees") else "APPLIED to break a tie between the two ends" if pr.get("applied")
+                   else "DISAGREES: the silhouette chose the other end; check seed_render.png against side.png")
+        print("  vendor front prior (yaw %.0f): %s (IoU %.2f against the best %.2f)" % (pr["front_yaw"], verdict, pr["iou"], pr["best_iou"]))
     print("Look at seed_render.png next to side.png; re-run register with --yaw/--pitch if it sits wrong.")
 
 
@@ -532,7 +543,8 @@ def cmd_register(a):
     job = Job(a.job)
     part = _part(_plan(job), a.part)
     d = job.path("parts", part["name"])
-    _do_register(job, part, d, a.src == "quarter", a.yaw, a.pitch)
+    _do_register(job, part, d, a.src == "quarter", a.yaw, a.pitch,
+                 front_yaw=models.front_yaw(a.front, "left" if a.src == "side" else None))
 
 
 # ---------------------------------------------------------------- sculpting: fit (#11), sdf (#12), brush (#13)
@@ -947,6 +959,7 @@ def cmd_assemble(a):
         parts.append({"name": p["name"], "kind": "vendor", "box_min": p["box_min"], "box_max": p["box_max"], "material": p["material"],
                       "fitted": os.path.exists(os.path.join(d, "fit_report.json")), "interior": bool(p.get("interior")), "body": is_largest,
                       "centreline": bool(p.get("centreline")), "zones": p.get("zones") or [], "blend": blend, "yaw": 0,
+                      "carve": bool(p.get("carve")) and not is_largest,
                       "keep_depth": bool(fit.get("keep_depth")) and is_largest, "fill_box": not is_largest,
                       "lettering": p.get("lettering") or []})
     if not parts:
@@ -999,10 +1012,17 @@ def cmd_assemble(a):
         print("Read the renders; run the full assemble (no --draft) once the boxes and picks are right.")
         return
     rep = json.load(open(os.path.join(delivery, "report.json")))
+    _glb_gate(job, delivery, rep)
     sheet = six_view_sheet(job, delivery)
     print("assembled %d parts -> %s" % (len(parts), delivery))
     print("  size %s m, LOD0 %s tris, origin %s" % (rep.get("dimensions_m"), (rep.get("lods") or [{}])[0].get("triangles"),
                                                     (rep.get("origin") or {}).get("mode", "centre")))
+    if rep.get("texel_density"):
+        td = rep["texel_density"]
+        print("  texel density: %s px/cm mean (10th percentile %s), %.0f%% of the %s px atlas used" % (
+            td.get("px_per_cm"), td.get("p10_px_per_cm"), (td.get("atlas_used") or 0) * 100, td.get("atlas_px")))
+    if rep.get("glb_check"):
+        print("  GLB read back: %s" % _glb_line(rep["glb_check"]))
     if rep.get("sockets"):
         print("  sockets (SOCKET_ in the FBX, metres): " + ", ".join("%s %s" % (s["name"], s["location"]) for s in rep["sockets"]))
     if rep.get("muzzle") is not None:
@@ -1180,6 +1200,135 @@ def cmd_serve(a):
         webbrowser.open(url)
 
 
+def cmd_views(a):
+    """Several standard views from ONE picture call (2026-10-04, Mixar's turnaround sheet as the prompt): a sheet of
+    panels drawn from the hero and split into ref/ref_<view>.png. One call instead of one per view keeps every
+    view the same object and costs a quarter. A panel with nothing in it, or whose object bleeds into its
+    neighbour, is refused by name and left to `ms view`, never cropped as if it were fine (Mixar: a multi-view
+    submit refuses loudly rather than degrading to one picture)."""
+    job = Job(a.job)
+    src = job.path(a.src)
+    which = [w.strip().lower() for w in a.which.split(",") if w.strip()]
+    bad = [w for w in which if w not in VIEW_TEXT or w == "quarter"]
+    if bad or not which:
+        sys.exit("--which takes a comma list of %s" % ", ".join(sorted(k for k in VIEW_TEXT if k != "quarter")))
+    outs = {w: job.path("ref", "ref_%s.png" % w) for w in which}
+    todo = {w: p for w, p in outs.items() if not keep_existing(p, a.redraw)}
+    if not todo:
+        return
+    n = len(todo)
+    rows, cols = (1, n) if n <= 2 else ((2, 2) if n <= 4 else (2, 3))
+    aspect = {(1, 1): "1:1", (1, 2): "16:9", (2, 2): "1:1", (2, 3): "4:3"}[(rows, cols)]
+    order = list(todo)
+    panels = "; ".join("panel %d (row %d, column %d): %s" % (i + 1, i // cols + 1, i % cols + 1, VIEW_TEXT[w])
+                       for i, w in enumerate(order))
+    prompt = ("A turnaround reference sheet of this exact same object: %d panels in a grid of %d row%s and %d column%s on "
+              "one plain pure white background, wide empty white gutters between the panels, the whole object inside each "
+              "panel touching nothing, no labels, no text, no frames, no lines, no shadows. Same object, same design, same "
+              "colours, markings and materials in every panel; each panel strictly orthographic with no perspective. %s. %s"
+              % (n, rows, "s" if rows > 1 else "", cols, "s" if cols > 1 else "", panels, a.fixes or "")).strip()
+    if a.sheet:
+        # a sheet that exists: the one a refused run kept, or a turnaround the owner dropped in (the Kestrel's concept
+        # sheet, 2026-10-04); its panels are read in the order of --which, nothing is drawn
+        sheet, usd = job.path(a.sheet), None
+    else:
+        sheet = job.path("ref", "sheet_%s.png" % "_".join(order))
+        job.images.generate(prompt, sheet, model=_picture_model(a.model), references=[src], aspect_ratio=aspect)
+        usd = job.images.spent() if hasattr(job.images, "spent") else None
+    cells = picturecheck.sheet_cells(sheet, len(order))
+    im = Image.open(sheet).convert("RGB")
+    written, refused = [], []
+    for w, cell in zip(order, cells):
+        if cell["box"] is None:
+            refused.append("%s: %s" % (w, cell["reason"]))
+            continue
+        x0, y0, x1, y1 = cell["box"]
+        mx, my = int(0.05 * (x1 - x0)) + 2, int(0.05 * (y1 - y0)) + 2
+        crop = im.crop((x0, y0, x1, y1))
+        out = Image.new("RGB", (crop.width + 2 * mx, crop.height + 2 * my), (255, 255, 255))
+        out.paste(crop, (mx, my))
+        if a.mirror and w in ("side", "left"):
+            out = ImageOps.mirror(out)
+        out.save(outs[w])
+        written.append(w)
+    # a panel that is the hero drawn again, mirrored or not (the bullpup's "top" came back as its side, 2026-10-04):
+    # the hero's own proportions and a high correlation; two end-on views correlate at 0.86 but are four times
+    # narrower than the hero, so the proportions carry the test
+    same = [(p, q, picturecheck.same_picture(outs[p], outs[q])) for i, p in enumerate(written) for q in written[i + 1:]]
+    same = [s for s in same if s[2] > 0.95]
+    hero_aspect = picturecheck.object_aspect(src)
+    for w in written:
+        asp = picturecheck.object_aspect(outs[w])
+        if hero_aspect and asp and abs(math.log(asp / hero_aspect)) < math.log(1.15):
+            s = picturecheck.same_picture(outs[w], src)
+            if s > 0.8:
+                same.append((w, "the hero", s))
+    if not a.sheet:
+        ledger.record(job.dir, "views", model=a.model, usd=usd, out=os.path.relpath(sheet, job.dir), which=written,
+                      refused=refused or None)
+    for w in written:
+        print("view %s: %s" % (w, outs[w]))
+    for p, q, s in same:
+        print("  WARNING: %s and %s look like the same picture (%.2f): a view drawn again; redraw it with ms view --fixes" % (p, q, s))
+    print("sheet: %s (Read it; a weapon's side view must point right: --mirror when it does not)" % sheet)
+    if refused:
+        sys.exit("not written: %s. Crop them by hand from the sheet, or draw them one at a time: ms view %s --which <view> --from %s"
+                 % ("; ".join(refused), a.job, a.src))
+
+
+def cmd_segment(a):
+    """The registered seed split into labelled parts by a segmentation model (2026-10-04; Mixar wires Tripo's and
+    Hunyuan's segmenters, and Hunyuan3D-Part is on fal): the seed goes out welded and decimated under the service's
+    face limit (the seed file's geometry is untouched), the parts come back as meshes, every seed face takes the
+    nearest part's label (`parts/<Part>/segments.json`, the ms_segment face attribute in registered.blend,
+    segments.png and segments_side.png), and a zone in the plan can name labels instead of a box: "segment": 3 or
+    [3, 5]. Material zones and glass picks then follow the seed's own part lines instead of percent boxes."""
+    job = Job(a.job)
+    m = models.resolve(a.model, kind="segment")
+    part = _part(_plan(job), a.part)
+    d = job.path("parts", part["name"])
+    blend = os.path.join(d, "registered.blend")
+    if not os.path.exists(blend):
+        sys.exit("%s is not seeded and registered yet (ms seed)" % part["name"])
+    out_json = os.path.join(d, "segments.json")
+    if os.path.exists(out_json) and not a.redo:
+        sys.exit("%s is segmented already (%s); --redo spends again" % (part["name"], out_json))
+    seg_dir = os.path.join(d, "segments")
+    os.makedirs(seg_dir, exist_ok=True)
+    print("segmenting %s with %s: $%.2f" % (part["name"], m["label"], models.price_of(m) or 0))
+    fbx = os.path.join(seg_dir, "input.fbx")
+    _blender(job, "segment_export.py", {"blend": blend, "out": fbx, "max_faces": a.max_faces},
+             "segment_export_%s" % part["name"], timeout=900)
+    os.environ["MASTERSMITH_NO_SPEND"] = "0"
+    config.NO_SPEND = False
+    url = job.fal.upload(fbx, mime="application/octet-stream")
+    out = job.fal.run(m["endpoint"], {"input_file_url": url}, timeout=1800)
+    files = [f.get("url") for f in (out.get("result_files") or []) if isinstance(f, dict) and f.get("url")]
+    if not files:
+        sys.exit("%s returned no parts: %s" % (m["label"], str(out)[:300]))
+    for stale in os.listdir(seg_dir):                     # an older run's parts never mix with these
+        if stale.startswith("part_"):
+            os.remove(os.path.join(seg_dir, stale))
+    paths = [job.fal.download(u, os.path.join(seg_dir, "part_%d.fbx" % i)) for i, u in enumerate(files)]
+    if os.path.exists(out_json):
+        os.remove(out_json)
+    ledger.record(job.dir, "segment", model=a.model, usd=job.fal.spent(), part=part["name"], parts=len(paths))
+    _blender(job, "segment_apply.py", {"blend": blend, "parts": paths, "out_json": out_json,
+                                       "out_render": os.path.join(d, "segments.png"),
+                                       "out_side_render": os.path.join(d, "segments_side.png")},
+             "segment_apply_%s" % part["name"], timeout=900)
+    if not os.path.exists(out_json):
+        sys.exit("segment_apply wrote no %s; see %s" % (out_json, job.path("segment_apply_%s.log" % part["name"])))
+    seg = json.load(open(out_json))
+    print("%d labels on %d faces ($%.2f)%s:" % (len(seg["labels"]), seg["faces"], job.fal.spent(),
+                                                "; the parts came back re-centred and were fitted to the seed's box" if seg.get("parts_refitted") else ""))
+    for lab in seg["labels"]:
+        print("  label %-3d %5.1f%%  side_box %-24s front_span %-14s %s" % (lab["label"], lab["share"] * 100, lab["side_box"],
+                                                                           lab["front_span"], lab["colour"]))
+    print("Read %s and %s, name each label, then give zones \"segment\": <label> in plan/plan_draft.json and ms plan."
+          % (os.path.join(d, "segments.png"), os.path.join(d, "segments_side.png")))
+
+
 def cmd_sheet(a):
     class J:
         pass
@@ -1197,9 +1346,35 @@ def cmd_sheet(a):
     print("six views:", out)
 
 
+def _glb_line(chk):
+    return "%s tris, %s m, %d socket(s), %d texture(s)%s, %s" % (
+        chk.get("triangles"), chk.get("dimensions_m"), len(chk.get("sockets") or {}), chk.get("images") or 0,
+        " embedded" if chk.get("images_embedded") else "", "ok" if chk.get("passed") else "; ".join(chk.get("issues") or ["not checked"]))
+
+
+def _glb_gate(job, delivery, rep):
+    """The delivered GLB read back without Blender (mastersmith/glbcheck.py, 2026-10-04, from Mixar's export
+    verification): its size, triangles, sockets and textures against report.json, its findings added to the gate
+    and the report written again. The FBX was read back at the end of assemble; the GLB never was."""
+    glb = os.path.join(delivery, "SM_%s.glb" % job.spec.name)
+    if not os.path.exists(glb):
+        return None
+    chk = glbcheck.check(glb, rep)
+    rep["glb_check"] = chk
+    gate = rep.setdefault("gate", {"ok": True, "warnings": []})
+    gate["warnings"] = [w for w in gate.get("warnings") or [] if not w.startswith("GLB: ")] + ["GLB: " + w for w in chk["issues"]]
+    gate["ok"] = not gate["warnings"]
+    with open(os.path.join(delivery, "report.json"), "w") as f:
+        json.dump(rep, f, indent=1)
+    return chk
+
+
 def cmd_package(a):
     job = Job(a.job)
     rep = json.load(open(job.path("delivery", "report.json")))
+    chk = _glb_gate(job, job.path("delivery"), rep)
+    if chk:
+        print("  GLB read back: %s" % _glb_line(chk))
     review = json.load(open(job.path("delivery", "review.json"))) if os.path.exists(job.path("delivery", "review.json")) else None
     gate = rep.get("gate") or {"ok": True, "warnings": ["assembled before the delivery gate existed"]}
     for w in gate.get("warnings") or []:
@@ -1222,7 +1397,7 @@ def cmd_status(a):
         plan = _plan(job)
         for p in plan["parts"]:
             d = job.path("parts", p["name"])
-            have = [f for f in ("side.png", "quarter.png", "seed.glb", "registered.blend") if os.path.exists(os.path.join(d, f))]
+            have = [f for f in ("side.png", "quarter.png", "seed.glb", "registered.blend", "segments.json") if os.path.exists(os.path.join(d, f))]
             reg = json.load(open(os.path.join(d, "registration.json"))) if os.path.exists(os.path.join(d, "registration.json")) else {}
             print("  %-22s %s %s" % (p["name"], have, ("iou %.2f" % reg["iou"]) if reg else ""))
     else:
@@ -1519,6 +1694,8 @@ def main(argv=None):
     s = sub.add_parser("mesh"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--vendor", default="local")
     s.add_argument("--from", dest="src", default="quarter", choices=("quarter", "side")); s.set_defaults(fn=cmd_mesh)
     s = sub.add_parser("register"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--from", dest="src", default="quarter", choices=("quarter", "side"))
+    s.add_argument("--front", choices=sorted(models.FRONT_YAW), help="the axis the pictured side faces on the vendor's seeds (+X for Tripo); "
+                   "with --from side it is a tie-breaker between the two ends")
     s.add_argument("--yaw", type=float, default=0.0); s.add_argument("--pitch", type=float, default=0.0); s.set_defaults(fn=cmd_register)
     s = sub.add_parser("fit"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--quarter", action="store_true")
     s.add_argument("--iters", type=int, default=8); s.add_argument("--step", type=float, default=0.6); s.add_argument("--no-backup", action="store_true")
@@ -1554,10 +1731,23 @@ def main(argv=None):
     s.add_argument("--no-surface-detail", action="store_true", help="no procedural cast-surface wear and grain on a seed (always "
                    "off for a nature brief)")
     s.set_defaults(fn=cmd_assemble)
+    s = sub.add_parser("views", help="several standard views from ONE turnaround-sheet picture call, split into ref/ref_<view>.png")
+    s.add_argument("job"); s.add_argument("--from", dest="src", required=True, help="the hero picture")
+    s.add_argument("--which", default="front,left,back,top", help="comma list of %s (a weapon's hero is its side: front,back,top)"
+                   % ", ".join(sorted(k for k in VIEW_TEXT if k != "quarter")))
+    s.add_argument("--fixes"); s.add_argument("--mirror", action="store_true", help="mirror the side view (its forward end must point right)")
+    s.add_argument("--sheet", help="split this sheet (a kept one, or the owner's) in the order of --which; nothing is drawn")
+    s.add_argument("--model", default="nano"); s.add_argument("--redraw", action="store_true", help="draw over existing views (ask the owner first)")
+    s.set_defaults(fn=cmd_views)
+    s = sub.add_parser("segment", help="the registered seed split into labelled parts that zones can name (ms models: segment models)")
+    s.add_argument("job"); s.add_argument("--part", default="Body"); s.add_argument("--model", default="hunyuan-part")
+    s.add_argument("--max-faces", type=int, default=28000, help="the decimated copy that is sent (Hunyuan takes 30k at most)")
+    s.add_argument("--redo", action="store_true", help="segment again (it costs again)"); s.set_defaults(fn=cmd_segment)
     s = sub.add_parser("sheet"); s.add_argument("glb"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
     s = sub.add_parser("models"); s.add_argument("action", nargs="?", default="list", choices=("list", "add", "remove"))
     s.add_argument("key", nargs="?"); s.add_argument("--kind", default="seed", choices=("seed", "picture")); s.add_argument("--command")
     s.add_argument("--inputs", default="single", choices=("single", "multiview")); s.add_argument("--label"); s.add_argument("--notes")
+    s.add_argument("--front", choices=sorted(models.FRONT_YAW), help="the axis its seeds usually face after import")
     s.set_defaults(fn=cmd_models)
     s = sub.add_parser("seed"); s.add_argument("job"); s.add_argument("--model", required=True, help="a seed model from ms models")
     s.add_argument("--part", default="Body"); s.add_argument("--view", choices=("hero", "left", "front", "back", "top"),

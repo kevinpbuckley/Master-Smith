@@ -63,3 +63,17 @@ def test_glass_alpha_passes_through_clamped():
     assert planmod.clean_material({"finish": "glass", "alpha": 0.95})["alpha"] == 0.7
     assert planmod.clean_material({"finish": "glass", "alpha": True}).get("alpha") is None
     assert planmod.clean_material({"finish": "painted", "alpha": 0.5}).get("alpha") is None
+
+
+def test_a_zone_may_name_segmentation_labels_instead_of_a_box():
+    # 2026-10-04: `ms segment` labels the seed's faces; a zone names labels, with or without a box
+    raw = {"parts": [_part(zones=[{"name": "Barrel", "segment": 3, "material": {"finish": "metal", "metal": True}},
+                                   {"name": "Pads", "segment": [1, 4], "side_box": [0, 50, 0, 100], "material": {"finish": "rubber"}},
+                                   {"name": "Bad", "segment": "three", "side_box": [0, 50, 0, 100], "material": {"finish": "rubber"}}])],
+           "notes": ""}
+    plan = planmod.validate_plan(raw, DIMS)
+    zones = {z["name"]: z for z in plan["parts"][0]["zones"]}
+    assert zones["Barrel"]["segment"] == 3 and zones["Barrel"]["box_given"] is False
+    assert zones["Barrel"]["side_box"] == [0, 100, 0, 100]                    # the whole part: the labels decide
+    assert zones["Pads"]["segment"] == [1, 4] and zones["Pads"]["box_given"] is True
+    assert "segment" not in zones["Bad"] and any("Bad].segment" in s for s in plan["ignored"])

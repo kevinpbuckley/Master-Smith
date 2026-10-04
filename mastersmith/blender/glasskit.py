@@ -404,6 +404,24 @@ def glass_paint(rgb, mode):
     return (mx <= 0.22) & (sat <= 0.35), mx <= 0.35
 
 
+def segment_labels(o):
+    """The segmentation's part label of every face (`ms segment` wrote the ms_segment face attribute), or None."""
+    att = o.data.attributes.get("ms_segment")
+    if att is None or att.domain != "FACE":
+        return None
+    out = np.empty(len(o.data.polygons), np.int32)
+    att.data.foreach_get("value", out)
+    return out
+
+
+def segment_mask(labels, wanted, n):
+    """The faces whose label is in `wanted` (one label or a list); none when the part was never segmented."""
+    if labels is None:
+        return np.zeros(n, bool)
+    want = list(wanted) if isinstance(wanted, (list, tuple)) else [wanted]
+    return np.isin(labels, [int(v) for v in want])
+
+
 def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     """A glass zone's faces picked the way Tonetta's forge picks them (glass/SKILL.md, 2026-09-29): inside the zone's
     box (grown a little), the faces whose seed texture is painted like glass (`glass_paint`; "auto" takes the style
@@ -443,6 +461,11 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     diag = (hi_o - lo_o).length
     lo, hi = np.array(z["box_min"]) - 0.02 * diag, np.array(z["box_max"]) + 0.02 * diag
     inbox = np.all((centres >= lo) & (centres <= hi), axis=1)
+    if z.get("segment") is not None:
+        # 2026-10-04: the segmentation's labelled faces stand in for the box (ms segment); the colour pick below
+        # still separates the panes from the frame inside them
+        want = segment_mask(segment_labels(o), z["segment"], n)
+        inbox = (inbox & want) if z.get("box_given") else want
     fa, fb, _ = face_pairs(me, diag * 1e-5)
     rgb = face_rgb(o) if mode != "box" else None
     tree = mesh_tree(o)

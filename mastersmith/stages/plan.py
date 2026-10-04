@@ -353,15 +353,26 @@ def clean_material(mat):
 # and was patched six times on 2026-09-29 for keys the agent had already written (pick, keep, lettering, line, shell).
 TOP_KEYS = {"parts", "notes", "overall_width_m"}
 PART_KEYS = {"name", "what", "method", "side_box", "front_span", "material", "zones", "reference_detail", "skin",
-             "edge_break", "interior", "centreline", "lettering"}
+             "edge_break", "interior", "centreline", "lettering", "carve"}
 ZONE_KEYS = {"name", "side_box", "front_span", "material", "pick", "keep", "strength", "fill", "line", "shell", "flat",
-             "glow", "vertices", "triangles", "tolerance", "bounds"}
+             "glow", "vertices", "triangles", "tolerance", "bounds", "segment"}
 MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha"}
 GLOW_KEYS = {"hue", "hue_tol", "min_sat", "min_val"}
 PICKS = ("auto", "dark", "pale", "lit", "box", "atlas", "fitted")
 # what a validated plan.json carries besides the plan (fed back through `ms plan` it is not "ignored")
 DERIVED = {"box_min", "box_max", "color_planned", "pbr_set", "dropped", "dims_m", "side", "front", "side_grid",
            "front_grid", "ignored"}
+
+
+def clean_segment(value):
+    """A zone's segmentation label(s): one non-negative int or a non-empty list of them, else None."""
+    def ok(v):
+        return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+    if ok(value):
+        return int(value)
+    if isinstance(value, (list, tuple)) and value and all(ok(v) for v in value):
+        return [int(v) for v in value]
+    return None
 
 
 def unknown_keys(where, d, known):
@@ -447,7 +458,9 @@ def validate_plan(raw, dims, max_parts=None):
         # explicit "centreline" pass through to the assembler
         if str(p.get("method") or "code").lower() not in ("code", "vendor"):
             ignored.append("%s.method=%r (code or vendor; taken as %s)" % (name, p.get("method"), part["method"]))
-        for key in ("skin", "edge_break", "interior", "centreline"):
+        # 2026-10-04: "carve" (a replacement part: the body's faces inside its box go before it is placed - the
+        # Kestrel's soft seed nozzle under an exact sdf one)
+        for key in ("skin", "edge_break", "interior", "centreline", "carve"):
             if key in p:
                 part[key] = bool(p[key])
         # 2026-09-29: "lettering", side boxes (percent of the side grid) around painted words: the picture prints
@@ -478,6 +491,14 @@ def validate_plan(raw, dims, max_parts=None):
                     continue
                 ignored += unknown_keys(zn, z, ZONE_KEYS)
                 ignored += unknown_keys(zn + ".material", z.get("material"), MATERIAL_KEYS)
+                # 2026-10-04: a zone may name the segmentation's labels (`ms segment` -> parts/<Part>/segments.json)
+                # instead of, or as well as, a box: one label or a list; without a box it covers the whole part
+                segment = clean_segment(z.get("segment"))
+                if "segment" in z and segment is None:
+                    ignored.append("%s.segment=%r (a label from segments.json, or a list of them)" % (zn, z["segment"]))
+                box_given = bool(z.get("side_box"))
+                if segment is not None and not box_given:
+                    z = dict(z, side_box=[0, 100, 0, 100], front_span=z.get("front_span") or [0, 100])
                 try:
                     zmin, zmax = to_metres(z.get("side_box") or [], z.get("front_span") or p["front_span"], dims)
                 except (ValueError, TypeError) as exc:
@@ -485,6 +506,8 @@ def validate_plan(raw, dims, max_parts=None):
                     continue
                 zone = {"name": clean_name(z.get("name"), set()), "box_min": zmin, "box_max": zmax,
                         "side_box": [pct(v) for v in z["side_box"]], "material": clean_material(z.get("material"))}
+                if segment is not None:
+                    zone["segment"], zone["box_given"] = segment, box_given
                 # 2026-09-29: how a glass zone's faces are picked (auto / dark / pale / lit / box / atlas / fitted),
                 # how many patches it keeps, whether holes in its frame get a glass shell and the walls seen through
                 # it a lining, and an emissive zone's strength

@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import blib  # noqa: E402
 from mastersmith import sculpt  # noqa: E402
+import texel  # noqa: E402
 
 args = json.load(open(sys.argv[sys.argv.index("--") + 1]))
 NAME = args["name"]
@@ -502,12 +503,21 @@ def split_zones(o, zones):
     pairs = np.unique(fs[rep] * n + fs[np.repeat(start_e, k_e) + within])
     face_a, face_b = pairs // n, pairs % n
     degree = np.bincount(face_a, minlength=n).astype(np.float32)
+    seg = segment_labels(o)
     for z in zones:
         lo, hi = np.array(z["box_min"]), np.array(z["box_max"])
         inside = np.all((centres >= lo) & (centres <= hi), axis=1)
-        for _ in range(2):
-            votes = np.bincount(face_a, weights=inside[face_b].astype(np.float32), minlength=n) / np.maximum(degree, 1.0)
-            inside = votes > 0.5
+        if z.get("segment") is not None:
+            # 2026-10-04: a zone named by the segmentation's labels (ms segment; the ms_segment face attribute)
+            # instead of a box: exactly the labelled faces, inside the box only when the plan gave one
+            want = segment_mask(seg, z["segment"], n)
+            inside = (inside & want) if z.get("box_given") else want
+        else:
+            for _ in range(2):
+                votes = np.bincount(face_a, weights=inside[face_b].astype(np.float32), minlength=n) / np.maximum(degree, 1.0)
+                inside = votes > 0.5
+        log("zone %s: %d faces%s" % (z.get("name"), int(inside.sum()),
+                                      " by segment %s" % z["segment"] if z.get("segment") is not None else ""))
         if inside.sum() < 20:
             continue
         made = {}
@@ -811,7 +821,7 @@ EMISSIVE = {"strength": 0.0}
 
 
 import muzzle as muzzlekit  # noqa: E402 - the open bores end-on (pure numpy, tested)
-from glasskit import crease_bars, rim_band, smooth_rim  # noqa: E402
+from glasskit import crease_bars, rim_band, segment_labels, segment_mask, smooth_rim  # noqa: E402
 from glasskit import (  # noqa: E402 - the glass and cockpit passes, shared with cabin.py
     base_image, face_rgb, face_pairs, components, mesh_tree, escapes,
     exterior_faces, canopy_hull, glass_shell, pane_object, glass_paint, pick_glass,
@@ -1218,6 +1228,26 @@ for p in args["parts"]:
                        if ((z.get("material") or {}).get("glass") or (z.get("material") or {}).get("finish") == "glass")
                        and z.get("pick") != "atlas"]
         interiors = [q for q in args["parts"] if q.get("interior") and q is not p]
+        carvers = [q for q in args["parts"] if q.get("carve") and q is not p]
+        if p.get("body") and carvers:
+            # 2026-10-04: a replacement part ("carve": true) takes the body's faces inside its box with it - the
+            # Kestrel's seed nozzle was a soft drum with melted rings ("gooey", owner) and an exact sdf nozzle sits
+            # in its box instead. Measured by face centre, the box as planned (the 1-2% overlap keeps the join
+            # covered); the seed file is not touched (rule 10). Reported per part so a carve that ate a wing shows.
+            me = o.data
+            nf = len(me.polygons)
+            cen = np.empty(nf * 3, np.float32)
+            me.polygons.foreach_get("center", cen)
+            cen = cen.reshape(-1, 3)
+            gone = np.zeros(nf, bool)
+            rec["carved_for"] = {}
+            for q in carvers:
+                inside = np.all((cen >= np.array(q["box_min"])) & (cen <= np.array(q["box_max"])), axis=1)
+                rec["carved_for"][q["name"]] = int(inside.sum())
+                gone |= inside
+            if gone.any():
+                delete_faces(o, gone)
+                log("%s: %d faces carved out for %s" % (p["name"], int(gone.sum()), ", ".join(q["name"] for q in carvers)))
         if p.get("body") and interiors and glass_zones:
             # an interior part replaces the seed's own cockpit: its contents go before the glass is picked
             carve, cst = cockpit_contents(o, glass_zones, [(q["box_min"], q["box_max"]) for q in interiors])
@@ -2368,6 +2398,38 @@ lod0.data.uv_layers["UVMap"].active = True
 lod0.data.uv_layers["UVMap"].active_render = True
 
 size = int(args.get("atlas_size", 2048))
+
+
+def texel_report(o, px):
+    """Texel density of LOD0 in its atlas (blender/texel.py, 2026-10-04): px/cm per face in world metres, summarised
+    per part by its atlas tile; a part far under the asset's mean is a gate warning."""
+    me = o.data
+    n = len(me.polygons)
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    M = np.array(o.matrix_world)
+    co = co.reshape(-1, 3) @ M[:3, :3].T + M[:3, 3]
+    lv = np.empty(len(me.loops), np.int64)
+    me.loops.foreach_get("vertex_index", lv)
+    ls = np.empty(n, np.int64)
+    me.polygons.foreach_get("loop_start", ls)
+    lt = np.empty(n, np.int64)
+    me.polygons.foreach_get("loop_total", lt)
+    uv = np.empty(len(me.loops) * 2, np.float32)
+    me.uv_layers["UVMap"].data.foreach_get("uv", uv)
+    tiles = [(r["name"], *r["atlas_tile"]) for _o, r in parts if r.get("atlas_tile")]
+    return texel.summarize(texel.polygon_areas(co, lv, ls, lt), texel.uv_polygon_areas(uv, ls, lt), px, tiles,
+                           texel.uv_centroids(uv, ls, lt))
+
+
+try:
+    report["texel_density"] = texel_report(lod0, size)
+    log("texel density: %s px/cm mean, %s at the 10th percentile, %.0f%% of the %d px atlas used%s" % (
+        report["texel_density"]["px_per_cm"], report["texel_density"]["p10_px_per_cm"],
+        report["texel_density"]["atlas_used"] * 100, size,
+        "; " + "; ".join(report["texel_density"]["warnings"]) if report["texel_density"]["warnings"] else ""))
+except Exception as exc:  # noqa: BLE001 - a measurement, never a reason to stop the bake
+    log("texel density not measured: %s" % exc)
 lo, hi = blib.dims(high)
 diag = (hi - lo).length
 
@@ -2803,9 +2865,11 @@ for ob in (lod0, lod1, lod2, hull):
 for e in socket_objs:
     e.location = e.location * CM
     e.empty_display_size *= CM
+# use_tspace (2026-10-04, Mixar's Unreal preset): the tangents the normal map was baked against travel in the file, so
+# Unreal's "import normals and tangents" reads the bake as Blender meant it instead of recomputing tangents at the seams
 fbx_kw = dict(use_selection=True, apply_unit_scale=True, global_scale=0.01, apply_scale_options="FBX_SCALE_NONE",
-              axis_forward="-Z", axis_up="Y", mesh_smooth_type="FACE", use_mesh_modifiers=True, path_mode="STRIP",
-              embed_textures=False, add_leaf_bones=False, bake_anim=False)
+              axis_forward="-Z", axis_up="Y", mesh_smooth_type="FACE", use_tspace=True, use_mesh_modifiers=True,
+              path_mode="STRIP", embed_textures=False, add_leaf_bones=False, bake_anim=False)
 if args.get("wind_masks"):
     fbx_kw["colors_type"] = "LINEAR"           # mask values, not colours: no sRGB curve on the way to Unreal
 blib.select_only([lod0, hull] + socket_objs)
@@ -2865,6 +2929,7 @@ if report.get("roughness_mean") is not None and report["roughness_mean"] < 0.3:
     warn.append("mean roughness %.2f reads as glaze (under 0.3)" % report["roughness_mean"])
 if (report.get("collision") or {}).get("triangles", 0) > 256:
     warn.append("collision hull %d tris (over 256)" % report["collision"]["triangles"])
+warn += (report.get("texel_density") or {}).get("warnings") or []
 mz = report.get("muzzle")
 if mz is not None and not mz.get("open"):
     warn.append("the muzzle looks closed: %s end-on (preview_detail_muzzle.png); a shot must be able to leave the gun"

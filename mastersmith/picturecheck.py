@@ -82,6 +82,78 @@ def contact_sheet(job_dir, category, out, thumb=360):
     return out, warnings
 
 
+def sheet_cells(path, count, min_fill=0.002):
+    """The `count` panels of a turnaround sheet (2026-10-04, Mixar's detect-views as the
+    prompt: one picture call for several views). The picture model lays the panels out as it likes (three views
+    came back as two above one wide one, with divider lines, whatever the prompt said), so the panels are FOUND:
+    the foreground with thin lines opened away, its connected pieces, the `count` largest kept, read in rows
+    from the top and left to right. When the count is not what was asked (a view missing, two panels run
+    together) every panel is refused with the count, never matched to the wrong view.
+    -> [{"cell": k, "box": (x0, y0, x1, y1) or None, "reason": ...}] for k in reading order"""
+    from scipy import ndimage
+    im = Image.open(path).convert("RGB")
+    W, H = im.size
+    a = np.asarray(im).astype(np.float32) / 255.0
+    border = np.concatenate([a[:6].reshape(-1, 3), a[-6:].reshape(-1, 3), a[:, :6].reshape(-1, 3), a[:, -6:].reshape(-1, 3)])
+    fg = np.abs(a - np.median(border, axis=0)).max(axis=2) > 0.1
+    k = max(3, int(round(min(W, H) / 200.0)))                       # divider lines are a few pixels wide
+    opened = ndimage.binary_opening(fg, structure=np.ones((k, k), bool))
+    joined = ndimage.binary_dilation(opened, structure=np.ones((2 * k + 1, 2 * k + 1), bool))   # a sight back onto its gun
+    labels, _found = ndimage.label(joined)
+    want = int(count)
+    boxes = []
+    for sl in ndimage.find_objects(labels):
+        if sl is None:
+            continue
+        y0, y1, x0, x1 = sl[0].start, sl[0].stop, sl[1].start, sl[1].stop
+        if (x1 - x0) * (y1 - y0) / float(W * H) >= min_fill:
+            boxes.append((x0, y0, x1, y1))
+    boxes.sort(key=lambda b: -(b[2] - b[0]) * (b[3] - b[1]))
+    if len(boxes) != want:
+        reason = "found %d panel%s, asked for %d%s" % (len(boxes), "" if len(boxes) == 1 else "s", want,
+                                                      " (two ran together)" if len(boxes) < want else "")
+        return [{"cell": i, "box": None, "reason": reason} for i in range(want)]
+    # reading order: rows by vertical overlap from the top, then left to right
+    rows_out = []
+    for b in sorted(boxes, key=lambda b: b[1]):
+        for row in rows_out:
+            top, bottom = row[0][1], row[0][3]
+            if b[1] < bottom - 0.25 * (bottom - top):
+                row.append(b)
+                break
+        else:
+            rows_out.append([b])
+    ordered = [b for row in rows_out for b in sorted(row, key=lambda b: b[0])]
+    out = []
+    for i, (x0, y0, x1, y1) in enumerate(ordered):
+        # the box back to the un-dilated object, inside the picture
+        sub = fg[max(0, y0 - k):min(H, y1 + k), max(0, x0 - k):min(W, x1 + k)]
+        ys, xs = np.nonzero(sub)
+        bx = (max(0, x0 - k) + int(xs.min()), max(0, y0 - k) + int(ys.min()),
+              max(0, x0 - k) + int(xs.max()) + 1, max(0, y0 - k) + int(ys.max()) + 1)
+        out.append({"cell": i, "box": bx, "reason": ""})
+    return out
+
+
+def object_aspect(path):
+    """Width over height of the object in a picture (its box, not the picture's), or None for an empty one."""
+    box = object_box(Image.open(path).convert("RGB"))
+    return (box[2] - box[0]) / float(max(box[3] - box[1], 1)) if box else None
+
+
+def same_picture(path_a, path_b, size=64):
+    """Correlation of two pictures' greyscale silhouettes-and-shading at a thumbnail size, each cropped to its
+    object, the second also mirrored: a view that is another drawn again (or mirrored) reads over 0.9; different
+    views of one object well under."""
+    def thumb(path):
+        im = Image.open(path).convert("RGB")
+        box = object_box(im)                      # both cropped to their object: a sheet panel is framed tighter than a hero
+        im = im.crop(box) if box else im
+        return np.asarray(im.convert("L").resize((size, size), Image.BILINEAR)).astype(np.float32)
+    a, b = thumb(path_a), thumb(path_b)
+    return round(max(_ncc(a, b), _ncc(a, b[:, ::-1])), 3)      # the bullpup's "top" was its hero mirrored (2026-10-04)
+
+
 def _ncc(a, b):
     a, b = a - a.mean(), b - b.mean()
     return float((a * b).sum() / max(math.sqrt(float((a * a).sum() * (b * b).sum())), 1e-9))
