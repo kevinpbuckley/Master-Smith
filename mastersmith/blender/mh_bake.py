@@ -4,7 +4,9 @@
 args: {"source": the textured seed in the conform's frame (<Name>_conform.glb, or seed.glb / registered.blend),
        "posed_fbx": the skeletal mesh Unreal generated from the POSED DNA (Mesh to MetaHuman tab > save pose > generate
                     skeletal mesh > Asset Actions > Export), "name", "out_dir", "resolution": 4096, "cage_m": 0.012,
-       "maps": ["color", "normal"]}
+       "maps": ["color", "normal"], "head_source": a separate textured head mesh in the same frame (the head part bakes
+       from it), "far_pass": false, "skin_color": "#rrggbb" (pale texels on the parts in "skin_parts" take it),
+       "skin_parts": ["Body"], "align": true (the posed mesh moved onto the seed's bounds centre before baking)}
 Writes T_<Name>_Head_BC.png / _N.png and T_<Name>_Body_BC.png / _N.png on the MetaHuman UV layout (head on tile
 1001, the body's tile 1002 moved onto 0-1 so Blender can bake it), bake_report.json and bake_preview_<front|side>.png.
 
@@ -85,6 +87,19 @@ source = bpy.context.view_layer.objects.active
 source.name = "Source"
 if not any(m and m.use_nodes and any(n.type == "TEX_IMAGE" for n in m.node_tree.nodes) for m in source.data.materials):
     log("the source has no image texture: the colour bake will be its material colour only")
+# a separate head seed placed by mh_conform (<Name>_head.glb): the head part bakes from it, not from the body seed's
+# own soft face (the AINavigator's eyes printed on its cheeks, 2026-10-05)
+head_source = None
+if args.get("head_source"):
+    hs = load_any(args["head_source"])
+    if hs:
+        blib.select_only(hs)
+        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+        if len(hs) > 1:
+            bpy.ops.object.join()
+        head_source = bpy.context.view_layer.objects.active
+        head_source.name = "HeadSource"
+        log("the head bakes from %s" % os.path.basename(args["head_source"]))
 
 tgt = load_any(args["posed_fbx"])
 bpy.context.view_layer.update()
@@ -115,7 +130,15 @@ tlo, thi = bounds([target])
 res = {"source_height_m": round(float(shi[2] - slo[2]), 3), "posed_height_m": round(float(thi[2] - tlo[2]), 3),
        "centre_offset_m": [round(float(v), 3) for v in ((shi + slo) / 2 - (thi + tlo) / 2)]}
 report["alignment"] = res
-if abs(res["source_height_m"] - res["posed_height_m"]) > 0.03 * res["source_height_m"] or max(abs(v) for v in res["centre_offset_m"]) > 0.03:
+if abs(res["source_height_m"] - res["posed_height_m"]) > 0.03 * res["source_height_m"]:
+    log("WARNING the posed mesh is not the seed's height: %s - the pose or scale differs, the bake will smear" % res)
+elif max(abs(v) for v in res["centre_offset_m"]) > 0.01 and args.get("align", True):
+    # the solver stands the posed body off the mesh (19 cm behind it on the AINavigator's tracked solve, 2026-10-05):
+    # the same pose at the same height, only moved - so move it back onto the seed's bounds before baking
+    me.transform(Matrix.Translation(Vector(((shi + slo) / 2 - (thi + tlo) / 2))))
+    res["shifted_onto_seed"] = True
+    log("the posed mesh was moved by %s m onto the seed's bounds centre" % res["centre_offset_m"])
+elif max(abs(v) for v in res["centre_offset_m"]) > 0.03:
     log("WARNING the posed mesh does not sit on the seed: %s - the pose or scale differs, the bake will smear" % res)
 
 # --- split head and body by the MetaHuman UV tiles (head and its parts on 1001, the body on 1002)
@@ -170,10 +193,10 @@ def part_object(mask, name, shift_u):
     return o
 
 
-def seed_vertex_colours():
+def seed_vertex_colours(src=None):
     """Every source vertex's base colour read off its texture at its UV (the first material with an image): the
     closest-point fallback for texels no ray reaches (the hands, 2026-10-05)."""
-    sm = source.data
+    sm = (src or source).data
     n = len(sm.vertices)
     cols = np.full((n, 3), 0.5, np.float32)
     done = np.zeros(n, bool)
@@ -249,11 +272,11 @@ scn.render.image_settings.color_mode = "RGB"
 scn.render.image_settings.color_depth = "8"
 
 
-def bake_once(obj, node, img, cage, kind):
-    """One Cycles bake of the source onto obj into img, rays reaching `cage` metres."""
+def bake_once(obj, node, img, cage, kind, src=None):
+    """One Cycles bake of the source (or `src`) onto obj into img, rays reaching `cage` metres."""
     node.image = img
     bpy.ops.object.select_all(action="DESELECT")
-    source.select_set(True)
+    (src or source).select_set(True)
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
     if kind == "color":
@@ -272,6 +295,7 @@ def bake_once(obj, node, img, cage, kind):
 
 def bake(part_name, obj, kind):
     img_name = "T_%s_%s_%s" % (NAME, part_name, "BC" if kind == "color" else "N")
+    src = head_source if (part_name == "Head" and head_source is not None) else source
     img = bpy.data.images.new(img_name, RES, RES, alpha=False, float_buffer=False)
     img.colorspace_settings.name = "sRGB" if kind == "color" else "Non-Color"
     mat = bpy.data.materials.new("Bake_%s_%s" % (part_name, kind))
@@ -280,7 +304,7 @@ def bake(part_name, obj, kind):
     mat.node_tree.nodes.active = node
     obj.data.materials.clear()
     obj.data.materials.append(mat)
-    px = bake_once(obj, node, img, CAGE, kind)
+    px = bake_once(obj, node, img, CAGE, kind, src)
     # Where no ray reached the seed the texel stays the clear colour. Whole hands came out black when the solved
     # MetaHuman's hands stood 5-10 cm off the seed's (the AINavigator, 2026-10-05): a second pass with a far cage
     # fills exactly those texels, and what is still missing takes the nearest baked colour.
@@ -290,10 +314,12 @@ def bake(part_name, obj, kind):
     else:
         miss = miss_by_part.get(part_name)
     far_share = 0.0
-    if miss is not None and miss.mean() > 0.002:
+    # the far pass printed the seed's shaded far side as dark patches on the AINavigator's chest, belly and shoulder
+    # blades (2026-10-05): off by default now; the nearest seed point fills the misses with the right colour
+    if miss is not None and miss.mean() > 0.002 and args.get("far_pass", False):
         far_img = bpy.data.images.new(img_name + "_far", RES, RES, alpha=False, float_buffer=False)
         far_img.colorspace_settings.name = img.colorspace_settings.name
-        far = bake_once(obj, node, far_img, CAGE * 4, kind)
+        far = bake_once(obj, node, far_img, CAGE * 4, kind, src)
         node.image = img
         hit_far = miss & (far[..., :3].max(2) >= 0.02) if kind == "color" else miss
         px[hit_far] = far[hit_far]
@@ -321,12 +347,12 @@ def bake(part_name, obj, kind):
         node.image = img
         bpy.data.images.remove(pos_img)
         from mathutils import kdtree
-        sm = source.data
+        sm = src.data
         kd = kdtree.KDTree(len(sm.vertices))
         for i, v in enumerate(sm.vertices):
             kd.insert(v.co, i)
         kd.balance()
-        cols = seed_vertex_colours()
+        cols = seed_vertex_colours(src)
         idx = np.argwhere(miss & (np.abs(pos).sum(2) > 1e-6))
         rgb = px[..., :3]
         for r, c in idx:
@@ -352,6 +378,25 @@ def bake(part_name, obj, kind):
             filled += int(can.sum())
             miss = miss & ~can
         px[..., :3] = rgb
+    tinted = 0
+    if kind == "color" and args.get("skin_color") and part_name in (args.get("skin_parts") or ["Body"]):
+        # pale texels (the seed's washed-out hands and feet) take the planned skin colour, their shading kept:
+        # the AINavigator's hands came out near white against the reference's light blue (2026-10-05)
+        h = args["skin_color"].lstrip("#")
+        skin = np.array([int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)], np.float32)
+        skin_lin = np.where(skin <= 0.04045, skin / 12.92, ((skin + 0.055) / 1.055) ** 2.4)
+        rgb = px[..., :3]
+        mx = rgb.max(2)
+        mn = rgb.min(2)
+        sat = np.where(mx > 1e-4, (mx - mn) / np.maximum(mx, 1e-4), 0)
+        pale = (sat < 0.22) & (mx > 0.35)
+        if miss is not None:
+            pale = pale & ~miss
+        shade = np.clip(mx[pale] / 0.85, 0.5, 1.15)
+        rgb[pale] = np.clip(skin_lin[None, :] * shade[:, None], 0, 1)
+        px[..., :3] = rgb
+        tinted = int(pale.sum())
+        log("%s: %d pale texels tinted to the skin colour %s" % (img_name, tinted, args["skin_color"]))
     img.pixels.foreach_set(px.reshape(-1))
     path = os.path.join(OUT, img_name + ".png")
     img.filepath_raw = path
@@ -365,7 +410,7 @@ def bake(part_name, obj, kind):
         covered = coverage_by_part.get(part_name)
     report["maps"][img_name] = {"file": os.path.basename(path), "kind": kind, "part": part_name, "resolution": RES,
                                 "coverage": round(covered, 3) if covered is not None else None,
-                                "far_pass_share": round(far_share, 4), "nearest_seed_point": nearest, "filled_from_neighbours": filled, "missed_after_far": round(missed_share, 4),
+                                "far_pass_share": round(far_share, 4), "nearest_seed_point": nearest, "filled_from_neighbours": filled, "missed_after_far": round(missed_share, 4), "skin_tinted": tinted,
                                 "convention": "OpenGL +Y tangent normal (flip green on Unreal import)" if kind == "normal" else "sRGB base colour"}
     log("baked %s: %s of the texels, %.1f%% from the far pass, %d from the nearest seed point, %d filled from neighbours" % (
         img_name, ("%.0f%%" % (covered * 100)) if covered is not None else "coverage as the colour map's", far_share * 100, nearest, filled))
@@ -399,6 +444,8 @@ for part_name, obj in parts:
     obj.data.materials.clear()
     obj.data.materials.append(mat)
 source.hide_render = True
+if head_source is not None:
+    head_source.hide_render = True
 blib.setup_render(int(args.get("size", 768)), 32, look="preview")
 objs = [o for _n, o in parts]
 blib.select_only(objs)

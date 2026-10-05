@@ -271,6 +271,91 @@ if head_rows:
     head_h = (Hc - shoulder_row) * GRID
     widest = head_rows[int(np.argmax(head_w))] * GRID
     report["hair_suspected"] = bool(head_h > 0.17 * H and widest > shoulder_row * GRID + 0.5 * head_h)
+
+# --- a separate head seed (2026-10-05): scaled and placed onto the body's own head and exported alone as
+# <Name>_head.glb for the solver's HeadAndBody conform. Why: the body seed's soft face misled the face tracker and the
+# bake on the AINavigator (eyes printed on the cheeks, lips a smear); a head seeded from its own close-up has real
+# eyes and lips for the tracker and a clean face for the bake. The body keeps its own head: the body solve needs the
+# neck, and the solver takes the head from the head mesh.
+head_obj = None
+if args.get("head"):
+    hobjs = load_any(args["head"])
+    hobjs = [o for o in hobjs if not any(s in o.name.lower() for s in strip)]
+    if not hobjs:
+        raise RuntimeError("no mesh in %s" % args["head"])
+    blib.select_only(hobjs)
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    if len(hobjs) > 1:
+        bpy.ops.object.join()
+    head_obj = bpy.context.view_layer.objects.active
+    head_obj.name = head_obj.data.name = "SM_%s_Head" % NAME
+    hm = head_obj.data
+    hm.validate()
+
+    def hcoords():
+        n = len(hm.vertices)
+        a = np.empty(n * 3, np.float64)
+        hm.vertices.foreach_get("co", a)
+        return a.reshape(-1, 3)
+
+    hco = hcoords()
+    hext = hco.max(0) - hco.min(0)
+    hup = int(np.argmax(hext))
+    if hup != 2 and hext[2] < 0.7 * hext[hup]:      # a bust is about as wide as it is tall: turn only a clear lie-down
+        hm.transform(Matrix.Rotation(-math.pi / 2, 4, "Y") if hup == 0 else Matrix.Rotation(math.pi / 2, 4, "X"))
+        log("head: turned the %s axis up" % "XYZ"[hup])
+    hyaw = float(args.get("head_yaw") or 0)
+    if abs(hyaw) > 0.01:
+        hm.transform(Matrix.Rotation(math.radians(hyaw), 4, "Z"))
+        log("head: yawed %.0f degrees (--head-yaw) so the face points -Y" % hyaw)
+    hco = hcoords()
+
+    def skull(points, top_share):
+        """The widest 5 mm row in the top `top_share` of the points' height: (width, centre x, centre y, top z)."""
+        zt = points[:, 2].max()
+        zb = zt - top_share * (zt - points[:, 2].min())
+        best = None
+        z = zt
+        while z > zb:
+            row = points[(points[:, 2] <= z) & (points[:, 2] > z - GRID)]
+            if len(row) > 3:
+                w = float(row[:, 0].max() - row[:, 0].min())
+                if best is None or w > best[0]:
+                    best = (w, float((row[:, 0].max() + row[:, 0].min()) / 2), float((row[:, 1].max() + row[:, 1].min()) / 2))
+            z -= GRID
+        return best + (float(zt),)
+
+    # the body's head: everything above the neck, the narrowest row in the lower half of the rows above the shoulders
+    if head_rows:
+        lower = head_rows[: max(1, len(head_rows) // 2)]
+        neck_row = lower[int(np.argmin([head_w[head_rows.index(r)] for r in lower]))]
+        neck_z = lo[2] + neck_row * GRID
+    else:
+        neck_z = lo[2] + 0.86 * H
+    bhead = co[co[:, 2] > neck_z]
+    bw, bx, by, bz = skull(bhead, 1.0)
+    # the head seed's skull: its widest row in its top 60% (the collar or shoulders at its bottom may be wider)
+    hw, hx, hy, hz = skull(hco, 0.6)
+    hs = bw / hw if hw > 1e-4 else 1.0
+    hm.transform(Matrix.Translation(Vector((bx - hx * hs, by - hy * hs, bz - hz * hs))) @ Matrix.Scale(hs, 4))
+    hco = hcoords()
+    # cut it below the neck: the collar and shoulders in a close-up would fight the body mesh in the solver
+    cut_z = neck_z - 0.03
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(hm)
+    below = [v for v in bm.verts if v.co.z < cut_z]
+    bmesh.ops.delete(bm, geom=below, context="VERTS")
+    bm.to_mesh(hm)
+    bm.free()
+    hm.validate()
+    hco = hcoords()
+    head_obj.matrix_world = Matrix.Identity(4)
+    report["head"] = {"source": os.path.basename(args["head"]), "scale": round(hs, 4), "skull_width_m": round(bw, 3),
+                      "neck_z_m": round(float(neck_z), 3), "cut_below_m": round(float(cut_z), 3), "vertices": len(hm.vertices),
+                      "bounds_min": [round(float(v), 3) for v in hco.min(0)], "bounds_max": [round(float(v), 3) for v in hco.max(0)],
+                      "yaw_deg": hyaw}
+    log("head: scaled x%.3f to the body's %.0f mm skull, placed at (%.2f, %.2f, top %.2f), cut below %.2f m" % (hs, bw * 1000, bx, by, bz, cut_z))
 # finger tips: the lowest rows of each hand, counted as separate runs in a fine grid of the hand's box
 report["finger_tips"] = None
 for side in ("l", "r"):
@@ -293,7 +378,7 @@ for side in ("l", "r"):
 # --- the overlay renders: the seed white, the template's outline red, same frame (the template's bounds scaled to H)
 tmpl = json.load(open(args["template_json"], encoding="utf-8"))
 bpy.ops.import_scene.gltf(filepath=os.path.abspath(args["template_glb"]))
-tobjs = [o for o in bpy.data.objects if o.type == "MESH" and o is not body]
+tobjs = [o for o in bpy.data.objects if o.type == "MESH" and o is not body and o is not head_obj]
 blib.select_only(tobjs)
 if len(tobjs) > 1:
     bpy.ops.object.join()
@@ -331,6 +416,11 @@ def flat(name, rgb):
 kept_materials = [m for m in body.data.materials]       # the seed's textures go back on before the export
 body.data.materials.clear()
 body.data.materials.append(flat("SeedWhite", (1, 1, 1)))
+head_materials = []
+if head_obj is not None:
+    head_materials = [m for m in head_obj.data.materials]
+    head_obj.data.materials.clear()
+    head_obj.data.materials.append(flat("HeadWhite", (0.85, 0.85, 1.0)))   # a hint of blue: the head seed over the body's head
 tmpl_obj.data.materials.clear()
 tmpl_obj.data.materials.append(flat("TemplateRed", (1, 0.1, 0.1)))
 # the template as a wire of its outline: render it alone behind the seed by drawing it slightly behind (y+) and letting
@@ -367,6 +457,30 @@ bpy.ops.export_scene.gltf(filepath=glb, use_selection=True, export_format="GLB",
                           export_animations=False, export_skins=False, export_materials="EXPORT", export_yup=True)
 report["glb"] = os.path.basename(glb)
 report["glb_bytes"] = os.path.getsize(glb)
+if head_obj is not None:
+    head_obj.data.materials.clear()
+    for m in head_materials:
+        head_obj.data.materials.append(m)
+    blib.select_only([head_obj])
+    hglb = os.path.join(OUT, "%s_head.glb" % NAME)
+    bpy.ops.export_scene.gltf(filepath=hglb, use_selection=True, export_format="GLB", export_apply=True,
+                              export_animations=False, export_skins=False, export_materials="EXPORT", export_yup=True)
+    report["head"]["glb"] = os.path.basename(hglb)
+    report["head"]["glb_bytes"] = os.path.getsize(hglb)
+    report["head"]["textured"] = any(m and m.use_nodes and any(n.type == "TEX_IMAGE" and n.image for n in m.node_tree.nodes) for m in head_materials)
+    # the head alone, textured, front and side: what the face tracker will see
+    blib.select_only([head_obj])
+    body.hide_render = True
+    hlo, hhi = blib.dims(head_obj)
+    for view, cv in (("front", "left"), ("side", "front")):
+        blib.ortho_camera(cam, cv, Vector(hlo), Vector(hhi), margin=1.1)
+        scn.display.shading.color_type = "TEXTURE"
+        path = os.path.join(OUT, "conform_head_%s.png" % view)
+        scn.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+        renders["head_" + view] = os.path.basename(path)
+    body.hide_render = False
+    report["renders"] = renders
 json.dump(report, open(os.path.join(OUT, "conform_report.json"), "w", encoding="utf-8"), indent=1, default=plain)
 log("%s: %.2f m, arms %s/%s deg, armpit gap %.0f mm, knee gap %.0f mm, finger tips %s, head %s" % (
     os.path.basename(glb), H, report.get("arm_angle_deg_l"), report.get("arm_angle_deg_r"),

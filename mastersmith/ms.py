@@ -1518,16 +1518,26 @@ def cmd_mh_conform(a):
         sys.exit("no seed for %s (ms seed first, or --source <mesh>)" % a.part)
     out = _mh_dir(job)
     height = a.height if a.height is not None else job.spec.size_m
+    head = a.head
+    if head and not os.path.isabs(head) and not os.path.exists(head):
+        head = job.path(head)
+    if head and not os.path.exists(head):
+        sys.exit("no head mesh at %s" % head)
     args = {"source": src, "extra": [p for p in (a.extra or "").split(",") if p], "name": job.spec.name, "height_m": height,
             "out_dir": out, "template_glb": os.path.join(mh.TEMPLATES, "MH_Template.glb"),
             "template_json": os.path.join(mh.TEMPLATES, "template.json"),
-            "strip": [s for s in (a.strip or "").split(",") if s]}
+            "strip": [s for s in (a.strip or "").split(",") if s], "head": head, "head_yaw": a.head_yaw}
     _blender(job, "mh_conform.py", args, "mh_conform", timeout=1200)
     rep = json.load(open(os.path.join(out, "conform_report.json"), encoding="utf-8"))
     verdict = mh.check_pose(rep)
     rep["pose_check"] = verdict
     json.dump(rep, open(os.path.join(out, "conform_report.json"), "w", encoding="utf-8"), indent=1)
     print("conform mesh -> %s (%.2f m, %d tris)" % (os.path.join(out, rep["glb"]), rep["height_m"], rep["triangles"]))
+    if rep.get("head"):
+        h = rep["head"]
+        print("  head mesh -> %s (x%.3f onto the body's %.0f mm skull, cut below %.2f m, %s): the solver's HeadAndBody conform; "
+              "its renders conform_head_front/side.png" % (os.path.join(out, h["glb"]), h["scale"], h["skull_width_m"] * 1000,
+                                                             h["cut_below_m"], "textured" if h.get("textured") else "NO texture"))
     print("  A-pose: arms %s / %s deg (template %.0f), armpit gap %.0f mm, knee gap %.0f mm, finger tips %s, head %s%s" % (
         rep.get("arm_angle_deg_l"), rep.get("arm_angle_deg_r"), mh.load()["apose"]["arm_angle_deg"], rep.get("armpit_gap_m", 0) * 1000,
         rep.get("leg_gap_m", 0) * 1000, rep.get("finger_tips"), rep.get("head_present"), ", hair suspected" if rep.get("hair_suspected") else ""))
@@ -1553,15 +1563,27 @@ def cmd_mh_bake(a):
     posed = a.posed if os.path.isabs(a.posed) else job.path(a.posed)
     if not os.path.exists(posed):
         sys.exit("no posed FBX at %s: export the skeletal mesh Unreal generated from the posed DNA into delivery/metahuman/in/" % posed)
+    head_src = a.head_source
+    if head_src is None:
+        cand = os.path.join(out, "%s_head.glb" % job.spec.name)
+        head_src = cand if os.path.exists(cand) else ""
+    elif head_src and not os.path.isabs(head_src) and not os.path.exists(head_src):
+        head_src = job.path(head_src)
     args = {"source": src, "posed_fbx": posed, "name": job.spec.name, "out_dir": out, "resolution": a.resolution,
-            "cage_m": a.cage / 1000.0, "maps": ["color", "normal"] if not a.color_only else ["color"]}
+            "cage_m": a.cage / 1000.0, "maps": ["color", "normal"] if not a.color_only else ["color"],
+            "head_source": head_src or None, "far_pass": bool(a.far_pass), "skin_color": a.skin_color,
+            "skin_parts": [p for p in (a.skin_parts or "Body").split(",") if p], "align": not a.no_align}
+    if head_src:
+        print("the head bakes from %s" % head_src)
     _blender(job, "mh_bake.py", args, "mh_bake", timeout=3600)
     rep = json.load(open(os.path.join(out, "bake_report.json"), encoding="utf-8"))
     al = rep["alignment"]
     print("baked -> %s" % out)
     for name, m in rep["maps"].items():
-        print("  %s: %dpx, %.0f%% of the texels written (%s)" % (name, m["resolution"], m["coverage"] * 100, m["convention"]))
-    print("  alignment: seed %.3f m, posed mesh %.3f m, centres off by %s m" % (al["source_height_m"], al["posed_height_m"], al["centre_offset_m"]))
+        print("  %s: %dpx, %.0f%% of the texels written, %.1f%% far pass, %d nearest-point, %d skin-tinted (%s)" % (
+            name, m["resolution"], m["coverage"] * 100, m.get("far_pass_share", 0) * 100, m.get("nearest_seed_point", 0), m.get("skin_tinted", 0), m["convention"]))
+    print("  alignment: seed %.3f m, posed mesh %.3f m, centres off by %s m%s" % (al["source_height_m"], al["posed_height_m"], al["centre_offset_m"],
+          " (moved onto the seed before baking)" if al.get("shifted_onto_seed") else ""))
     print("  faces: %s" % rep["face_split"])
     print("  previews: " + ", ".join(os.path.join(out, r) for r in rep["renders"].values()))
     print("  " + rep["unreal"])
@@ -1791,12 +1813,19 @@ def main(argv=None):
     s.add_argument("--extra", help="more meshes to join, comma-separated (a separate high-poly head)")
     s.add_argument("--strip", help="object-name substrings to drop before joining: hair,lash,weapon")
     s.add_argument("--height", type=float, help="the character's height in metres (default: the brief's size)")
+    s.add_argument("--head", help="a separate head seed (parts/Head/seed.glb): placed on the body's head, exported alone as <Name>_head.glb for a HeadAndBody conform")
+    s.add_argument("--head-yaw", type=float, default=0.0, help="degrees about the vertical to turn the head seed so its face points -Y (read its renders)")
     s.set_defaults(fn=cmd_mh_conform)
     s = sub.add_parser("mh-bake", help="the seed's colour and normal baked onto the posed MetaHuman mesh exported from Unreal")
     s.add_argument("job"); s.add_argument("--posed", required=True, help="the skeletal mesh FBX Unreal generated from the POSED DNA")
     s.add_argument("--source", help="the textured seed (default delivery/metahuman/<Name>_conform.glb)")
     s.add_argument("--resolution", type=int, default=4096); s.add_argument("--cage", type=float, default=12.0, help="ray cage in mm")
     s.add_argument("--color-only", action="store_true")
+    s.add_argument("--head-source", help="a textured head mesh in the conform's frame for the head part (default delivery/metahuman/<Name>_head.glb when it exists; '' for none)")
+    s.add_argument("--far-pass", action="store_true", help="a second bake with a 4x cage for texels the near pass missed (off: the nearest seed point fills them)")
+    s.add_argument("--skin-color", help="#rrggbb: pale texels on --skin-parts take this colour (washed-out hands and feet)")
+    s.add_argument("--skin-parts", default="Body", help="comma-separated parts the skin colour applies to (default Body)")
+    s.add_argument("--no-align", action="store_true", help="do not move the posed mesh onto the seed's bounds centre before baking")
     s.set_defaults(fn=cmd_mh_bake)
     s = sub.add_parser("mh-attach", help="an accessory weighted onto the built MetaHuman's skeleton, exported as a skeletal mesh")
     s.add_argument("job"); s.add_argument("part", help="the part (its seed is the accessory) and the FBX's name")

@@ -26,14 +26,21 @@ horns, armour) are drawn alone as parts later (`ms part-pictures`), never on the
 
 ## 2. Seed
 `$PY grid out/<Name> --side ref/ref_0.png` then `$PY seed out/<Name> --model tripo` ($0.60; `hi3d-mv` $2.10 for the
-best). A separate head: a `Head` part from the close-up (`ms part-pictures`, `ms mesh --vendor tripo`, $0.60). Read the
-six views: fingers, armpits, bald, nothing floating. State the seed's disposition (rule 10).
+best). ALWAYS a separate head when the face matters (the AINavigator, 2026-10-05: the body seed's soft face put the
+tracked landmarks, the solved mouth and the baked eyes in the wrong places): a head close-up (`ms picture --out
+ref/ref_head.png --ref ref/ref_0.png --model nano-pro`: front view, bald, eyes open, mouth closed, nothing worn) meshed
+alone into `parts/Head/seed.glb` (Hi3D $2.10 gave a clean face with eyes, lips and ears). Read the six views
+(`ms sheet`): fingers, armpits, bald, nothing floating; the head's face on the LEFT panel means it faces -Y already.
+State each seed's disposition (rule 10).
 
 ## 3. The conform mesh (offline, free)
-`$PY mh-conform out/<Name> [--extra out/<Name>/parts/Head/seed.glb] [--strip hair,lash] [--height 1.78]`
+`$PY mh-conform out/<Name> [--head parts/Head/seed.glb [--head-yaw deg]] [--strip hair,lash] [--height 1.78]`
 -> `delivery/metahuman/<Name>_conform.glb` (one mesh, metres, Z up, facing -Y, feet on z=0, transforms applied),
 `conform_report.json` and `conform_front.png` / `conform_side.png`: the seed white over the MetaHuman template's red
-outline at the same height. Read both. The report's `pose_check` lists what the solver will get wrong: a closed armpit,
+outline at the same height. With `--head` the head seed is scaled onto the body's skull (its widest row above the
+neck), cut below the neck and exported alone as `<Name>_head.glb` (`conform_head_front/side.png` show what the face
+tracker will see; `--head-yaw` turns it when its face is not on -Y): the editor conforms HeadAndBody, tracking the
+face on the head mesh, and `mh-bake` bakes the head from it. `--extra` joins a mesh into the body instead. Read all. The report's `pose_check` lists what the solver will get wrong: a closed armpit,
 a T-pose, legs too close, fused fingers, a suspected hairdo, no head, a height outside 1.35-2.20 m. Fix by redrawing
 with `--fixes` and re-seeding, or `--strip` for an object the seed carries as its own mesh; a last-resort local fix is
 `ms brush` (AGENTS.md, Sculpting without a mouse). Do not decimate: the same mesh is the baking source.
@@ -66,9 +73,14 @@ installed, an Epic account signed in (the auto-rig and the texture sources are c
    2026-10-04; export by hand or add a guarded `export_fbx` to the MCP.)
 
 ## 5. The character's look on the MetaHuman (offline, free)
-`$PY mh-bake out/<Name> --posed delivery/metahuman/in/<Name>_Posed.fbx [--resolution 4096]`
+`$PY mh-bake out/<Name> --posed delivery/metahuman/in/<Name>_Posed.fbx [--resolution 4096] [--skin-color #b5cfe0]
+[--far-pass] [--head-source <mesh>]`
 -> `T_<Name>_Head_BC.png`, `T_<Name>_Head_N.png`, `T_<Name>_Body_BC.png`, `T_<Name>_Body_N.png`, `bake_report.json`,
-`bake_preview_<front|side>.png`. The head is the skin faces on UDIM 1001 (teeth, eyes, lashes, shells keep MetaHuman's
+`bake_preview_<front|side>.png`. The head bakes from `<Name>_head.glb` when the conform wrote one. A posed mesh that is
+the seed's height but stands off it (19 cm behind on a tracked solve) is moved onto the seed's bounds first
+(`alignment.shifted_onto_seed`; `--no-align` keeps it). Texels no near ray reaches take the nearest seed point's colour;
+the old far-cage pass (`--far-pass`) printed the seed's shaded far side as dark patches on the chest and back.
+`--skin-color` recolours pale texels (a seed's washed-out hands and feet) to the planned skin, shading kept. The head is the skin faces on UDIM 1001 (teeth, eyes, lashes, shells keep MetaHuman's
 maps); the body is tile 1002 moved onto 0-1 (Blender bakes one tile). Read the previews and the report: `alignment`
 (the posed mesh must sit on the seed: a height or centre off means the wrong FBX), `coverage` per map (the UV islands'
 share, about 50-70%), and the neck: the seed's head and body textures meet at the MetaHuman's neck seam, and the
@@ -110,8 +122,9 @@ has the full example). `execute_python_code`, `svc = unreal.MetaHumanCharacterSe
 1. Import the conform GLB: an `AssetImportTask` on `delivery/metahuman/<Name>_conform.glb` into
    `/Game/<Project>/Characters/<Name>/` (Interchange puts the mesh under `.../<Name>_conform/StaticMeshes/`). It
    lands facing +Y, feet on z=0, centimetres: what the solver wants (checked 2026-10-04).
-2. `svc.create_character(folder, "MH_<Name>", "")`, then `svc.import_from_custom_mesh(character, static_mesh, "",
-   True, True, 1024)`: the face is tracked on a front-on render, the body and head solved (1-3 minutes, blocking).
+2. `svc.create_character(folder, "MH_<Name>", "")`, then `svc.import_from_custom_mesh(character, static_mesh, head_mesh,
+   True, True, 1024)` (`head_mesh` the imported `<Name>_head.glb`, "" for a combined mesh): the face is tracked on a
+   front-on render of the head mesh, the body and head solved (1-3 minutes, blocking).
    Read `warnings` (feet off the floor, metres, facing) and `face_tracking` (curves, points, and `render`: the
    front-on picture the tracker saw, in the project's `Saved/VibeMetaHumans/`); a failed tracking leaves the
    archetype face - the seed needs eyes in its sockets and a bald head facing +Y; fix it and run again.
