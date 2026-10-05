@@ -170,6 +170,62 @@ def part_object(mask, name, shift_u):
     return o
 
 
+def seed_vertex_colours():
+    """Every source vertex's base colour read off its texture at its UV (the first material with an image): the
+    closest-point fallback for texels no ray reaches (the hands, 2026-10-05)."""
+    sm = source.data
+    n = len(sm.vertices)
+    cols = np.full((n, 3), 0.5, np.float32)
+    done = np.zeros(n, bool)
+    if not sm.uv_layers:
+        return cols
+    uv = np.empty(len(sm.loops) * 2, np.float32)
+    sm.uv_layers.active.data.foreach_get("uv", uv)
+    uv = uv.reshape(-1, 2)
+    lv = np.empty(len(sm.loops), np.int32)
+    sm.loops.foreach_get("vertex_index", lv)
+    lm = np.empty(len(sm.polygons), np.int32)
+    sm.polygons.foreach_get("material_index", lm)
+    loop_start = np.empty(len(sm.polygons), np.int32)
+    sm.polygons.foreach_get("loop_start", loop_start)
+    loop_total = np.empty(len(sm.polygons), np.int32)
+    sm.polygons.foreach_get("loop_total", loop_total)
+    poly_of_loop = np.repeat(np.arange(len(sm.polygons)), loop_total)
+    for mi, mat in enumerate(sm.materials):
+        img = None
+        if mat and mat.use_nodes:
+            # the image feeding Base Color, not the first image node: a glTF material's first node was the
+            # metallic-roughness map and the hands came out orange (2026-10-05)
+            bsdf = next((nd for nd in mat.node_tree.nodes if nd.type == "BSDF_PRINCIPLED"), None)
+            if bsdf and bsdf.inputs["Base Color"].is_linked:
+                src_node = bsdf.inputs["Base Color"].links[0].from_node
+                # a packed glTF image says has_data False until something reads it: judge it by its size, and reading
+                # its pixels below loads it (every vertex came out unsampled, 2026-10-05)
+                if src_node.type == "TEX_IMAGE" and src_node.image and src_node.image.size[0] > 0:
+                    img = src_node.image
+            if img is None:
+                for nd in mat.node_tree.nodes:
+                    if nd.type == "TEX_IMAGE" and nd.image and nd.image.size[0] > 0 and nd.image.colorspace_settings.name != "Non-Color":
+                        img = nd.image
+                        break
+        if img is None:
+            continue
+        w, h = img.size
+        px = np.empty(w * h * img.channels, np.float32)
+        img.pixels.foreach_get(px)
+        if not img.has_data or w == 0:
+            log("the seed's colour image %s could not be read" % img.name)
+            continue
+        px = px.reshape(h, w, img.channels)[..., :3]
+        sel = lm[poly_of_loop] == mi
+        us = np.clip((uv[sel, 0] % 1.0) * (w - 1), 0, w - 1).astype(int)
+        vs = np.clip((uv[sel, 1] % 1.0) * (h - 1), 0, h - 1).astype(int)
+        cols[lv[sel]] = px[vs, us]
+        done[lv[sel]] = True
+    log("seed vertex colours: %d of %d vertices sampled" % (int(done.sum()), n))
+    return cols
+
+
 parts = []
 if is_head.sum():
     parts.append(("Head", part_object(is_head, "MH_Head", 0)))
@@ -247,7 +303,38 @@ def bake(part_name, obj, kind):
             miss_by_part[part_name] = miss.copy()
         bpy.data.images.remove(far_img)
     filled = 0
+    nearest = 0
     missed_share = float(miss.mean()) if miss is not None else 0.0
+    if kind == "color" and miss is not None and miss.any():
+        # the texels still black take the seed's colour at the seed vertex nearest to their own 3D position: a bake
+        # of this part's POSITION says where each texel lies; the hands stood too far off the seed for any ray
+        pos_img = bpy.data.images.new(img_name + "_pos", RES, RES, alpha=False, float_buffer=True)
+        pos_img.colorspace_settings.name = "Non-Color"
+        node.image = pos_img
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.bake(type="POSITION", use_selected_to_active=False, margin=0, use_clear=True)
+        pp = np.empty(RES * RES * 4, np.float32)
+        pos_img.pixels.foreach_get(pp)
+        pos = pp.reshape(RES, RES, 4)[..., :3]
+        node.image = img
+        bpy.data.images.remove(pos_img)
+        from mathutils import kdtree
+        sm = source.data
+        kd = kdtree.KDTree(len(sm.vertices))
+        for i, v in enumerate(sm.vertices):
+            kd.insert(v.co, i)
+        kd.balance()
+        cols = seed_vertex_colours()
+        idx = np.argwhere(miss & (np.abs(pos).sum(2) > 1e-6))
+        rgb = px[..., :3]
+        for r, c in idx:
+            _co, i, _d = kd.find(pos[r, c])
+            rgb[r, c] = cols[i]
+        miss[idx[:, 0], idx[:, 1]] = False
+        nearest = int(len(idx))
+        px[..., :3] = rgb
     if kind == "color" and miss is not None:
         rgb = px[..., :3]
         for _ in range(int(args.get("fill_passes", 64))):
@@ -278,10 +365,10 @@ def bake(part_name, obj, kind):
         covered = coverage_by_part.get(part_name)
     report["maps"][img_name] = {"file": os.path.basename(path), "kind": kind, "part": part_name, "resolution": RES,
                                 "coverage": round(covered, 3) if covered is not None else None,
-                                "far_pass_share": round(far_share, 4), "filled_from_neighbours": filled, "missed_after_far": round(missed_share, 4),
+                                "far_pass_share": round(far_share, 4), "nearest_seed_point": nearest, "filled_from_neighbours": filled, "missed_after_far": round(missed_share, 4),
                                 "convention": "OpenGL +Y tangent normal (flip green on Unreal import)" if kind == "normal" else "sRGB base colour"}
-    log("baked %s: %s of the texels, %.1f%% from the far pass, %d filled from neighbours" % (
-        img_name, ("%.0f%%" % (covered * 100)) if covered is not None else "coverage as the colour map's", far_share * 100, filled))
+    log("baked %s: %s of the texels, %.1f%% from the far pass, %d from the nearest seed point, %d filled from neighbours" % (
+        img_name, ("%.0f%%" % (covered * 100)) if covered is not None else "coverage as the colour map's", far_share * 100, nearest, filled))
     return img
 
 
