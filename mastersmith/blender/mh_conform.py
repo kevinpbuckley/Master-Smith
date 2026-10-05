@@ -340,7 +340,10 @@ if args.get("head"):
     hm.transform(Matrix.Translation(Vector((bx - hx * hs, by - hy * hs, bz - hz * hs))) @ Matrix.Scale(hs, 4))
     hco = hcoords()
     # cut it below the neck: the collar and shoulders in a close-up would fight the body mesh in the solver
-    cut_z = neck_z - 0.03
+    # how far below the neck the head mesh keeps (metres): the editor's face tracker frames its render on the head
+    # mesh's bounds, and a head cut at the chin came out too tight (the mouth out of frame, 2026-10-05); 12 cm of
+    # neck and shoulder tops give it the bust it expects
+    cut_z = neck_z - float(args.get("head_cut_m") or 0.12)
     import bmesh
     bm = bmesh.new()
     bm.from_mesh(hm)
