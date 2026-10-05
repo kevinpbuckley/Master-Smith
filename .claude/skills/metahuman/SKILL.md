@@ -130,9 +130,19 @@ has the full example). `execute_python_code`, `svc = unreal.MetaHumanCharacterSe
 6. The baked maps back: `svc.import_texture(png, "/Game/MetaHumans/<Name>/Body/Baked", "T_<Name>_Body_N", "normal",
    True)` (the green flip for Blender's OpenGL normals; "color" for BC) and `svc.set_material_texture(MI_Body_Baked,
    "Normal Baked", texture)`; the head onto `MI_Face_Skin_Baked_LOD3` ("Basecolor Baked", "Normal Baked").
-7. The accessories: import `SK_<Name>_<Part>.fbx` as a skeletal mesh on the MetaHuman body skeleton
-   (`metahuman_base_skel`), then `svc.attach_skeletal_mesh_to_blueprint(BP, "<Part>", SK, "Body", True)`.
-8. `svc.spawn_in_level(character, location, rotation, False)` or place `BP_<Name>`, and look.
+7. The accessories. A RIGID piece (a headset, a visor, horns) goes on as a static mesh on the head socket, no skinning:
+   import its GLB, then `svc.attach_static_mesh_to_blueprint(BP, "Headset", SM, "Body", "head", rel_loc, rel_rot)`
+   with the relative transform in the head bone's frame: the built MetaHuman's head is NOT where the seed's head was
+   (the AINavigator's sat 5 cm sideways and 23 cm back, 2026-10-05) - measure the built face mesh's bounds against the
+   conform mesh's, add that offset to the accessory's frame, and take it relative to the body's `head` socket
+   (`MathLibrary.make_relative_transform`); `unreal.Rotator(roll=, pitch=, yaw=)` by name. The skeletal route
+   (`ms mh-attach` -> import onto `metahuman_base_skel` -> `attach_skeletal_mesh_to_blueprint`) came back 90 degrees
+   off through Blender's armature round trip: keep it for pieces that must deform (brows, a vest) and check the
+   bind pose. Respawn a placed actor after changing the Blueprint.
+8. `svc.spawn_in_level(character, location, rotation, False)` or place `BP_<Name>`, and look: a SceneCapture2D
+   with `ImageWriteBlueprintLibrary.export_to_disk` writes PNGs at once (the viewport's high-res screenshot queue
+   stalled); grooms are dyed on their `MI_WI_Hair_*` instances (`hairMelanin`, `hairRedness`, `hairDye`), the
+   Cards and Helmet instances too.
 Still by hand: an Epic login for the cloud steps, and saving (`EditorAssetLibrary.save_asset`, or the MCP's auto-save).
 Lower-level when needed: `MetaHumanObjectService.list_functions("MetaHumanCharacterEditorSubsystem")`, the subsystem
 in Python (`conform_to_target_meshes`, `get_mesh_data_for_conforming`, `get_preset_body_key_points`), and
