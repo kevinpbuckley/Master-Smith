@@ -167,9 +167,15 @@ has the full example). `execute_python_code`, `svc = unreal.MetaHumanCharacterSe
    off through Blender's armature round trip: keep it for pieces that must deform (brows, a vest) and check the
    bind pose. Respawn a placed actor after changing the Blueprint.
 8. `svc.spawn_in_level(character, location, rotation, False)` or place `BP_<Name>`, and look: a SceneCapture2D
-   with `ImageWriteBlueprintLibrary.export_to_disk` writes PNGs at once (the viewport's high-res screenshot queue
-   stalled); grooms are dyed on their `MI_WI_Hair_*` instances (`hairMelanin`, `hairRedness`, `hairDye`), the
-   Cards and Helmet instances too.
+   with `RenderingLibrary.export_render_target` (synchronous; the ImageWriteQueue stopped flushing mid-session, and
+   the viewport's high-res screenshot queue stalled). A SceneCapture does NOT drive texture streaming: an actor the
+   viewport does not look at renders its 4K maps at the lowest mips, which read as blurry blobs and "eyes on the
+   cheeks" (2026-10-05: a whole afternoon was spent re-baking a texture that was right all along). Set the baked
+   textures `never_stream`, set `force_mip_streaming` on the actor's components, point the viewport at it, and wait
+   about 90 editor ticks (a slate post-tick callback) before capturing. Grooms are dyed on their `MI_WI_Hair_*`
+   instances (`hairMelanin`, `hairRedness`, `hairDye`), the Cards and Helmet instances too. `import_texture` over an
+   existing asset of the same name keeps the OLD data: delete it first. The skin shader's `Scatter Baked` map stays
+   the build's own (`T_Body_Scatter`, `T_Head_Scatter`).
 Still by hand: an Epic login for the cloud steps, and saving (`EditorAssetLibrary.save_asset`, or the MCP's auto-save).
 Lower-level when needed: `MetaHumanObjectService.list_functions("MetaHumanCharacterEditorSubsystem")`, the subsystem
 in Python (`conform_to_target_meshes`, `get_mesh_data_for_conforming`, `get_preset_body_key_points`), and
