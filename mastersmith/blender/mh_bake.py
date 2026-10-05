@@ -38,6 +38,9 @@ os.makedirs(OUT, exist_ok=True)
 RES = int(args.get("resolution", 4096))
 CAGE = float(args.get("cage_m", 0.012))
 MAPS = args.get("maps") or ["color", "normal"]
+# a colour hit darker than this is a miss: a ray that starts inside the seed (a limb the solver made thicker than the
+# seed's) hits the far wall from behind and bakes the suit eight times too dark (the AINavigator's elbows, 2026-10-05)
+DARK = float(args.get("dark_is_miss", 0.1))
 report = {"name": NAME, "notes": [], "maps": {}}
 
 
@@ -103,6 +106,61 @@ if args.get("head_source"):
 
 tgt = load_any(args["posed_fbx"])
 bpy.context.view_layer.update()
+
+
+def seed_hand_centre(side_sign):
+    """The seed's hand on one side: the outermost tenth of the arm's reach, below the shoulders."""
+    sm = source.data
+    sco = np.empty(len(sm.vertices) * 3, np.float64)
+    sm.vertices.foreach_get("co", sco)
+    sco = sco.reshape(-1, 3)
+    reach = np.abs(sco[:, 0]).max()
+    sel = sco[(side_sign * sco[:, 0] > 0.82 * reach) & (sco[:, 2] < 0.75 * sco[:, 2].max())]
+    return Vector(sel.mean(0)) if len(sel) > 20 else None
+
+
+def swing_arms_onto_seed(arm):
+    """Rotate each upper arm about its shoulder so the posed hand bone lands on the seed's hand (2026-10-05: the
+    AINavigator's solve stood the arms 12 cm forward of the seed's; a rigid alignment cannot bring a limb back)."""
+    out = {}
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode="POSE")
+    for side, sign in (("l", 1), ("r", -1)):
+        up, hand = arm.pose.bones.get("upperarm_" + side), arm.pose.bones.get("hand_" + side)
+        knuckle = arm.pose.bones.get("middle_01_" + side)
+        target = seed_hand_centre(sign)
+        if up is None or hand is None or target is None:
+            continue
+        shoulder = arm.matrix_world @ up.head
+        # the palm's centre, not the wrist: matched to the wrist the posed hand stood a palm's length too far out and
+        # its back sampled the seed's sleeve (blue hands, 2026-10-05)
+        hand_w = arm.matrix_world @ ((hand.head + knuckle.head) / 2 if knuckle is not None else hand.head)
+        a = (hand_w - shoulder)
+        b = (target - shoulder)
+        if a.length < 1e-4 or b.length < 1e-4:
+            continue
+        rot = a.normalized().rotation_difference(b.normalized())
+        out[side] = {"angle_deg": round(math.degrees(rot.angle), 1), "hand_was": [round(v, 3) for v in hand_w], "seed_hand": [round(v, 3) for v in target]}
+        # the rotation in armature space, about the shoulder joint; the children follow
+        r_arm = arm.matrix_world.to_3x3().inverted() @ rot.to_matrix() @ arm.matrix_world.to_3x3()
+        pivot = up.head.copy()
+        up.matrix = Matrix.Translation(pivot) @ r_arm.to_4x4() @ Matrix.Translation(-pivot) @ up.matrix
+        bpy.context.view_layer.update()
+    bpy.ops.object.mode_set(mode="OBJECT")
+    return out
+
+
+arms = [o for o in bpy.data.objects if o.type == "ARMATURE"]
+if arms and args.get("swing_arms", True):
+    swung = swing_arms_onto_seed(arms[0])
+    if swung:
+        report["arms_swung_onto_seed"] = swung
+        log("arms swung onto the seed's hands: " + ", ".join("%s %.1f deg" % (k, v["angle_deg"]) for k, v in swung.items()))
+    dg = bpy.context.evaluated_depsgraph_get()
+    for o in tgt:
+        posed_me = bpy.data.meshes.new_from_object(o.evaluated_get(dg))
+        o.modifiers.clear()
+        o.data = posed_me
 for o in tgt:
     # the importer leaves the centimetre -> metre scale on the armature parent: bake it into the mesh before the
     # armature goes (a head came in 37 m tall without this, 2026-10-04)
@@ -132,14 +190,76 @@ res = {"source_height_m": round(float(shi[2] - slo[2]), 3), "posed_height_m": ro
 report["alignment"] = res
 if abs(res["source_height_m"] - res["posed_height_m"]) > 0.03 * res["source_height_m"]:
     log("WARNING the posed mesh is not the seed's height: %s - the pose or scale differs, the bake will smear" % res)
-elif max(abs(v) for v in res["centre_offset_m"]) > 0.01 and args.get("align", True):
-    # the solver stands the posed body off the mesh (19 cm behind it on the AINavigator's tracked solve, 2026-10-05):
-    # the same pose at the same height, only moved - so move it back onto the seed's bounds before baking
-    me.transform(Matrix.Translation(Vector(((shi + slo) / 2 - (thi + tlo) / 2))))
+elif args.get("align", True):
+    # the solver stands the posed body off the mesh (19 cm behind it, then yawed 28 degrees and 6 cm aside, on the
+    # AINavigator's tracked solves, 2026-10-05): the same pose at the same height, rigidly displaced - so bring it
+    # back onto the seed with a rigid ICP (a yaw about Z and a translation), seeded from the bounds centres
+    from mathutils import kdtree as _kd
+    _sco = np.empty(len(source.data.vertices) * 3, np.float64)
+    source.data.vertices.foreach_get("co", _sco)
+    _sco = _sco.reshape(-1, 3)
+    _kdt = _kd.KDTree(len(_sco))
+    for _i, _v in enumerate(_sco):
+        _kdt.insert(_v, _i)
+    _kdt.balance()
+    _tco = np.empty(len(me.vertices) * 3, np.float64)
+    me.vertices.foreach_get("co", _tco)
+    _tco = _tco.reshape(-1, 3)
+    _rng = np.random.default_rng(1)
+    _sub = _tco[_rng.choice(len(_tco), size=min(6000, len(_tco)), replace=False)]
+    _yaw, _t = 0.0, np.array((shi + slo) / 2 - (thi + tlo) / 2)
+    _rms = None
+    for _it in range(30):
+        _c, _s = math.cos(_yaw), math.sin(_yaw)
+        _R = np.array([[_c, -_s, 0], [_s, _c, 0], [0, 0, 1]])
+        _p = _sub @ _R.T + _t
+        _q = np.array([_kdt.find(Vector(pt))[0] for pt in _p])
+        _d = np.linalg.norm(_q - _p, axis=1)
+        _keep = _d < max(0.05, np.percentile(_d, 80))        # the far outliers (a hand off the seed) do not steer
+        _rms_new = float(np.sqrt(np.mean(_d[_keep] ** 2)))
+        # Kabsch in the horizontal plane about the kept points' centroids, the vertical as a plain mean offset
+        _pm, _qm = _p[_keep].mean(0), _q[_keep].mean(0)
+        _P, _Q = _p[_keep] - _pm, _q[_keep] - _qm
+        _H = _P[:, :2].T @ _Q[:, :2]
+        _ang = math.atan2(_H[0, 1] - _H[1, 0], _H[0, 0] + _H[1, 1])
+        _c2, _s2 = math.cos(_ang), math.sin(_ang)
+        _R2 = np.array([[_c2, -_s2, 0], [_s2, _c2, 0], [0, 0, 1]])
+        # p' = R2 (p - pm) + qm with p = R x + t: the yaw grows by ang, the translation becomes R2 (t - pm) + qm
+        _yaw += _ang
+        _t = _R2 @ (_t - _pm) + _qm
+        if _rms is not None and abs(_rms - _rms_new) < 1e-5:
+            _rms = _rms_new
+            break
+        _rms = _rms_new
+    _c, _s = math.cos(_yaw), math.sin(_yaw)
+    _M = Matrix(((_c, -_s, 0, _t[0]), (_s, _c, 0, _t[1]), (0, 0, 1, _t[2]), (0, 0, 0, 1)))
+    me.transform(_M)
+    res["rigid_yaw_deg"] = round(math.degrees(_yaw), 2)
+    res["rigid_translation_m"] = [round(float(v), 4) for v in _t]
+    res["rigid_rms_m"] = round(_rms, 4)
     res["shifted_onto_seed"] = True
-    log("the posed mesh was moved by %s m onto the seed's bounds centre" % res["centre_offset_m"])
+    log("the posed mesh was moved onto the seed: yaw %.1f degrees, translation %s m, surface rms %.1f mm" % (
+        math.degrees(_yaw), [round(float(v), 3) for v in _t], _rms * 1000))
 elif max(abs(v) for v in res["centre_offset_m"]) > 0.03:
     log("WARNING the posed mesh does not sit on the seed: %s - the pose or scale differs, the bake will smear" % res)
+
+# with a separate head source the body source loses its own head (after the alignment, which needs the full height):
+# the MetaHuman's neck stands wider than the seed's collar and its rays reached the seed's chin (a pale band under the
+# jaw, 2026-10-05); the nearest point for the neck is the collar now
+cut_z = float(args.get("body_cut_z") or 0)
+if head_source is not None and cut_z > 0:
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(source.data)
+    above = [v for v in bm.verts if v.co.z > cut_z]
+    bmesh.ops.delete(bm, geom=above, context="VERTS")
+    # the cut leaves loose vertices along its edge; unsampled (no loop, no colour) they filled the neck grey
+    loose = [v for v in bm.verts if not v.link_faces]
+    bmesh.ops.delete(bm, geom=loose, context="VERTS")
+    bm.to_mesh(source.data)
+    bm.free()
+    source.data.validate()
+    log("the body source was cut above %.2f m (its own head goes; the head bakes from the head source)" % cut_z)
 
 # --- split head and body by the MetaHuman UV tiles (head and its parts on 1001, the body on 1002)
 uv_layer = me.uv_layers.active or me.uv_layers[0]
@@ -272,13 +392,29 @@ scn.render.image_settings.color_mode = "RGB"
 scn.render.image_settings.color_depth = "8"
 
 
+def lin2srgb(a):
+    """Linear floats to sRGB-encoded floats (what a byte image's pixels and the saved PNG hold)."""
+    a = np.clip(a, 0, 1)
+    return np.where(a <= 0.0031308, a * 12.92, 1.055 * np.power(a, 1 / 2.4) - 0.055)
+
+
 def bake_once(obj, node, img, cage, kind, src=None):
-    """One Cycles bake of the source (or `src`) onto obj into img, rays reaching `cage` metres."""
+    """One Cycles bake of the source (or `src`) onto obj into img, rays reaching `cage` metres. Image.pixels of a
+    byte image are its sRGB bytes / 255, for the bake result and for the seed's texture alike (measured 2026-10-05:
+    the seed's suit (16,66,134) baked as (11,63,126); a linear-to-sRGB "fix" made it a pale steel blue), so the
+    nearest-point colours and the bake share one encoding and nothing is converted here."""
     node.image = img
     bpy.ops.object.select_all(action="DESELECT")
     (src or source).select_set(True)
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
+    # only the source and the target take part: every other mesh (the head source during the body bake, the other
+    # part) is hidden from the rays, or the body's neck sampled the head source's skin (a pale collar, 2026-10-05)
+    hidden = []
+    for o in bpy.data.objects:
+        if o.type == "MESH" and o is not obj and o is not (src or source) and not o.hide_render:
+            o.hide_render = True
+            hidden.append(o)
     if kind == "color":
         scn.render.bake.use_pass_direct = scn.render.bake.use_pass_indirect = False
         scn.render.bake.use_pass_color = True
@@ -288,9 +424,41 @@ def bake_once(obj, node, img, cage, kind, src=None):
         scn.render.bake.normal_space = "TANGENT"
         bpy.ops.object.bake(type="NORMAL", normal_space="TANGENT", use_selected_to_active=True, cage_extrusion=cage,
                             max_ray_distance=cage * 2.5, margin=scn.render.bake.margin, use_clear=True)
+    for o in hidden:
+        o.hide_render = False
     px = np.empty(RES * RES * 4, np.float32)
     img.pixels.foreach_get(px)
     return px.reshape(RES, RES, 4)
+
+
+def position_map(obj, node, img_name):
+    """Every texel's world position on obj (a POSITION bake, calibrated to the part's bounds: the pass came back 16x
+    the metre coordinates on these parts, 2026-10-05, while a lone cube bakes true) and the on-mesh mask."""
+    pos_img = bpy.data.images.new(img_name + "_pos", RES, RES, alpha=False, float_buffer=True)
+    pos_img.colorspace_settings.name = "Non-Color"
+    node.image = pos_img
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.bake(type="POSITION", use_selected_to_active=False, margin=0, use_clear=True)
+    pp = np.empty(RES * RES * 4, np.float32)
+    pos_img.pixels.foreach_get(pp)
+    pos = pp.reshape(RES, RES, 4)[..., :3]
+    onmesh = np.abs(pos).sum(2) > 1e-6
+    bb = np.array([obj.matrix_world @ Vector(c) for c in obj.bound_box])
+    lo, hi = bb.min(0), bb.max(0)
+    plo, phi = pos[onmesh].min(0), pos[onmesh].max(0)
+    scale = np.where(phi - plo > 1e-6, (hi - lo) / np.maximum(phi - plo, 1e-6), 1.0)
+    pos = (pos - plo) * scale + lo
+    pos[~onmesh] = 0.0
+    if abs(float(np.median(scale)) - 1.0) > 0.05:
+        log("%s: the position pass was scaled by %s to the part's bounds" % (img_name, np.round(1 / scale, 2).tolist()))
+    if args.get("debug_positions"):
+        pos_img.filepath_raw = os.path.join(OUT, img_name[:-3] + "_POS.exr")
+        pos_img.file_format = "OPEN_EXR"
+        pos_img.save()
+    bpy.data.images.remove(pos_img)
+    return pos, onmesh
 
 
 def bake(part_name, obj, kind):
@@ -305,47 +473,73 @@ def bake(part_name, obj, kind):
     obj.data.materials.clear()
     obj.data.materials.append(mat)
     px = bake_once(obj, node, img, CAGE, kind, src)
+    pos = onmesh = None
+    neck_z = float(args.get("body_cut_z") or 0)
+    if part_name == "Head" and head_source is not None and neck_z > 0:
+        # the MetaHuman's face mesh carries the neck down to the collarbones; below the body seed's collar top it is
+        # the suit, which the body seed knows and the head seed does not (its neck skin ran 6 cm lower: a pale
+        # crescent at the collar, 2026-10-05) - so that band is baked from the body source
+        pos, onmesh = position_map(obj, node, img_name)
+        node.image = img
+        body_img = bpy.data.images.new(img_name + "_body", RES, RES, alpha=False, float_buffer=False)
+        body_img.colorspace_settings.name = img.colorspace_settings.name
+        body_px = bake_once(obj, node, body_img, CAGE, kind, source)
+        node.image = img
+        low = onmesh & (pos[..., 2] < neck_z) & (body_px[..., :3].max(2) >= DARK)
+        px[low] = body_px[low]
+        bpy.data.images.remove(body_img)
+        log("%s: %d neck texels below %.2f m baked from the body source" % (img_name, int(low.sum()), neck_z))
     # Where no ray reached the seed the texel stays the clear colour. Whole hands came out black when the solved
     # MetaHuman's hands stood 5-10 cm off the seed's (the AINavigator, 2026-10-05): a second pass with a far cage
     # fills exactly those texels, and what is still missing takes the nearest baked colour.
+    srcmap = None
     if kind == "color":
-        miss = px[..., :3].max(2) < 0.02
+        miss = px[..., :3].max(2) < DARK
+        near_miss_by_part[part_name] = miss.copy()
         miss_by_part[part_name] = miss.copy()
+        srcmap = np.where(miss, 0, 1).astype(np.uint8)        # 1 near hit
     else:
-        miss = miss_by_part.get(part_name)
+        # the normal map follows the colour map's masks: its near pass misses where the colour's did, its far pass is
+        # kept only where the colour's far hit was a real one, and the rest is the flat normal (2026-10-05: 27% of
+        # the body's normals were black or inside-out, black discs on the elbows and hands)
+        miss = near_miss_by_part.get(part_name)
     far_share = 0.0
-    # the far pass printed the seed's shaded far side as dark patches on the AINavigator's chest, belly and shoulder
-    # blades (2026-10-05): off by default now; the nearest seed point fills the misses with the right colour
+    # the far pass (2.5x the cage; 4x printed the seed's shaded far side as dark patches on the AINavigator's chest
+    # and shoulder blades, 2026-10-05) is off by default; the nearest seed point fills what both passes miss
     if miss is not None and miss.mean() > 0.002 and args.get("far_pass", False):
         far_img = bpy.data.images.new(img_name + "_far", RES, RES, alpha=False, float_buffer=False)
         far_img.colorspace_settings.name = img.colorspace_settings.name
-        far = bake_once(obj, node, far_img, CAGE * 4, kind, src)
+        far = bake_once(obj, node, far_img, CAGE * 2.5, kind, src)
         node.image = img
-        hit_far = miss & (far[..., :3].max(2) >= 0.02) if kind == "color" else miss
+        if kind == "color":
+            hit_far = miss & (far[..., :3].max(2) >= DARK)
+            far_hit_by_part[part_name] = hit_far.copy()
+            srcmap[hit_far] = 2                                  # 2 far hit
+        else:
+            hit_far = far_hit_by_part.get(part_name)
+            hit_far = (miss & hit_far) if hit_far is not None else np.zeros_like(miss)
         px[hit_far] = far[hit_far]
         far_share = float(hit_far.mean())
         if kind == "color":
             miss = miss & ~hit_far
             miss_by_part[part_name] = miss.copy()
+        else:
+            miss = miss & ~hit_far
         bpy.data.images.remove(far_img)
+    if kind == "normal" and miss is not None:
+        # a normal that points into the surface is an inside-out hit: flat too
+        bad = miss | (px[..., 2] < 0.5)
+        px[bad] = np.array([0.5, 0.5, 1.0, 1.0], np.float32)
+        log("%s: %d texels set to the flat normal (no hit, or an inside-out one)" % (img_name, int(bad.sum())))
     filled = 0
     nearest = 0
     missed_share = float(miss.mean()) if miss is not None else 0.0
     if kind == "color" and miss is not None and miss.any():
         # the texels still black take the seed's colour at the seed vertex nearest to their own 3D position: a bake
         # of this part's POSITION says where each texel lies; the hands stood too far off the seed for any ray
-        pos_img = bpy.data.images.new(img_name + "_pos", RES, RES, alpha=False, float_buffer=True)
-        pos_img.colorspace_settings.name = "Non-Color"
-        node.image = pos_img
-        bpy.ops.object.select_all(action="DESELECT")
-        obj.select_set(True)
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.bake(type="POSITION", use_selected_to_active=False, margin=0, use_clear=True)
-        pp = np.empty(RES * RES * 4, np.float32)
-        pos_img.pixels.foreach_get(pp)
-        pos = pp.reshape(RES, RES, 4)[..., :3]
+        if pos is None:
+            pos, onmesh = position_map(obj, node, img_name)
         node.image = img
-        bpy.data.images.remove(pos_img)
         from mathutils import kdtree
         sm = src.data
         kd = kdtree.KDTree(len(sm.vertices))
@@ -353,7 +547,11 @@ def bake(part_name, obj, kind):
             kd.insert(v.co, i)
         kd.balance()
         cols = seed_vertex_colours(src)
-        idx = np.argwhere(miss & (np.abs(pos).sum(2) > 1e-6))
+        # one texel in nine is looked up (a kd find per texel in Python took 40 minutes on 843k texels, 2026-10-05);
+        # the neighbour fill below spreads them over the two-texel gaps
+        rows = np.arange(RES)
+        lattice = ((rows % 3 == 0)[:, None]) & ((rows % 3 == 0)[None, :])
+        idx = np.argwhere(miss & lattice & (np.abs(pos).sum(2) > 1e-6))
         rgb = px[..., :3]
         for r, c in idx:
             _co, i, _d = kd.find(pos[r, c])
@@ -361,22 +559,30 @@ def bake(part_name, obj, kind):
         miss[idx[:, 0], idx[:, 1]] = False
         nearest = int(len(idx))
         px[..., :3] = rgb
+        srcmap[idx[:, 0], idx[:, 1]] = 3                         # 3 nearest seed point
     if kind == "color" and miss is not None:
+        # the fill stays on the mesh (the POSITION bake says which texels are): spread across the UV gutters it carried
+        # the hands' pale colour into the neck island beside them (the AINavigator's pale collar, 2026-10-05); a
+        # short unrestricted pass afterwards gives the filled islands their margin
         rgb = px[..., :3]
-        for _ in range(int(args.get("fill_passes", 64))):
-            if not miss.any():
-                break
-            acc = np.zeros_like(rgb)
-            cnt = np.zeros(rgb.shape[:2], np.float32)
-            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                sh = np.roll(np.roll(rgb, dr, 0), dc, 1)
-                shm = np.roll(np.roll(~miss, dr, 0), dc, 1)
-                acc += sh * shm[..., None]
-                cnt += shm
-            can = miss & (cnt > 0)
-            rgb[can] = acc[can] / cnt[can][:, None]
-            filled += int(can.sum())
-            miss = miss & ~can
+        inside = onmesh if onmesh is not None else np.ones(miss.shape, bool)
+        for restricted, passes in ((True, int(args.get("fill_passes", 64))), (False, 8)):
+            for _ in range(passes):
+                if not miss.any():
+                    break
+                acc = np.zeros_like(rgb)
+                cnt = np.zeros(rgb.shape[:2], np.float32)
+                known = ~miss & inside if restricted else ~miss
+                for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    sh = np.roll(np.roll(rgb, dr, 0), dc, 1)
+                    shm = np.roll(np.roll(known, dr, 0), dc, 1)
+                    acc += sh * shm[..., None]
+                    cnt += shm
+                can = miss & (cnt > 0) & (inside if restricted else True)
+                rgb[can] = acc[can] / cnt[can][:, None]
+                filled += int(can.sum())
+                srcmap[can] = 4                                  # 4 neighbour fill
+                miss = miss & ~can
         px[..., :3] = rgb
     tinted = 0
     if kind == "color" and args.get("skin_color") and part_name in (args.get("skin_parts") or ["Body"]):
@@ -384,7 +590,7 @@ def bake(part_name, obj, kind):
         # the AINavigator's hands came out near white against the reference's light blue (2026-10-05)
         h = args["skin_color"].lstrip("#")
         skin = np.array([int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)], np.float32)
-        skin_lin = np.where(skin <= 0.04045, skin / 12.92, ((skin + 0.055) / 1.055) ** 2.4)
+        skin_lin = skin                                  # the map holds sRGB bytes, as the seed texture does
         rgb = px[..., :3]
         mx = rgb.max(2)
         mn = rgb.min(2)
@@ -397,6 +603,34 @@ def bake(part_name, obj, kind):
         px[..., :3] = rgb
         tinted = int(pale.sum())
         log("%s: %d pale texels tinted to the skin colour %s" % (img_name, tinted, args["skin_color"]))
+    if srcmap is not None and args.get("debug_positions") and pos is not None:
+        # where the pale texels of each pass sit in 3D: the pass and the place of a stray colour
+        _on = np.abs(pos).sum(2) > 1e-6
+        log("DEBUG %s object %s matrix %s dims %s; position pass over %d texels: min %s max %s" % (
+            img_name, obj.name, [list(np.round(r, 3)) for r in obj.matrix_world], list(np.round(obj.dimensions, 3)), int(_on.sum()),
+            np.round(pos[_on].min(0), 2).tolist(), np.round(pos[_on].max(0), 2).tolist()))
+        rgbp = px[..., :3]
+        mxp = rgbp.max(2)
+        pale_m = (mxp > 0.55) & ((mxp - rgbp.min(2)) / np.maximum(mxp, 1e-4) < 0.35) & (np.abs(pos).sum(2) > 1e-6)
+        for code, name in ((1, "near"), (2, "far"), (3, "nearest"), (4, "neighbour")):
+            m = pale_m & (srcmap == code)
+            if m.sum() > 50:
+                P = pos[m]
+                log("DEBUG %s pale %s texels: %d, median xyz %s, z range %.2f..%.2f, |x| range %.2f..%.2f" % (
+                    img_name, name, int(m.sum()), np.round(np.median(P, 0), 3).tolist(), P[:, 2].min(), P[:, 2].max(), np.abs(P[:, 0]).min(), np.abs(P[:, 0]).max()))
+    if srcmap is not None:
+        palette = np.array([[0, 0, 0], [0.2, 0.8, 0.2], [0.9, 0.8, 0.1], [0.9, 0.2, 0.2], [0.2, 0.4, 0.9]], np.float32)
+        sm_img = bpy.data.images.new(img_name[:-3] + "_SRC", RES, RES, alpha=False, float_buffer=False)
+        sm_img.colorspace_settings.name = "Non-Color"
+        sm_px = np.ones((RES, RES, 4), np.float32)
+        sm_px[..., :3] = palette[srcmap]
+        sm_img.pixels.foreach_set(sm_px.reshape(-1))
+        sm_img.filepath_raw = os.path.join(OUT, img_name[:-3] + "_SRC.png")
+        sm_img.file_format = "PNG"
+        sm_img.save()
+        report.setdefault("source_maps", {})[part_name] = {"file": os.path.basename(sm_img.filepath_raw),
+                                                           "key": "green near hit, yellow far hit, red nearest seed point, blue neighbour fill, black never written",
+                                                           "shares": {k: round(float((srcmap == i).mean()), 4) for i, k in enumerate(("none", "near", "far", "nearest", "neighbour"))}}
     img.pixels.foreach_set(px.reshape(-1))
     path = os.path.join(OUT, img_name + ".png")
     img.filepath_raw = path
@@ -420,6 +654,8 @@ def bake(part_name, obj, kind):
 baked = {}
 coverage_by_part = {}
 miss_by_part = {}
+near_miss_by_part = {}
+far_hit_by_part = {}
 for part_name, obj in parts:
     for kind in MAPS:
         baked[(part_name, kind)] = bake(part_name, obj, kind)

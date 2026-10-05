@@ -78,9 +78,23 @@ installed, an Epic account signed in (the auto-rig and the texture sources are c
 -> `T_<Name>_Head_BC.png`, `T_<Name>_Head_N.png`, `T_<Name>_Body_BC.png`, `T_<Name>_Body_N.png`, `bake_report.json`,
 `bake_preview_<front|side>.png`. The head bakes from `<Name>_head.glb` when the conform wrote one. A posed mesh that is
 the seed's height but stands off it (19 cm behind on a tracked solve) is moved onto the seed's bounds first
-(`alignment.shifted_onto_seed`; `--no-align` keeps it). Texels no near ray reaches take the nearest seed point's colour;
-the old far-cage pass (`--far-pass`) printed the seed's shaded far side as dark patches on the chest and back.
-`--skin-color` recolours pale texels (a seed's washed-out hands and feet) to the planned skin, shading kept. The head is the skin faces on UDIM 1001 (teeth, eyes, lashes, shells keep MetaHuman's
+(`alignment.shifted_onto_seed`, a rigid ICP: yaw and translation; `--no-align` keeps it). A MetaHuman body stands
+up to 3 cm off a slim seed: `--cage 30` covered 91% of the AINavigator's body texels where 12 mm covered half; `--far-pass`
+adds a 2.5x-cage pass for the rest (4x printed the seed's shaded far side as dark patches); what both miss takes the
+nearest seed point's colour. Image.pixels are sRGB bytes for the bake and the seed texture alike: never convert
+(a linear-to-sRGB "fix" turned the suit pale, 2026-10-05). `--skin-color` recolours low-saturation texels to a
+planned skin and is rarely wanted: a light-blue skin (155,195,211) is itself near the threshold.
+What the AINavigator's nine bakes taught (2026-10-05), all in `mh-bake` now: the posed arms are swung onto the seed's
+hands through the posed mesh's own armature (the solve stood them 12 cm forward; `--no-swing-arms` keeps them); with
+a head source the body seed loses its own head above the neck (`--body-cut`, default the conform's neck; set it at
+the collar top when the seed's neck skin shows above it) and the face mesh's neck below that height is baked from the
+BODY source (the two seeds disagreed about where the turtleneck ends); rays see only the source and the target (the
+body's neck had sampled the head seed's skin); the POSITION pass is calibrated to the part's bounds (it came back 16x,
+so every nearest-point fill had landed on the hands); the neighbour fill stays on the mesh (it had crept across UV
+gutters from the hand islands); a hit darker than `dark_is_miss` (0.1) counts as a miss (inside-out hits on the
+elbows); the normal map follows the colour map's hit masks and is flat elsewhere. `T_<Name>_<Part>_SRC.png` colours
+every texel by the pass that wrote it (green near, yellow far, red nearest point, blue neighbour fill): read it when
+a colour is wrong before changing anything. The head is the skin faces on UDIM 1001 (teeth, eyes, lashes, shells keep MetaHuman's
 maps); the body is tile 1002 moved onto 0-1 (Blender bakes one tile). Read the previews and the report: `alignment`
 (the posed mesh must sit on the seed: a height or centre off means the wrong FBX), `coverage` per map (the UV islands'
 share, about 50-70%), and the neck: the seed's head and body textures meet at the MetaHuman's neck seam, and the

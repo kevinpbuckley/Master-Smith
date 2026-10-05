@@ -1526,7 +1526,7 @@ def cmd_mh_conform(a):
     args = {"source": src, "extra": [p for p in (a.extra or "").split(",") if p], "name": job.spec.name, "height_m": height,
             "out_dir": out, "template_glb": os.path.join(mh.TEMPLATES, "MH_Template.glb"),
             "template_json": os.path.join(mh.TEMPLATES, "template.json"),
-            "strip": [s for s in (a.strip or "").split(",") if s], "head": head, "head_yaw": a.head_yaw}
+            "strip": [s for s in (a.strip or "").split(",") if s], "head": head, "head_yaw": a.head_yaw, "head_cut_m": a.head_cut}
     _blender(job, "mh_conform.py", args, "mh_conform", timeout=1200)
     rep = json.load(open(os.path.join(out, "conform_report.json"), encoding="utf-8"))
     verdict = mh.check_pose(rep)
@@ -1572,7 +1572,16 @@ def cmd_mh_bake(a):
     args = {"source": src, "posed_fbx": posed, "name": job.spec.name, "out_dir": out, "resolution": a.resolution,
             "cage_m": a.cage / 1000.0, "maps": ["color", "normal"] if not a.color_only else ["color"],
             "head_source": head_src or None, "far_pass": bool(a.far_pass), "skin_color": a.skin_color,
-            "skin_parts": [p for p in (a.skin_parts or "Body").split(",") if p], "align": not a.no_align}
+            "skin_parts": [p for p in (a.skin_parts or "Body").split(",") if p], "align": not a.no_align,
+            "swing_arms": not a.no_swing_arms, "body_cut_z": 0.0}
+    # with a separate head the body source loses its own head above the neck the conform measured
+    crep = os.path.join(out, "conform_report.json")
+    if a.body_cut:
+        args["body_cut_z"] = float(a.body_cut)
+    elif head_src and os.path.exists(crep):
+        neck = (json.load(open(crep, encoding="utf-8")).get("head") or {}).get("neck_z_m")
+        if neck:
+            args["body_cut_z"] = float(neck)
     if head_src:
         print("the head bakes from %s" % head_src)
     _blender(job, "mh_bake.py", args, "mh_bake", timeout=3600)
@@ -1584,6 +1593,8 @@ def cmd_mh_bake(a):
             name, m["resolution"], m["coverage"] * 100, m.get("far_pass_share", 0) * 100, m.get("nearest_seed_point", 0), m.get("skin_tinted", 0), m["convention"]))
     print("  alignment: seed %.3f m, posed mesh %.3f m, centres off by %s m%s" % (al["source_height_m"], al["posed_height_m"], al["centre_offset_m"],
           " (moved onto the seed before baking)" if al.get("shifted_onto_seed") else ""))
+    if rep.get("arms_swung_onto_seed"):
+        print("  arms swung onto the seed's hands: " + ", ".join("%s %.1f deg" % (k, v["angle_deg"]) for k, v in rep["arms_swung_onto_seed"].items()))
     print("  faces: %s" % rep["face_split"])
     print("  previews: " + ", ".join(os.path.join(out, r) for r in rep["renders"].values()))
     print("  " + rep["unreal"])
@@ -1815,6 +1826,7 @@ def main(argv=None):
     s.add_argument("--height", type=float, help="the character's height in metres (default: the brief's size)")
     s.add_argument("--head", help="a separate head seed (parts/Head/seed.glb): placed on the body's head, exported alone as <Name>_head.glb for a HeadAndBody conform")
     s.add_argument("--head-yaw", type=float, default=0.0, help="degrees about the vertical to turn the head seed so its face points -Y (read its renders)")
+    s.add_argument("--head-cut", type=float, default=0.12, help="metres of neck and shoulder kept below the neck on the head mesh (the tracker frames on its bounds)")
     s.set_defaults(fn=cmd_mh_conform)
     s = sub.add_parser("mh-bake", help="the seed's colour and normal baked onto the posed MetaHuman mesh exported from Unreal")
     s.add_argument("job"); s.add_argument("--posed", required=True, help="the skeletal mesh FBX Unreal generated from the POSED DNA")
@@ -1826,6 +1838,8 @@ def main(argv=None):
     s.add_argument("--skin-color", help="#rrggbb: pale texels on --skin-parts take this colour (washed-out hands and feet)")
     s.add_argument("--skin-parts", default="Body", help="comma-separated parts the skin colour applies to (default Body)")
     s.add_argument("--no-align", action="store_true", help="do not move the posed mesh onto the seed's bounds centre before baking")
+    s.add_argument("--no-swing-arms", action="store_true", help="keep the posed arms where the solve left them (default: swung onto the seed's hands)")
+    s.add_argument("--body-cut", type=float, help="metres: with a head source the body seed loses everything above this (default: the conform's neck); set it at the collar top when the seed's neck skin shows above it")
     s.set_defaults(fn=cmd_mh_bake)
     s = sub.add_parser("mh-attach", help="an accessory weighted onto the built MetaHuman's skeleton, exported as a skeletal mesh")
     s.add_argument("job"); s.add_argument("part", help="the part (its seed is the accessory) and the FBX's name")
