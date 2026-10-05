@@ -193,18 +193,9 @@ scn.render.image_settings.color_mode = "RGB"
 scn.render.image_settings.color_depth = "8"
 
 
-def bake(part_name, obj, kind):
-    img_name = "T_%s_%s_%s" % (NAME, part_name, "BC" if kind == "color" else "N")
-    img = bpy.data.images.new(img_name, RES, RES, alpha=False, float_buffer=False)
-    img.colorspace_settings.name = "sRGB" if kind == "color" else "Non-Color"
-    img.generated_color = (0.5, 0.5, 1.0, 1.0) if kind == "normal" else (0.0, 0.0, 0.0, 1.0)
-    mat = bpy.data.materials.new("Bake_%s_%s" % (part_name, kind))
-    mat.use_nodes = True
-    node = mat.node_tree.nodes.new("ShaderNodeTexImage")
+def bake_once(obj, node, img, cage, kind):
+    """One Cycles bake of the source onto obj into img, rays reaching `cage` metres."""
     node.image = img
-    mat.node_tree.nodes.active = node
-    obj.data.materials.clear()
-    obj.data.materials.append(mat)
     bpy.ops.object.select_all(action="DESELECT")
     source.select_set(True)
     obj.select_set(True)
@@ -212,35 +203,91 @@ def bake(part_name, obj, kind):
     if kind == "color":
         scn.render.bake.use_pass_direct = scn.render.bake.use_pass_indirect = False
         scn.render.bake.use_pass_color = True
-        bpy.ops.object.bake(type="DIFFUSE", pass_filter={"COLOR"}, use_selected_to_active=True, cage_extrusion=CAGE,
-                            max_ray_distance=CAGE * 2.5, margin=scn.render.bake.margin, use_clear=True)
+        bpy.ops.object.bake(type="DIFFUSE", pass_filter={"COLOR"}, use_selected_to_active=True, cage_extrusion=cage,
+                            max_ray_distance=cage * 2.5, margin=scn.render.bake.margin, use_clear=True)
     else:
         scn.render.bake.normal_space = "TANGENT"
-        bpy.ops.object.bake(type="NORMAL", normal_space="TANGENT", use_selected_to_active=True, cage_extrusion=CAGE,
-                            max_ray_distance=CAGE * 2.5, margin=scn.render.bake.margin, use_clear=True)
+        bpy.ops.object.bake(type="NORMAL", normal_space="TANGENT", use_selected_to_active=True, cage_extrusion=cage,
+                            max_ray_distance=cage * 2.5, margin=scn.render.bake.margin, use_clear=True)
+    px = np.empty(RES * RES * 4, np.float32)
+    img.pixels.foreach_get(px)
+    return px.reshape(RES, RES, 4)
+
+
+def bake(part_name, obj, kind):
+    img_name = "T_%s_%s_%s" % (NAME, part_name, "BC" if kind == "color" else "N")
+    img = bpy.data.images.new(img_name, RES, RES, alpha=False, float_buffer=False)
+    img.colorspace_settings.name = "sRGB" if kind == "color" else "Non-Color"
+    mat = bpy.data.materials.new("Bake_%s_%s" % (part_name, kind))
+    mat.use_nodes = True
+    node = mat.node_tree.nodes.new("ShaderNodeTexImage")
+    mat.node_tree.nodes.active = node
+    obj.data.materials.clear()
+    obj.data.materials.append(mat)
+    px = bake_once(obj, node, img, CAGE, kind)
+    # Where no ray reached the seed the texel stays the clear colour. Whole hands came out black when the solved
+    # MetaHuman's hands stood 5-10 cm off the seed's (the AINavigator, 2026-10-05): a second pass with a far cage
+    # fills exactly those texels, and what is still missing takes the nearest baked colour.
+    if kind == "color":
+        miss = px[..., :3].max(2) < 0.02
+        miss_by_part[part_name] = miss.copy()
+    else:
+        miss = miss_by_part.get(part_name)
+    far_share = 0.0
+    if miss is not None and miss.mean() > 0.002:
+        far_img = bpy.data.images.new(img_name + "_far", RES, RES, alpha=False, float_buffer=False)
+        far_img.colorspace_settings.name = img.colorspace_settings.name
+        far = bake_once(obj, node, far_img, CAGE * 4, kind)
+        node.image = img
+        hit_far = miss & (far[..., :3].max(2) >= 0.02) if kind == "color" else miss
+        px[hit_far] = far[hit_far]
+        far_share = float(hit_far.mean())
+        if kind == "color":
+            miss = miss & ~hit_far
+            miss_by_part[part_name] = miss.copy()
+        bpy.data.images.remove(far_img)
+    filled = 0
+    missed_share = float(miss.mean()) if miss is not None else 0.0
+    if kind == "color" and miss is not None:
+        rgb = px[..., :3]
+        for _ in range(int(args.get("fill_passes", 64))):
+            if not miss.any():
+                break
+            acc = np.zeros_like(rgb)
+            cnt = np.zeros(rgb.shape[:2], np.float32)
+            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                sh = np.roll(np.roll(rgb, dr, 0), dc, 1)
+                shm = np.roll(np.roll(~miss, dr, 0), dc, 1)
+                acc += sh * shm[..., None]
+                cnt += shm
+            can = miss & (cnt > 0)
+            rgb[can] = acc[can] / cnt[can][:, None]
+            filled += int(can.sum())
+            miss = miss & ~can
+        px[..., :3] = rgb
+    img.pixels.foreach_set(px.reshape(-1))
     path = os.path.join(OUT, img_name + ".png")
     img.filepath_raw = path
     img.file_format = "PNG"
     img.save()
-    # coverage: the share of texels the bake wrote (the UV islands' area plus margin). A flat normal IS the clear
-    # colour, so a normal map's coverage is read off the colour bake of the same part (4% on a full head, 2026-10-04)
+    # coverage: the share of texels the bake wrote (the UV islands' area plus margin), read off the colour bake
     if kind == "color":
-        px = np.empty(RES * RES * 4, np.float32)
-        img.pixels.foreach_get(px)
-        px = px.reshape(-1, 4)
-        covered = float((px[:, :3].max(1) > 0.02).mean())
+        covered = float((px[..., :3].max(2) > 0.02).mean())
         coverage_by_part[part_name] = covered
     else:
         covered = coverage_by_part.get(part_name)
     report["maps"][img_name] = {"file": os.path.basename(path), "kind": kind, "part": part_name, "resolution": RES,
                                 "coverage": round(covered, 3) if covered is not None else None,
+                                "far_pass_share": round(far_share, 4), "filled_from_neighbours": filled, "missed_after_far": round(missed_share, 4),
                                 "convention": "OpenGL +Y tangent normal (flip green on Unreal import)" if kind == "normal" else "sRGB base colour"}
-    log("baked %s (%s of the texels)" % (img_name, ("%.0f%%" % (covered * 100)) if covered is not None else "coverage as the colour map's"))
+    log("baked %s: %s of the texels, %.1f%% from the far pass, %d filled from neighbours" % (
+        img_name, ("%.0f%%" % (covered * 100)) if covered is not None else "coverage as the colour map's", far_share * 100, filled))
     return img
 
 
 baked = {}
 coverage_by_part = {}
+miss_by_part = {}
 for part_name, obj in parts:
     for kind in MAPS:
         baked[(part_name, kind)] = bake(part_name, obj, kind)

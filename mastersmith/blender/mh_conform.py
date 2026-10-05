@@ -220,7 +220,11 @@ if arm_rows:
             rs = runs(occ[r])
             if len(rs) >= 3:
                 a, b = pick(rs)
-                pts.append((((a + b) / 2 - centre_col) * GRID, r * GRID))
+                x = ((a + b) / 2 - centre_col) * GRID
+                # only a run clear of the torso is an arm: a sampling hole in a thigh split the leg into runs and the
+                # outer leg stood in for the arm, flattening a 35-degree arm to 5 (the AINavigator, 2026-10-05)
+                if abs(x) > torso_w / 2 + 0.02:
+                    pts.append((x, r * GRID))
         if len(pts) > 10:
             pts = np.array(pts)
             # the line through the arm's run centres: angle from vertical
@@ -229,10 +233,26 @@ if arm_rows:
             ang = math.degrees(math.atan2(abs(np.dot(dx, dz)), np.dot(dz, dz))) if np.dot(dz, dz) else 0
             report["arm_angle_deg_%s" % side] = round(ang, 1)
             report["hand_bottom_m_%s" % side] = round(float(pts[:, 1].min()), 3)
+            report["arm_pts_%s" % side] = {"rows": len(pts), "x_range_m": [round(float(pts[:, 0].min()), 3), round(float(pts[:, 0].max()), 3)],
+                                            "z_range_m": [round(float(pts[:, 1].min()), 3), round(float(pts[:, 1].max()), 3)]}
 else:
     report["armpit_gap_m"] = 0.0
     report["arm_angle_deg_l"] = report["arm_angle_deg_r"] = 0.0
     log("the arms do not separate from the torso in the front silhouette")
+# the grid the pose was read off, for a look when the numbers disagree with the overlay (2026-10-05)
+try:
+    import bpy as _bpy
+    sil = _bpy.data.images.new("Silhouette", W, Hc, alpha=False)
+    px = np.zeros((Hc, W, 4), np.float32)
+    px[..., :3] = occ[:, :, None]
+    px[..., 3] = 1
+    sil.pixels.foreach_set(px.reshape(-1))
+    sil.filepath_raw = os.path.join(OUT, "conform_silhouette.png")
+    sil.file_format = "PNG"
+    sil.save()
+    report["silhouette_grid"] = "conform_silhouette.png"
+except Exception as exc:  # a picture for the agent, never a reason to fail
+    log("silhouette grid not written: %s" % exc)
 # legs: the gap between the two runs at knee height (25-30%)
 leg_gaps = []
 for r in range(int(0.25 * Hc), int(0.30 * Hc)):
@@ -308,6 +328,7 @@ def flat(name, rgb):
     return m
 
 
+kept_materials = [m for m in body.data.materials]       # the seed's textures go back on before the export
 body.data.materials.clear()
 body.data.materials.append(flat("SeedWhite", (1, 1, 1)))
 tmpl_obj.data.materials.clear()
@@ -332,8 +353,14 @@ tmpl_obj.location = (0, 0, 0)
 report["renders"] = renders
 report["render_key"] = "white: the seed as it will be exported; red: the MetaHuman template at the same height, where the seed does not cover it"
 
-# --- export: one static mesh, metres, transforms applied, no materials needed (the solver reads geometry)
+# --- export: one static mesh, metres, transforms applied, WITH the seed's materials: the solver reads geometry, but
+# the bake and the face tracker want the texture (the GLB went out white under the overlay's flat material, 2026-10-05)
 bpy.data.objects.remove(tmpl_obj, do_unlink=True)
+body.data.materials.clear()
+for m in kept_materials:
+    body.data.materials.append(m)
+report["materials"] = [m.name if m else "" for m in kept_materials]
+report["textured"] = any(m and m.use_nodes and any(n.type == "TEX_IMAGE" and n.image for n in m.node_tree.nodes) for m in kept_materials)
 blib.select_only([body])
 glb = os.path.join(OUT, "%s_conform.glb" % NAME)
 bpy.ops.export_scene.gltf(filepath=glb, use_selection=True, export_format="GLB", export_apply=True,
