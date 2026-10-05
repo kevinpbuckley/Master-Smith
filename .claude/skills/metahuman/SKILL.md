@@ -115,8 +115,11 @@ has the full example). `execute_python_code`, `svc = unreal.MetaHumanCharacterSe
    Read `warnings` (feet off the floor, metres, facing) and `face_tracking` (curves, points, and `render`: the
    front-on picture the tracker saw, in the project's `Saved/VibeMetaHumans/`); a failed tracking leaves the
    archetype face - the seed needs eyes in its sockets and a bald head facing +Y; fix it and run again.
-3. `svc.save_posed_dna(character, static_mesh, "", folder, "<job>/delivery/metahuman/in", "<Name>_Posed")` BEFORE
-   anything else: the baking target. Then `svc.generate_skeletal_mesh_from_dna(folder + "/<Name>_Posed", folder,
+3. The baking target comes from a SCRATCH character solved body-only (`import_from_custom_mesh(..., True, False, 1024)`),
+   because the face-tracked solve stands the posed body 19 cm behind the mesh (the AINavigator, 2026-10-05):
+   `svc.save_posed_dna(scratch, static_mesh, "", folder, "<job>/delivery/metahuman/in", "<Name>_Posed")`, then
+   delete the scratch character. Conform once per fresh character; a second conform after `commit_a_pose` twisted the
+   posed DNA. Then `svc.generate_skeletal_mesh_from_dna(folder + "/<Name>_Posed", folder,
    "SKM_<Name>_Posed", "body")` and `svc.export_fbx(that, "<job>/delivery/metahuman/in/<Name>_Posed.fbx")` for
    `ms mh-bake`.
 4. `svc.commit_a_pose(character, static_mesh, "")`, eyes and teeth (`set_eye_color`, `set_settings "head"`),
