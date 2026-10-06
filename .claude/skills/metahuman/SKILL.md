@@ -164,6 +164,12 @@ has the full example). `execute_python_code`, `svc = unreal.MetaHumanCharacterSe
    before every build; add Hair / Eyebrows / Eyelashes again (`add_wardrobe_item`). A rebuild regenerates the
    Blueprint and the material instances: the baked T_ maps go back onto the MIs and the rigid accessories back onto
    the Blueprint afterwards (read their relative transforms off the old Blueprint first).
+   Build into the PROJECT's character folder, never the engine default `/Game/MetaHumans` (the owner looked for
+   the AINavigator beside Proteus's other MetaHumans and did not find it, 2026-10-06): in Proteus
+   `build(c, "Cinematic", "Cinematic", "/Game/Proteus/Characters/MetaHumans/<Name>", "<Name>")` ->
+   `<Name>/<Name>/BP_<Name>`, the Creator asset `MH_<Name>` beside the `<Name>` folder, and the T_ maps,
+   accessories and conform imports in `<Name>/Textures`, `<Name>/Accessories`, `<Name>/Source` - outside the
+   build output so a rebuild cannot touch them.
    `svc.commit_a_pose(character, static_mesh, "")`, eyes and teeth (`set_eye_color`, `set_settings "head"`),
    `request_auto_rig(character, "JointsOnly", True)`, `request_texture_sources(character, True)` (both cloud, Epic
    login), `build(character, "Cinematic", "Cinematic", "/Game/MetaHumans", "")` -> `BP_<Name>`.
