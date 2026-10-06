@@ -6,7 +6,10 @@ args: {"source": the textured seed in the conform's frame (<Name>_conform.glb, o
                     skeletal mesh > Asset Actions > Export), "name", "out_dir", "resolution": 4096, "cage_m": 0.012,
        "maps": ["color", "normal"], "head_source": a separate textured head mesh in the same frame (the head part bakes
        from it), "far_pass": false, "skin_color": "#rrggbb" (pale texels on the parts in "skin_parts" take it),
-       "skin_parts": ["Body"], "align": true (the posed mesh moved onto the seed's bounds centre before baking)}
+       "skin_parts": ["Body"], "align": true (the posed mesh moved onto the seed's bounds centre before baking),
+       "face_fit": true (the head source's face warped onto the MetaHuman's landmarks first, mh_face_fit.py),
+       "eye_inset": 0.35 (the seed's painted eye edge that far inside the MetaHuman's lower lid and corners),
+       "head_landmarks": {"eye_in_l": [x, y, z], ...} (seed landmarks given by hand, metres, over the detected ones)}
 Writes T_<Name>_Head_BC.png / _N.png and T_<Name>_Body_BC.png / _N.png on the MetaHuman UV layout (head on tile
 1001, the body's tile 1002 moved onto 0-1 so Blender can bake it), bake_report.json and bake_preview_<front|side>.png.
 
@@ -376,6 +379,21 @@ if is_body.sum():
     parts.append(("Body", part_object(is_body, "MH_Body", 1)))
 bpy.data.objects.remove(target, do_unlink=True)
 
+# --- the head seed's face fitted onto the MetaHuman's (mh_face_fit.py): baked as placed, a stylised head's eyes landed
+# on the MetaHuman's cheeks and its mouth on the chin (the AINavigator's comms portrait, 2026-10-06)
+face_fit = None
+head_part = next((o for n, o in parts if n == "Head"), None)
+if head_source is not None and head_part is not None and args.get("face_fit", True):
+    import mh_face_fit
+    lmj = args.get("face_landmarks_json") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "metahuman",
+                                                          "templates", "face_landmarks.json")
+    try:
+        face_fit, _fit_src, face_fit_tgt = mh_face_fit.fit_head(head_source, head_part, lmj, log, args.get("head_landmarks"),
+                                                                float(args.get("eye_inset", 0.35)))
+        report["face_fit"] = face_fit
+    except Exception as e:                                   # a face the detection cannot read bakes as placed
+        log("WARNING face fit failed (%s): the head bakes as the conform placed it - give head_landmarks by hand" % e)
+
 # --- bake, selected (source) to active (part)
 scn = bpy.context.scene
 scn.render.engine = "CYCLES"
@@ -701,6 +719,37 @@ for view, cv in (("front", "left"), ("side", "front")):      # the character fac
     bpy.ops.render.render(write_still=True)
     renders[view] = os.path.basename(path)
 stage.close()
+if face_fit is not None:
+    # the fitted head seed from the front with the MetaHuman's landmarks as red dots: its painted eye corners, lids,
+    # brows, nose, mouth corners and chin should sit on them
+    shown.hide_render = True
+    head_source.hide_render = False
+    dots = []
+    for k in face_fit["pairs"]:
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=0.0018, location=Vector(face_fit_tgt[k]), segments=12, ring_count=8)
+        d = bpy.context.active_object
+        if not bpy.data.materials.get("FitDot"):
+            dm = bpy.data.materials.new("FitDot")
+            dm.use_nodes = True
+            em = dm.node_tree.nodes.new("ShaderNodeEmission")
+            em.inputs[0].default_value = (1, 0.1, 0.1, 1)
+            em.inputs[1].default_value = 4
+            dm.node_tree.links.new(em.outputs[0], dm.node_tree.nodes["Material Output"].inputs[0])
+        d.data.materials.append(bpy.data.materials["FitDot"])
+        dots.append(d)
+    T_ = np.array([face_fit_tgt[k] for k in face_fit["pairs"]])
+    c_ = T_.mean(0)
+    half = max(float(np.ptp(T_[:, 0])), float(np.ptp(T_[:, 2]))) * 0.75
+    stage = blib.Stage(head_source, extra_hidden=[], look="preview")
+    for d in dots:
+        d.hide_render = False
+    blib.ortho_camera(cam, "left", Vector((c_[0] - half, c_[1] - 0.2, c_[2] - half)), Vector((c_[0] + half, c_[1] + 0.2, c_[2] + half)), margin=1.0)
+    scn.camera = cam
+    path = os.path.join(OUT, "face_fit_front.png")
+    scn.render.filepath = path
+    bpy.ops.render.render(write_still=True)
+    renders["face_fit"] = os.path.basename(path)
+    stage.close()
 report["renders"] = renders
 report["unreal"] = ("drop the T_ maps into the built MetaHuman's Body/Baked and Face/Baked folders over T_Body_BC/N and "
                     "T_Head_LOD*_BC/N, or set them on MI_Body_Baked and MI_Face_Skin_Baked_LOD*; import the _N maps with "

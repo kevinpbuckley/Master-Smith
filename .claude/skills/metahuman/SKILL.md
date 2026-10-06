@@ -76,7 +76,17 @@ installed, an Epic account signed in (the auto-rig and the texture sources are c
 `$PY mh-bake out/<Name> --posed delivery/metahuman/in/<Name>_Posed.fbx [--resolution 4096] [--skin-color #b5cfe0]
 [--far-pass] [--head-source <mesh>]`
 -> `T_<Name>_Head_BC.png`, `T_<Name>_Head_N.png`, `T_<Name>_Body_BC.png`, `T_<Name>_Body_N.png`, `bake_report.json`,
-`bake_preview_<front|side>.png`. The head bakes from `<Name>_head.glb` when the conform wrote one. A posed mesh that is
+`bake_preview_<front|side>.png`. The head bakes from `<Name>_head.glb` when the conform wrote one, and its face is
+FITTED onto the MetaHuman's first (`mh_face_fit.py`, 2026-10-06): a stylised head carries its eyes lower and wider than
+any MetaHuman (the AINavigator's sat 3 cm under the sockets, 4 cm further out), and baked as placed its painted eyes
+landed on the cheeks beside the nose with the mouth on the chin - two pairs of eyes in the comms portrait. The fit
+reads the seed's eye corners, lids, brows, nose, mouth corners, chin and ears off its texture and shape, finds the same
+points on the posed head by MetaHuman's shared UVs (`metahuman/templates/face_landmarks.json`), and thin-plate warps
+the head seed onto them (the cranium, back and neck onto the MetaHuman's nearest surface). Read `face_fit_front.png`
+(the fitted seed with the MetaHuman's landmarks as red dots: its painted corners and lips sit on them) and
+`bake_report.json` `face_fit` (pairs, moves, `missing`); a misread landmark is given by hand with `--head-landmarks
+<json>` (metres, the conform's frame), `--no-face-fit` bakes as placed. In UV space the eyes belong at v 0.62 and the
+lip corners at v 0.41 (u 0.42 / 0.58): a head BC with features elsewhere is the wrong fit. A posed mesh that is
 the seed's height but stands off it (19 cm behind on a tracked solve) is moved onto the seed's bounds first
 (`alignment.shifted_onto_seed`, a rigid ICP: yaw and translation; `--no-align` keeps it). A MetaHuman body stands
 up to 3 cm off a slim seed: `--cage 30` covered 91% of the AINavigator's body texels where 12 mm covered half; `--far-pass`
@@ -149,7 +159,12 @@ has the full example). `execute_python_code`, `svc = unreal.MetaHumanCharacterSe
    posed DNA. Then `svc.generate_skeletal_mesh_from_dna(folder + "/<Name>_Posed", folder,
    "SKM_<Name>_Posed", "body")` and `svc.export_fbx(that, "<job>/delivery/metahuman/in/<Name>_Posed.fbx")` for
    `ms mh-bake`.
-4. `svc.commit_a_pose(character, static_mesh, "")`, eyes and teeth (`set_eye_color`, `set_settings "head"`),
+4. The wardrobe lives on the character asset: a NEW character (a re-conform makes one) starts with none, and its build
+   ships bald with no brows or lashes (the AINavigator's comms portrait, 2026-10-06). `get_summary(c)["wardrobe_selections"]`
+   before every build; add Hair / Eyebrows / Eyelashes again (`add_wardrobe_item`). A rebuild regenerates the
+   Blueprint and the material instances: the baked T_ maps go back onto the MIs and the rigid accessories back onto
+   the Blueprint afterwards (read their relative transforms off the old Blueprint first).
+   `svc.commit_a_pose(character, static_mesh, "")`, eyes and teeth (`set_eye_color`, `set_settings "head"`),
    `request_auto_rig(character, "JointsOnly", True)`, `request_texture_sources(character, True)` (both cloud, Epic
    login), `build(character, "Cinematic", "Cinematic", "/Game/MetaHumans", "")` -> `BP_<Name>`.
 5. `svc.export_fbx("/Game/MetaHumans/<Name>/Body/SKM_MH_<Name>_BodyMesh", "<job>/delivery/metahuman/in/SKM_MH_<Name>_BodyMesh.fbx")`
@@ -175,8 +190,20 @@ has the full example). `execute_python_code`, `svc = unreal.MetaHumanCharacterSe
    about 90 editor ticks (a slate post-tick callback) before capturing. Grooms are dyed on their `MI_WI_Hair_*`
    instances (`hairMelanin`, `hairRedness`, `hairDye`), the Cards and Helmet instances too. `import_texture` over an
    existing asset of the same name keeps the OLD data: delete it first. The skin shader's `Scatter Baked` map stays
-   the build's own (`T_Body_Scatter`, `T_Head_Scatter`).
+   the build's own (`T_Body_Scatter`, `T_Head_Scatter`). Eye colour on a stylised character: the built eye material
+   (`MI_EyeL/R_Baked`) reads `Iris Basecolor Baked` / `Sclera Basecolor Baked` and IGNORES its colour multipliers and
+   hue scalars; MetaHuman's pink sclera reads brown under the lids against a blue skin (the AINavigator, 2026-10-06).
+   Export `T_EyeIris*_BC` / `T_EyeScleraL_BC` (AssetExportTask + TextureExporterPNG), recolour them (the iris's
+   luminance onto the seed's iris colour ramp, the sclera desaturated to a cool white), import them as
+   `T_<Name>_EyeIrisL/R_BC`, `T_<Name>_EyeSclera_BC` and set them on both eye MIs. A rebuild REPLACES `BP_<Name>`:
+   anything already holding its class in memory (a comms speaker profile's `MetaHumanActorClass`) keeps the old class,
+   renamed `BP_<Name>_TEMP_..._C` in /Engine/Transient - the old build with no grooms and dead textures - until it
+   is set again or the editor restarts.
 Still by hand: an Epic login for the cloud steps, and saving (`EditorAssetLibrary.save_asset`, or the MCP's auto-save).
+Save the build folder (`save_directory("/Game/MetaHumans/<Name>")`, seconds) BEFORE the character asset, and save the
+character only after `svc.end_edit(c)` with `svc.save(c)`: saved while still open for editing after a build, its
+SavePackage streamed MetaHuman's preview lighting levels and hung the editor for 20+ minutes with nothing written; the
+kill lost the whole session (2026-10-06). After `end_edit` the same save took 0.6 s.
 Lower-level when needed: `MetaHumanObjectService.list_functions("MetaHumanCharacterEditorSubsystem")`, the subsystem
 in Python (`conform_to_target_meshes`, `get_mesh_data_for_conforming`, `get_preset_body_key_points`), and
 `MetaHumanCharacterExportBlueprintLibrary.export_posed_dna / export_geometry / export_dcc`.

@@ -1573,7 +1573,10 @@ def cmd_mh_bake(a):
             "cage_m": a.cage / 1000.0, "maps": ["color", "normal"] if not a.color_only else ["color"],
             "head_source": head_src or None, "far_pass": bool(a.far_pass), "skin_color": a.skin_color,
             "skin_parts": [p for p in (a.skin_parts or "Body").split(",") if p], "align": not a.no_align,
-            "swing_arms": not a.no_swing_arms, "body_cut_z": 0.0}
+            "swing_arms": not a.no_swing_arms, "body_cut_z": 0.0, "face_fit": not a.no_face_fit, "eye_inset": a.eye_inset}
+    if a.head_landmarks:
+        hl = a.head_landmarks if os.path.isabs(a.head_landmarks) else job.path(a.head_landmarks)
+        args["head_landmarks"] = json.load(open(hl, encoding="utf-8"))
     # with a separate head the body source loses its own head above the neck the conform measured
     crep = os.path.join(out, "conform_report.json")
     if a.body_cut:
@@ -1596,6 +1599,14 @@ def cmd_mh_bake(a):
     if rep.get("arms_swung_onto_seed"):
         print("  arms swung onto the seed's hands: " + ", ".join("%s %.1f deg" % (k, v["angle_deg"]) for k, v in rep["arms_swung_onto_seed"].items()))
     print("  faces: %s" % rep["face_split"])
+    ff = rep.get("face_fit")
+    if ff:
+        print("  face fit: %d landmark pairs onto the MetaHuman's (eyes %s / %s mm, mouth %s mm, largest vertex move %s mm)%s" % (
+            len(ff["pairs"]), ff["pairs"].get("eye_in_l", {}).get("move_mm"), ff["pairs"].get("eye_in_r", {}).get("move_mm"),
+            ff["pairs"].get("mouth", {}).get("move_mm"), ff["max_vertex_move_mm"],
+            "; not found: " + ", ".join(ff["missing"]) if ff["missing"] else ""))
+    elif head_src and not a.no_face_fit:
+        print("  face fit: FAILED (bake_report notes) - the head baked as placed; read face_fit_front.png / give --head-landmarks")
     print("  previews: " + ", ".join(os.path.join(out, r) for r in rep["renders"].values()))
     print("  " + rep["unreal"])
     ledger.record(job.dir, "mh-bake", maps=sorted(rep["maps"]), alignment=al)
@@ -1840,6 +1851,9 @@ def main(argv=None):
     s.add_argument("--no-align", action="store_true", help="do not move the posed mesh onto the seed's bounds centre before baking")
     s.add_argument("--no-swing-arms", action="store_true", help="keep the posed arms where the solve left them (default: swung onto the seed's hands)")
     s.add_argument("--body-cut", type=float, help="metres: with a head source the body seed loses everything above this (default: the conform's neck); set it at the collar top when the seed's neck skin shows above it")
+    s.add_argument("--no-face-fit", action="store_true", help="bake the head source as the conform placed it (default: its face warped onto the MetaHuman's eyes, brows, nose, mouth, chin and ears first)")
+    s.add_argument("--eye-inset", type=float, default=0.35, help="how far inside the MetaHuman's lower lid (and corners) the seed's painted eye edge goes, 0-1 of the way to the eye's centre (0: on the lid margins; a stylised eye's big iris then shows on the lid rim)")
+    s.add_argument("--head-landmarks", help="a JSON file of seed landmarks given by hand ({\"eye_in_l\": [x, y, z], ...}, metres in the conform's frame) over the detected ones")
     s.set_defaults(fn=cmd_mh_bake)
     s = sub.add_parser("mh-attach", help="an accessory weighted onto the built MetaHuman's skeleton, exported as a skeletal mesh")
     s.add_argument("job"); s.add_argument("part", help="the part (its seed is the accessory) and the FBX's name")
