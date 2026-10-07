@@ -1826,7 +1826,13 @@ def cmd_ue(a):
     if a.list:
         print(ue_client.list_tools(timeout=a.timeout))
         return
-    code = a.code if a.code is not None else open(a.file, encoding="utf-8").read()
+    if a.code is not None:
+        code = a.code
+    else:
+        # a file runs through runpy with its own globals: pasted as code it ran in the editor's shared __main__, and a
+        # global one script set (GROOM, a full asset path) was read by the next as a name and doubled into a package
+        # path - a fatal assertion that left the editor's interpreter corrupt (2026-10-07)
+        code = "import runpy; runpy.run_path(%r, run_name='__main__')" % os.path.abspath(a.file).replace("\\", "/")
     print(ue_client.run(code, timeout=a.timeout))
 
 
