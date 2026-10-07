@@ -36,6 +36,12 @@ deterministic thing and writes into a job folder under out/<Name>/:
     python -m mastersmith.ms mh-bake out/Dryad --posed delivery/metahuman/in/Dryad_Posed.fbx   (the seed's colour and normal
                                              baked onto the posed MetaHuman mesh Unreal generated from the conformed DNA)
     python -m mastersmith.ms mh-attach out/Dryad Hair --built delivery/metahuman/in/SKM_Dryad_Body.fbx --bone head
+    python -m mastersmith.ms garment-fit out/Dryad [--args parts/Garment/fit_args.json] [--seed out/DryadOutfit/parts/Outfit/seed.glb]
+    python -m mastersmith.ms garment-refit out/Dryad --out p6 [--from parts/Garment/fitted.blend] [--reseat-old ... --reseat-new ...]
+                                             [--shrink-k 0.7] [--collar-face ... --collar-neck-r 0.17] [--stages reseat,collar,lift,weights]
+    python -m mastersmith.ms garment-attach out/Dryad [--run p6]        (the fitted garment skinned and exported as a drop-in FBX)
+    python -m mastersmith.ms garment-test out/Dryad [--run p6] [--against p5]   (pose test; a before/after table against another run)
+    python -m mastersmith.ms ue -c "print('hello')" [--timeout 600]      (execute_python_code on the editor's MCP, auto_save false)
 """
 import argparse
 import glob
@@ -1643,6 +1649,187 @@ def cmd_mh_attach(a):
     ledger.record(job.dir, "mh-attach", part=a.part, fbx=rep["fbx"], weights=rep["weights"])
 
 
+def _garment_dir(job):
+    d = job.path("parts", "Garment")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _resolve(job, path, default_rel=None):
+    """A path the owner gave (absolute, or relative to the job) or, failing that, `default_rel` under the job."""
+    if path:
+        return path if os.path.isabs(path) else job.path(path)
+    return job.path(default_rel) if default_rel else None
+
+
+def cmd_garment_fit(a):
+    """A real garment cut from a seed of the character wearing the outfit, fitted onto the BUILT MetaHuman body and
+    skinned with its own weights (GARMENTS.md): the collar on the neck/spine only, the armpits by inward ray, the
+    boots rigid on the A-pose foot. `--args` takes a hand-written fit_args.json (GARMENTS.md's options in full);
+    without it the defaults are the built body/face FBX in delivery/metahuman/in/ and the sibling <Name>Outfit job's
+    seed."""
+    job = Job(a.job)
+    gdir = _garment_dir(job)
+    if a.args:
+        args = json.load(open(_resolve(job, a.args), encoding="utf-8"))
+    else:
+        mh = _mh_dir(job)
+        args = {"name": job.spec.name, "part": a.part,
+                "body_fbx": os.path.join(mh, "in", "SKM_MH_%s_BodyMesh.fbx" % job.spec.name),
+                "face_fbx": os.path.join(mh, "in", "SKM_MH_%s_FaceMesh.fbx" % job.spec.name),
+                "seed": a.seed or os.path.join(os.path.dirname(job.dir), "%sOutfit" % job.spec.name, "parts", a.part, "seed.glb"),
+                "out_dir": gdir}
+    if a.seed:
+        args["seed"] = _resolve(job, a.seed)
+    if a.out:
+        args["out_dir"] = _resolve(job, a.out)
+    for required in ("body_fbx", "seed"):
+        if not os.path.exists(args[required]):
+            sys.exit("no %s at %s (export the built body FBX / seed the outfit first)" % (required, args[required]))
+    out_dir = os.path.abspath(args["out_dir"])
+    args["out_dir"] = out_dir
+    _blender(job, "garment_fit.py", args, "garment_fit", timeout=2400)
+    rep = json.load(open(os.path.join(out_dir, "fit_report.json"), encoding="utf-8"))
+    print("fitted -> %s" % os.path.join(out_dir, "fitted.blend"))
+    print("  " + json.dumps({k: rep[k] for k in rep if k not in ("notes",)})[:2000])
+    ledger.record(job.dir, "garment-fit", part=args.get("part", "Outfit"), out_dir=out_dir)
+
+
+def cmd_garment_refit(a):
+    """A shipped garment pulled in / re-collared / lifted / re-weighted without a new seed, in one Blender process
+    (garment_refit.py, generalised off MissionCommander's r4/r5 one-off scripts): each stage writes its own numbers
+    into refit_report.json so a run can be checked, or compared with `ms garment-test --against`, stage by stage."""
+    job = Job(a.job)
+    gdir = _garment_dir(job)
+    if not a.out:
+        sys.exit("ms garment-refit needs --out <run name> (a new folder under parts/Garment/)")
+    out_dir = os.path.join(gdir, a.out)
+    src = _resolve(job, a.src, os.path.join("parts", "Garment", "fitted.blend"))
+    if not os.path.exists(src):
+        sys.exit("no garment at %s (ms garment-fit first, or --from <run>/fitted.blend)" % src)
+    order = ["reseat", "shrink", "collar", "lift", "weights"]
+    if a.stages:
+        stages = [s.strip() for s in a.stages.split(",")]
+        for s in stages:
+            if s not in order:
+                sys.exit("unknown stage %r (have: %s)" % (s, ", ".join(order)))
+        if "reseat" in stages and not (a.reseat_old and a.reseat_new):
+            sys.exit("--stages reseat needs --reseat-old and --reseat-new (the two built body FBXs)")
+        if "collar" in stages and not a.collar_face:
+            sys.exit("--stages collar needs --collar-face <built face FBX>")
+    else:
+        # the default run is every stage whose required input was given; reseat/collar need a body/face FBX pair
+        # that has no sensible default, so they are skipped (not errored) unless asked for by their own flags
+        stages = [s for s in order if s not in ("reseat", "collar") or
+                  (s == "reseat" and a.reseat_old and a.reseat_new) or (s == "collar" and a.collar_face)]
+    if a.reseat_old and not a.reseat_new or a.reseat_new and not a.reseat_old:
+        sys.exit("--reseat-old and --reseat-new go together")
+    args = {"garment": src, "object": a.object, "out_dir": out_dir, "stages": stages}
+    if "reseat" in stages:
+        args["reseat"] = {"old_body_fbx": _resolve(job, a.reseat_old), "new_body_fbx": _resolve(job, a.reseat_new),
+                          "proxy": _resolve(job, a.proxy) if a.proxy else None, "smooth": a.reseat_smooth}
+    if "shrink" in stages:
+        shrink = {"k": a.shrink_k, "floor_m": a.shrink_floor, "min_gap_m": a.shrink_min_gap, "band_m": a.shrink_band}
+        if a.proxy:
+            shrink["proxy"] = _resolve(job, a.proxy)
+        args["shrink"] = shrink
+    if "collar" in stages:
+        args["collar"] = {"face_fbx": _resolve(job, a.collar_face), "clear_m": a.collar_clear,
+                          "fade_m": a.collar_fade, "neck_r_m": a.collar_neck_r, "cap_m": a.collar_cap}
+    if "lift" in stages:
+        lift = {"clear_m": a.lift_clear, "fade_m": a.lift_fade, "cap_m": a.lift_cap}
+        if a.proxy:
+            lift["proxy"] = _resolve(job, a.proxy)
+        args["lift"] = lift
+    if "weights" in stages:
+        weights = {"near_m": a.weights_near, "far_m": a.weights_far, "min_gap_m": a.weights_min_gap}
+        if a.proxy:
+            weights["proxy"] = _resolve(job, a.proxy)
+        args["weights"] = weights
+    args = {k: v for k, v in args.items() if v is not None}
+    print("garment-refit: running %s on %s" % (", ".join(stages), src))
+    _blender(job, "garment_refit.py", args, "garment_refit_%s" % a.out, timeout=2400)
+    rep = json.load(open(os.path.join(out_dir, "refit_report.json"), encoding="utf-8"))
+    print("refit -> %s (stages: %s)" % (rep["out_blend"], ", ".join(rep["stages_run"])))
+    for stage, s in rep["stages"].items():
+        print("  %s: %s" % (stage, json.dumps(s)[:600]))
+    ledger.record(job.dir, "garment-refit", run=a.out, stages=rep["stages_run"])
+
+
+def cmd_garment_attach(a):
+    """The fitted garment skinned onto the built MetaHuman's skeleton and exported as a drop-in skeletal mesh FBX
+    (garment_attach.py: Unreal's own axis system, every bone copied byte-exact from the body FBX)."""
+    job = Job(a.job)
+    gdir = _garment_dir(job)
+    run_dir = os.path.join(gdir, a.run) if a.run else gdir
+    mh = _mh_dir(job)
+    garment = _resolve(job, a.garment, os.path.join(run_dir, "fitted.blend"))
+    if not os.path.exists(garment):
+        sys.exit("no fitted garment at %s" % garment)
+    built_fbx = _resolve(job, a.built) or os.path.join(mh, "in", "SKM_MH_%s_BodyMesh.fbx" % job.spec.name)
+    maps = [_resolve(job, m) for m in a.maps.split(",")] if a.maps else [
+        os.path.join(run_dir if os.path.exists(os.path.join(run_dir, "T_%s_Outfit_BC.png" % job.spec.name)) else gdir,
+                     "T_%s_Outfit_%s.png" % (job.spec.name, suf)) for suf in ("BC", "RM", "N")]
+    args = {"built_fbx": built_fbx, "garment": garment, "name": job.spec.name, "part": a.part, "out_dir": run_dir,
+            "maps": [m for m in maps if os.path.exists(m)]}
+    _blender(job, "garment_attach.py", args, "garment_attach_%s" % (a.run or "root"), timeout=1200)
+    rep = json.load(open(os.path.join(run_dir, "attach_%s_report.json" % a.part), encoding="utf-8"))
+    print("attached -> %s" % os.path.join(run_dir, "SK_%s_%s.fbx" % (job.spec.name, a.part)))
+    print("  drop_in: %s" % rep.get("drop_in"))
+    ledger.record(job.dir, "garment-attach", run=a.run, drop_in=rep.get("drop_in"))
+
+
+def cmd_garment_test(a):
+    """The attached garment pose-tested (garment_posetest.py: leader pose through 12 poses, measured and rendered
+    with the delivered maps) and, with --against, a before/after table of the two runs' headline numbers."""
+    job = Job(a.job)
+    gdir = _garment_dir(job)
+    run_dir = os.path.join(gdir, a.run) if a.run else gdir
+    mh = _mh_dir(job)
+    sk_fbx = _resolve(job, a.sk, os.path.join(run_dir, "SK_%s_%s.fbx" % (job.spec.name, a.part)))
+    if not os.path.exists(sk_fbx):
+        sys.exit("no %s (ms garment-attach first)" % sk_fbx)
+    body_proxy = _resolve(job, a.proxy, os.path.join(run_dir, "body_proxy.blend"))
+    if not os.path.exists(body_proxy):
+        body_proxy = os.path.join(gdir, "body_proxy.blend")
+    maps = {suf: os.path.join(run_dir, "T_%s_%s_%s.png" % (job.spec.name, a.part, suf)) for suf in ("BC", "RM", "N")}
+    out_dir = os.path.join(run_dir, "posetest")
+    args = {"body_fbx": os.path.join(mh, "in", "SKM_MH_%s_BodyMesh.fbx" % job.spec.name),
+            "face_fbx": os.path.join(mh, "in", "SKM_MH_%s_FaceMesh.fbx" % job.spec.name),
+            "sk_fbx": sk_fbx, "body_proxy": body_proxy, "maps": maps, "out_dir": out_dir,
+            "render_size": a.render_size, "samples": a.samples}
+    _blender(job, "garment_posetest.py", args, "garment_posetest_%s" % (a.run or "root"), timeout=2400)
+    rep = json.load(open(os.path.join(out_dir, "posetest_report.json"), encoding="utf-8"))
+    print("pose test -> %s (pass: %s)" % (out_dir, rep.get("pass")))
+    if rep.get("failures"):
+        for f in rep["failures"]:
+            print("  FAIL: %s" % f)
+    if a.against:
+        other_report = os.path.join(gdir, a.against, "posetest", "posetest_report.json")
+        if os.path.exists(other_report):
+            other = json.load(open(other_report, encoding="utf-8"))
+            print("  before (%s) / after (%s):" % (a.against, a.run or "root"))
+            for pose in sorted(set(rep.get("poses", {})) | set(other.get("poses", {}))):
+                b = other.get("poses", {}).get(pose, {})
+                aa = rep.get("poses", {}).get(pose, {})
+                print("    %-16s before %s  after %s" % (pose, json.dumps(b)[:120], json.dumps(aa)[:120]))
+        else:
+            print("  no report at %s to compare against" % other_report)
+    ledger.record(job.dir, "garment-test", run=a.run, passed=rep.get("pass"))
+
+
+def cmd_ue(a):
+    """Runs code on the editor's own MCP endpoint (VibeUE, execute_python_code, auto_save always false) without going
+    through any Unreal MCP tool connection - for when the session's own connection drops while the editor is fine.
+    Importable with no editor running (`from mastersmith import ue_client`); this is just its CLI."""
+    from . import ue_client
+    if a.list:
+        print(ue_client.list_tools(timeout=a.timeout))
+        return
+    code = a.code if a.code is not None else open(a.file, encoding="utf-8").read()
+    print(ue_client.run(code, timeout=a.timeout))
+
+
 def cmd_open(a):
     """A job's Blender file opened in Blender's own window, the user's preferences and add-ons on (the BlenderMCP
     add-on included), for work by hand or through a live Blender MCP session (2026-09-29: the session that asked for
@@ -1863,6 +2050,46 @@ def main(argv=None):
     s.add_argument("--offset", help="x,y,z metres to move the accessory first")
     s.add_argument("--decimate-to", type=int, default=0, help="triangles to decimate the accessory to (0 = keep)")
     s.set_defaults(fn=cmd_mh_attach)
+    s = sub.add_parser("garment-fit", help="a real garment cut from the outfit's own seed, fitted onto the built body and skinned")
+    s.add_argument("job"); s.add_argument("--args", help="a hand-written fit_args.json (GARMENTS.md); default: the built body/face FBX and the sibling <Name>Outfit job's seed")
+    s.add_argument("--seed", help="the outfit seed .glb (default: ../<Name>Outfit/parts/Outfit/seed.glb)")
+    s.add_argument("--part", default="Outfit"); s.add_argument("--out", help="out_dir (default: parts/Garment)")
+    s.set_defaults(fn=cmd_garment_fit)
+    s = sub.add_parser("garment-refit", help="a shipped garment reseated/shrunk/re-collared/lifted/re-weighted, no new seed or re-fit")
+    s.add_argument("job"); s.add_argument("--out", required=True, help="a new run folder under parts/Garment/")
+    s.add_argument("--from", dest="src", help="the garment .blend to start from (default: parts/Garment/fitted.blend)")
+    s.add_argument("--object", help="the garment mesh's object name (default: the only/largest mesh)")
+    s.add_argument("--stages", help="a subset of reseat,shrink,collar,lift,weights, in that order (default: all five)")
+    s.add_argument("--proxy", help="body_proxy.blend for shrink/lift/weights (default: beside --from, or reseat's own output)")
+    s.add_argument("--reseat-old", help="the OLD built body FBX"); s.add_argument("--reseat-new", help="the NEW built body FBX")
+    s.add_argument("--reseat-smooth", type=int, default=8)
+    s.add_argument("--shrink-k", type=float, default=0.7, help="share of the gap above the floor that is kept")
+    s.add_argument("--shrink-floor", type=float, default=0.010, help="metres: gaps under this are not pulled in")
+    s.add_argument("--shrink-min-gap", type=float, default=0.006); s.add_argument("--shrink-band", type=float, default=0.06)
+    s.add_argument("--collar-face", help="the built face FBX the collar must clear")
+    s.add_argument("--collar-clear", type=float, default=0.008); s.add_argument("--collar-fade", type=float, default=0.05)
+    s.add_argument("--collar-neck-r", type=float, default=0.12, help="metres from the neck axis: how much cloth counts as the collar")
+    s.add_argument("--collar-cap", type=float, default=0.02)
+    s.add_argument("--lift-clear", type=float, default=0.006); s.add_argument("--lift-fade", type=float, default=0.03); s.add_argument("--lift-cap", type=float, default=0.015)
+    s.add_argument("--weights-near", type=float, default=0.012); s.add_argument("--weights-far", type=float, default=0.030); s.add_argument("--weights-min-gap", type=float, default=0.005)
+    s.set_defaults(fn=cmd_garment_refit)
+    s = sub.add_parser("garment-attach", help="the fitted garment skinned onto the built skeleton, exported as a drop-in FBX")
+    s.add_argument("job"); s.add_argument("--run", help="a parts/Garment/<run> folder (default: parts/Garment itself)")
+    s.add_argument("--garment", help="the fitted .blend (default: <run>/fitted.blend)")
+    s.add_argument("--built", help="the built body FBX (default: delivery/metahuman/in/SKM_MH_<Name>_BodyMesh.fbx)")
+    s.add_argument("--part", default="Outfit"); s.add_argument("--maps", help="comma-separated BC,RM,N PNG paths (default: T_<Name>_Outfit_* beside the garment)")
+    s.set_defaults(fn=cmd_garment_attach)
+    s = sub.add_parser("garment-test", help="the attached garment pose-tested; --against compares with another run")
+    s.add_argument("job"); s.add_argument("--run", help="a parts/Garment/<run> folder (default: parts/Garment itself)")
+    s.add_argument("--part", default="Outfit"); s.add_argument("--sk", help="the SK_<Name>_<Part>.fbx (default: in --run)")
+    s.add_argument("--proxy", help="body_proxy.blend (default: <run>/body_proxy.blend, else parts/Garment/body_proxy.blend)")
+    s.add_argument("--render-size", type=int, default=768); s.add_argument("--samples", type=int, default=16)
+    s.add_argument("--against", help="another run's posetest_report.json to print a before/after table against")
+    s.set_defaults(fn=cmd_garment_test)
+    s = sub.add_parser("ue", help="execute_python_code on the editor's own MCP endpoint (VibeUE), auto_save always false")
+    s.add_argument("file", nargs="?", help="a .py file to run"); s.add_argument("-c", dest="code", help="code given inline instead of a file")
+    s.add_argument("--timeout", type=int, default=600); s.add_argument("--list", action="store_true", help="list the endpoint's tools instead")
+    s.set_defaults(fn=cmd_ue)
     s = sub.add_parser("picture"); s.add_argument("job"); s.add_argument("--out", required=True); s.add_argument("--prompt", required=True)
     s.add_argument("--ref", action="append"); s.add_argument("--model", default="nano"); s.add_argument("--aspect", default="4:3")
     s.add_argument("--redraw", action="store_true", help="draw over an existing picture (ask the owner first)"); s.set_defaults(fn=cmd_picture)

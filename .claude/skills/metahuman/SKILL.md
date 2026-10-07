@@ -131,6 +131,96 @@ or the character's own); for a bake done in Blender tick Flip Green Channel on i
 drag the skeletal mesh onto the **Body** component (it follows the skeleton and the animations). The same for a body
 accessory with transferred weights.
 
+## Garments: real clothing with volume (offline, free except the picture and the seed)
+A painted outfit (the skin texture) has no volume: collars, lapels and hems lie flat on the skin. `GARMENTS.md`
+(`mastersmith/blender/garment_fit.py` + `garment_tex.py`) cuts a garment from a seed of the character WEARING the
+outfit (nano-pro, ~$0.15; a Hi3D seed, $2.10), fits it onto the built body (collar on the neck/spine bones only,
+armpits weighted by an inward ray, boots rigid on the A-pose foot), and `garment_attach.py` exports it as a drop-in
+skeletal mesh FBX whose bind pose is the body's to the last digit (`fbx_patch_bones.py`), so it follows the
+Blueprint's Body component under leader pose with no further rigging:
+```
+$PY garment-fit out/<Name> --args parts/Garment/fit_args.json           # GARMENTS.md's options in full
+$PY garment-attach out/<Name>
+$PY garment-test out/<Name>                                             # 12-pose check; read posetest_report.json
+```
+In the editor (GARMENTS.md's numbered steps): clear the wardrobe's own Outfit slot (or the body has no torso to show
+through it), import the SK_ FBX onto the body's skeleton, a two-sided material on its slots, attach it under Body,
+and give the Outfit component `use_bounds_from_leader_pose_component` + `bounds_scale` ~1.5 on the BP TEMPLATE (a
+garment with no physics asset computes its bounds as a 36 cm box at the actor's feet otherwise, and every comms
+close-up culls it: MissionCommander, PilotAceVex, PilotMockingbird, 2026-10-07).
+
+**Re-fitting a shipped garment without a new seed.** The owner asks for a garment tweak ("scaled down a bit", "a
+wider neck", "weight-paint it so it doesn't clip") far more often than a whole new outfit. `ms garment-refit` runs
+the fix as ONE Blender process, always in this order (each stage reads what the one before left):
+1. **reseat** - the body changed shape (a Creator rebuild) but the garment and its seed did not: each garment
+   vertex moves by the body's OWN per-vertex change at its nearest point on the OLD body, smoothed; the collar
+   (any neck/head weight) keeps only the vertical part of that change, so a wider neck fills the collar instead of
+   pushing it outward. Needs `--reseat-old`/`--reseat-new` (the two built body FBX exports); skipped by default.
+2. **shrink** - "scaled down": a vertex's gap to the body proxy is mapped `floor + k*(gap - floor)` (`--shrink-k`
+   0.7 keeps 70%), which keeps every vertex's ORDER (a belt stays proud of the shirt it is cinching), held near the
+   collar and the boots so neither moves.
+3. **collar** - pushed clear of the (possibly rebuilt) face mesh near the neck, radially, fading over the cloth.
+4. **lift** - the same push against the body everywhere else (the "weight-paint it so it doesn't clip" rest pokes).
+5. **weights** - the garment vertex's weights blended toward the body's own weights at the point under it, where the
+   cloth sits close (smoothstep between `--weights-near`/`--weights-far`), skipping a vertex whose weight is already
+   blended across two bone families (an armpit, a shoulder cap: exact body weights there gave a 12x stretch, GARMENTS
+   v5) and a vertex on the wrong family entirely.
+Then `ms garment-attach --run <run>` and `ms garment-test --run <run> --against <previous run>` as usual. The shared
+maths (the gap mapping, the collar/band smoothstep, the mixed-band test, old-mesh-to-rebuilt-mesh UV matching for a
+reseat whose export gained a vertex) is pure numpy in `garment_refit_core.py` - read it before changing a stage's
+formula, and add a test in `tests/test_garment_refit_core.py` rather than only checking a real run's numbers.
+
+**Two lessons from the day's reviews (MissionCommander), both about "the neck", answered two different ways:**
+- **Never move the EAR landmarks to change the face.** A Creator landmark move on the ear rim/root landmarks
+  crumples the ear (2026-10-06/07, every character so far); if an ear reads wrong, leave the face-fit's landmarks
+  alone and move the ear geometry rigidly instead, or accept the preset's ears.
+- **The neck's WIDTH comes from the Creator's body constraints, not a landmark move**: `get_body_constraints`,
+  find "Neck" / "Neck Base" (cm girth), `.copy()` each constraint, edit the copy, and set the list back as a NEW
+  list (editing an item from a loop in place did nothing); only the constraints you actually want to move may be
+  ACTIVE (pinning every constraint blocked the change). The widening lands on the FACE MESH's neck and needs a
+  rebuild (unrig -> apply -> look -> rebuild). After the rebuild, the garment does not need a new seed or fit: run
+  `garment-refit --reseat-old <old BodyMesh.fbx> --reseat-new <new BodyMesh.fbx>` to carry it onto the garment, then
+  `--collar-face <new FaceMesh.fbx> --collar-neck-r <wider>` to open the collar back up to the thicker neck (both in
+  one `garment-refit` call, `--stages reseat,collar`, or add lift/weights too if the clearance pass finds new pokes).
+
+## Editor safety (the shared Proteus editor; `editor-hang-rules` memory has the full list)
+Save discipline above all: **never save a MetaHuman Creator character (`MH_<Name>`) in the same call that changed
+it** - it deadlocks the editor waiting on async work (face texture synthesis, groom bindings) only the game thread
+advances (`mh_editor.safe_save`: close the edit session, defer the save ~15 s/45 frames, poll `saved_status`).
+Likewise **never save a Blueprint right in the call after a capture or a stage probe destroys its actors** - issue
+BP changes BEFORE the capture, not after; a save that lands while groom bindings are rebuilding (any character's,
+any session's) waits on them and they never finish while the save blocks the game thread. A blocking call (auto-rig,
+texture sources, a build) runs 3-10 minutes and can outlive the MCP client's own timeout: the work goes on in the
+editor regardless - poll `get_summary` and the build folder, never re-issue the same call on top of itself. Treat
+any multi-minute editor step (a build, a batch of captures) as a background run and say so in one line (AGENTS.md
+rule 12), and restart the editor only when the owner has said you may
+(`E:/az-dev-ops/Proteus/BuildAndLaunchGame.ps1 -SkipBuild`) - never on your own initiative, and never on a
+production character this workflow was told not to touch. **If the session's own Unreal MCP tool connection drops
+while the editor is fine** (it does; a 57 s call was enough to lose it on 2026-10-07), `ms ue -c "..."` /
+`mastersmith.ue_client.run(code)` calls the editor's own MCP endpoint (VibeUE, `execute_python_code`,
+`auto_save=False` always) directly over HTTP, no tool reconnection needed.
+
+## Hair
+Two routes, pick by what the character needs:
+- **A MetaHuman wardrobe groom** (sections 4-5 above): `add_wardrobe_item` from `/MetaHumanCharacter/Optional/Grooms/
+  Bindings`, picked and judged by its own THUMBNAIL render, never its name (`WI_Goatee_M_Pointed`'s thumbnail is
+  "Goatee_L_Pointed"; `WI_Mustache_S_Horseshoe` built as thin wisps against a thick thumbnail) - export the
+  thumbnails once (`export_thumbs.py` pattern) and keep a sheet. Dyed on its `MI_WI_Hair_*` instances after every
+  build (`hairMelanin`, `hairRedness`, `WhiteAmount` for grey, `hairDye` for an out-of-nature colour: measure the
+  dyed hue in the render against the portrait's, do not guess from the scalar). Large grooms (scalp hair, full
+  beards) render in a capture ONLY while the editor is the foreground window with one realtime perspective viewport
+  pointed at the actor (`mh_editor.capture` does this; a capture that shows no hair is stale, re-capture before
+  judging). The **HairTop layering recipe** (a second groom binding layered over the first without a rebuild, by
+  duplicating the plugin's own binding and retargeting it at the built face mesh, Legacy source kept) handles a
+  style no single wardrobe groom covers (a part, a fringe over a buzzed back); see the day's DrHart r4 notes in
+  `proteus-metahuman-batch` memory for the exact calls and whether it built clean.
+- **A custom groom from curves** (a style no preset nor layering reaches: a specific haircut from the reference,
+  fully offline, free): another agent is building this route in `out/_HairTools/` (`hairgen_core.py` - pure numpy,
+  `python -m hairgen_core --selftest` outside Blender; `hairgen_blender.py` - finds the scalp on the built face mesh
+  from its own geometry, grows Blender Curve hair from a JSON style spec in `presets/`, renders review angles,
+  exports Alembic for Unreal's groom importer). Read its own docstrings and `presets/*.json` before touching hair by
+  hand; extend its presets or its core maths rather than writing a second curve generator.
+
 ## 7. Check in the engine, then deliver
 Place `BP_<Name>`, or swap it into the third-person template's character: the size against the brief, the feet on the
 floor, nothing poking through the body in idle and in a walk, the accessories following the head and the body, the face
