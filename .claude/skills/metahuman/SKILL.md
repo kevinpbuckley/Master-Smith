@@ -205,9 +205,14 @@ Two routes, pick by what the character needs:
 - **A MetaHuman wardrobe groom** (sections 4-5 above): `add_wardrobe_item` from `/MetaHumanCharacter/Optional/Grooms/
   Bindings`, picked and judged by its own THUMBNAIL render, never its name (`WI_Goatee_M_Pointed`'s thumbnail is
   "Goatee_L_Pointed"; `WI_Mustache_S_Horseshoe` built as thin wisps against a thick thumbnail) - export the
-  thumbnails once (`export_thumbs.py` pattern) and keep a sheet. Dyed on its `MI_WI_Hair_*` instances after every
-  build (`hairMelanin`, `hairRedness`, `WhiteAmount` for grey, `hairDye` for an out-of-nature colour: measure the
-  dyed hue in the render against the portrait's, do not guess from the scalar). Large grooms (scalp hair, full
+  thumbnails once (`export_thumbs.py` pattern) and keep a sheet. Coloured ON THE METAHUMAN CHARACTER, before the
+  build (owner rule 2026-10-07: edit the MetaHuman, not the Blueprint): `MetaHumanCharacterService.
+  set_wardrobe_item_parameters(c, "Hair", '{"Melanin":.48,"Redness":.53}')` sets the worn item's Creator values
+  (`Melanin`, `Redness`, `Whiteness` for grey, `DyeColor` for an out-of-nature colour; Hair also has Ombre and
+  Highlights - `get_wardrobe_item_parameters` lists them) and every build carries them; `mh_editor.dye_grooms`
+  does that and mirrors the values onto the current build's `MI_WI_*` so it matches without a rebuild. Never dye
+  only the built `MI_WI_*`: a rebuild resets them and the Creator never sees them. Measure the dyed hue in the
+  render against the portrait's, do not guess from the scalar. Large grooms (scalp hair, full
   beards) render in a capture ONLY while the editor is the foreground window with one realtime perspective viewport
   pointed at the actor (`mh_editor.capture` does this; a capture that shows no hair is stale, re-capture before
   judging). The **HairTop layering recipe** (a second groom binding layered over the first without a rebuild, by
@@ -283,8 +288,8 @@ has the full example). `execute_python_code`, `svc = unreal.MetaHumanCharacterSe
    viewport does not look at renders its 4K maps at the lowest mips, which read as blurry blobs and "eyes on the
    cheeks" (2026-10-05: a whole afternoon was spent re-baking a texture that was right all along). Set the baked
    textures `never_stream`, set `force_mip_streaming` on the actor's components, point the viewport at it, and wait
-   about 90 editor ticks (a slate post-tick callback) before capturing. Grooms are dyed on their `MI_WI_Hair_*`
-   instances (`hairMelanin`, `hairRedness`, `hairDye`), the Cards and Helmet instances too. `import_texture` over an
+   about 90 editor ticks (a slate post-tick callback) before capturing. Groom colour lives on the
+   character (Hair above); `dye_grooms` also mirrors it onto the build's `MI_WI_*` instances (Cards and Helmet too). `import_texture` over an
    existing asset of the same name keeps the OLD data: delete it first. The skin shader's `Scatter Baked` map stays
    the build's own (`T_Body_Scatter`, `T_Head_Scatter`). Eye colour on a stylised character: the built eye material
    (`MI_EyeL/R_Baked`) reads `Iris Basecolor Baked` / `Sclera Basecolor Baked` and IGNORES its colour multipliers and
