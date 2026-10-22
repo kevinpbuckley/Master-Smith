@@ -90,6 +90,20 @@ def test_vendor_front_axis_and_segment_models():
         models.resolve("hunyuan-part", kind="seed")
 
 
+def test_september_2026_seed_models_price_and_payload():
+    # 2026-10-21: Tripo P2 and Meshy 7.1 wired for the cloud A/B test; P2 is priced by texture tier, caps faces at 50k
+    urls = {"hero": "h", "left": "l", "front": "f", "back": "b"}
+    p2 = models.resolve("tripo-p2", kind="seed")
+    ep, payload = models.seed_payload(p2, urls)
+    assert ep == "tripo3d/p2/image-to-3d" and payload["face_limit"] == 50000 and payload["export_orientation"] == "+x"
+    assert models.price_of(p2) == 1.20 and p2["front"] == "+X"
+    ep, payload = models.seed_payload(models.resolve("meshy71"), urls)
+    assert ep == "meshy/v7.1/image-to-3d" and payload["geometry_resolution"] == "4k"
+    ep, payload = models.seed_payload(models.resolve("meshy71-mv"), urls)
+    assert payload["image_urls"] == ["h", "l", "f", "b"] and payload["geometry_resolution"] == "2k"
+    assert models.price_of(models.resolve("meshy71-mv")) == 1.20
+
+
 def test_retexture_default_is_meshy_v7_and_8k_costs_more():
     # 2026-10-21: fal lists v6/v7 retexture only; v5 stays reachable for comparison
     from mastersmith import pricing

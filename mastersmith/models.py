@@ -36,6 +36,13 @@ BUILTIN = {
     "meshy7": {"kind": "seed", "label": "Meshy v7", "endpoint": "fal-ai/meshy/v7/image-to-3d", "inputs": "single", "notes": "cheap"},
     "meshy7-mv": {"kind": "seed", "label": "Meshy v7 multi-image", "endpoint": "fal-ai/meshy/v7/multi-image-to-3d", "inputs": "multiview",
                   "notes": "cheap; up to four pictures in any order"},
+    # the three seed models fal added in September 2026, untried before the cloud A/B test of 2026-10-21
+    "tripo-p2": {"kind": "seed", "label": "Tripo P2 detailed", "endpoint": "tripo3d/p2/image-to-3d", "inputs": "single",
+                 "front": "+X", "notes": "fal 2026-09-20: $1.00 + $0.20 detailed textures; 50k faces at most; export_orientation +x"},
+    "meshy71": {"kind": "seed", "label": "Meshy 7.1 (4k geometry)", "endpoint": "meshy/v7.1/image-to-3d", "inputs": "single",
+                "notes": "fal 2026-09-19: $1.20 textured; geometry_resolution 4k; untried"},
+    "meshy71-mv": {"kind": "seed", "label": "Meshy 7.1 multi-image (2k)", "endpoint": "meshy/v7.1/multi-image-to-3d", "inputs": "multiview",
+                   "notes": "fal 2026-09-19: $1.20 textured; up to four pictures, 2k geometry (4k is single-image only); untried"},
     "trellis2": {"kind": "seed", "label": "TRELLIS.2 (this PC)", "endpoint": config.LOCAL_SEED_MODEL, "inputs": "single",
                  "notes": "free, 1.5-6.5 min; soft edges"},
     "hunyuan-part": {"kind": "segment", "label": "Hunyuan3D-Part (P3-SAM)", "endpoint": "fal-ai/hunyuan-3d/v3.1/part",
@@ -204,7 +211,18 @@ def seed_payload(m, urls, primary="hero"):
     if key == "meshy7-mv":
         return ep, {"image_urls": [urls[r] for r in ("hero", "left", "front", "back") if r in urls][:4], "topology": "triangle",
                     "target_polycount": 150000, "symmetry_mode": "auto", "should_remesh": True, "should_texture": True, "enable_pbr": True}
+    if key == "meshy71-mv":
+        return ep, {"image_urls": [urls[r] for r in ("hero", "left", "front", "back") if r in urls][:4], "topology": "triangle",
+                    "target_polycount": 150000, "symmetry_mode": "auto", "should_remesh": True, "should_texture": True, "enable_pbr": True,
+                    "geometry_resolution": "2k"}
     one = urls.get(primary) or urls.get("hero")
+    if key == "tripo-p2":
+        # P2 caps faces at 50k (quad 25k); the orientation is asked for so the +X prior holds without a guess
+        return ep, {"image_url": one, "texture_quality": "detailed", "texture": True, "pbr": True, "face_limit": 50000,
+                    "export_orientation": "+x", "enable_safety_checker": False}
+    if key == "meshy71":
+        return ep, {"image_url": one, "model_type": "standard", "topology": "triangle", "target_polycount": 150000,
+                    "enable_pbr": True, "geometry_resolution": "4k"}
     if key == "hi3d":
         return ep, {"image_url": one, "model": "hi3dv3.0", "resolution": "2048quality", "face_count": SEED_FACES,
                     "enable_texture": True, "enable_pbr": True, "export_format": "glb", "enable_safety_checker": False}

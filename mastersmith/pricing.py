@@ -24,6 +24,9 @@ FAL_PRICES = {
     "fal-ai/flux-2": 0.02, "fal-ai/flux-2/edit": 0.04, "fal-ai/flux-2-pro": 0.05,
     "tripo3d/h3.1/image-to-3d": 0.30,         # standard; +0.10 HD textures, +0.20 detailed geometry, +0.05 quad
     "tripo3d/h3.1/multiview-to-3d": 0.30,
+    "tripo3d/p2/image-to-3d": 1.00,              # fal 2026-10-21: no textures 1.00, fast/standard 1.10, detailed 1.20, extreme 1.30; quad free
+    "meshy/v7.1/image-to-3d": 1.20,              # fal 2026-10-21: 0.80 untextured, 1.20 textured (CALIBRATE: 4k geometry may cost more)
+    "meshy/v7.1/multi-image-to-3d": 1.20,        # CALIBRATE: fal's page gives one price for the 7.1 family
     "fal-ai/hyper3d/rodin/v2": 0.40,
     "fal-ai/meshy/v5/remesh": 0.20,
     "fal-ai/meshy/v5/retexture": 0.30,           # CALIBRATE: Tonetta's forge priced it at ~$0.30 (2026-09-29)
@@ -104,7 +107,10 @@ def price(model, payload=None):
         raise Unpriced("no price for %s; add it to mastersmith/pricing.py before calling it" % model)
     usd = FAL_PRICES[model]
     payload = payload or {}
-    if model.startswith("tripo3d/"):
+    if model.startswith("tripo3d/p2/"):
+        # P2 is priced by texture tier alone; quad topology is free on it
+        usd += {"fast": 0.10, "standard": 0.10, "detailed": 0.20, "extreme": 0.30}.get(payload.get("texture_quality"), 0.0)
+    elif model.startswith("tripo3d/"):
         if payload.get("texture_quality") == "detailed":
             usd += 0.10
         if payload.get("geometry_quality") == "detailed":

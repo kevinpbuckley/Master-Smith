@@ -60,7 +60,9 @@ read it before the first command; it covers the sandbox, output truncation and t
   Pictures: Nano Banana (`nano`) about $0.08, `nano-pro` $0.15, FLUX.2 klein on this PC free (`ms views` draws up to
   six standard views in ONE call: one picture's price instead of one per view). A segmentation of the seed into
   labelled parts (`ms segment`, Hunyuan3D-Part on fal) $0.45. A whole-object seed:
-  Hi3D v3 multi-view (`hi3d-mv`) $2.10; Tripo $0.60 (billed 2026-09-28; not $0.30); Meshy v7 $0.05; TRELLIS.2 on this
+  Hi3D v3 multi-view (`hi3d-mv`) $2.10; Tripo $0.60 (billed 2026-09-28; not $0.30); Meshy v7 $0.05; Tripo P2
+  (`tripo-p2`) $1.20, Meshy 7.1 (`meshy71`, `meshy71-mv`) $1.20 (fal's September 2026 additions, wired 2026-10-21 for
+  the cloud A/B test, untried before it); TRELLIS.2 on this
   PC free (TRELLIS.2-fast meshed an M4A1 in 44 s at silhouette overlap 0.82). What the builds showed (2026-09-29 to
   10-01): on the M4A1 one Tripo seed ($0.60) scored the same 6.5 as one Hi3D multi-view ($2.10); on the Havoc a Tripo
   seed from the hero beat Tripo multi-view (the multi-view grew stray pylons and lost its rocket pods; the hero seed
