@@ -41,9 +41,13 @@ BUILTIN = {
     "hunyuan-part": {"kind": "segment", "label": "Hunyuan3D-Part (P3-SAM)", "endpoint": "fal-ai/hunyuan-3d/v3.1/part",
                      "inputs": "fbx", "notes": "splits a registered seed (sent decimated under 30k faces) into parts; "
                                                "the labels are numbered, named by you after Reading segments.png"},
-    "meshy-retexture": {"kind": "texture", "label": "Meshy v5 retexture", "endpoint": "fal-ai/meshy/v5/retexture",
-                        "inputs": "single", "notes": "a new texture on every side of the seed, on its own UVs, guided by "
-                                                     "the hero picture and the brief (Tonetta's retexture, 2026-09-29)"},
+    "meshy-retexture": {"kind": "texture", "label": "Meshy v7 retexture", "endpoint": "meshy/v7/retexture",
+                        "inputs": "single", "resolution": True,
+                        "notes": "a new texture on every side of the seed, on its own UVs, guided by the hero picture "
+                                 "and the brief, with PBR maps; 2k/4k $0.30, 8k $0.45 (v7 on fal 2026-10-14)"},
+    # fal stopped listing v5 by 2026-10-21; kept so the one v5 run (PilotGrinder's Outfit, 2026-10-06) can be compared
+    "meshy5-retexture": {"kind": "texture", "label": "Meshy v5 retexture", "endpoint": "fal-ai/meshy/v5/retexture",
+                         "inputs": "single", "notes": "the old default (Tonetta's retexture, 2026-09-29); unlisted on fal"},
     "nano": {"kind": "picture", "label": "Nano Banana 2", "endpoint": "fal-ai/nano-banana-2", "inputs": "single", "notes": "the default picture model"},
     "nano-pro": {"kind": "picture", "label": "Nano Banana Pro", "endpoint": "fal-ai/nano-banana-pro", "inputs": "single",
                  "notes": "better hero pictures"},

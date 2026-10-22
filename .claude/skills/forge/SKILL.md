@@ -162,7 +162,7 @@ different, smaller change. Look at the six views after each pass and keep only w
   tools below); a replacement is placed in its box on the body.
 
 - **A blurry or washed-out seed texture** (paid, the owner's pick in `ms models`): `$PY retexture out/<Name>` repaints the
-  whole seed on its own UVs from the hero picture and the brief (Meshy v5, ~$0.30); `registered_before_retexture.blend`
+  whole seed on its own UVs from the hero picture and the brief (Meshy v7, $0.30 at 4k; `--resolution 8k` $0.45); `registered_before_retexture.blend`
   is the undo. Compare before and after; keep it only when it reads better.
 
 ## 6. Assemble and review

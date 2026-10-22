@@ -27,6 +27,7 @@ FAL_PRICES = {
     "fal-ai/hyper3d/rodin/v2": 0.40,
     "fal-ai/meshy/v5/remesh": 0.20,
     "fal-ai/meshy/v5/retexture": 0.30,           # CALIBRATE: Tonetta's forge priced it at ~$0.30 (2026-09-29)
+    "meshy/v7/retexture": 0.30,                  # fal's page 2026-10-21: $0.30 at 2k/4k, $0.45 at 8k, PBR included
     "fal-ai/sam-3/image": 0.005,                 # text-prompted segmentation masks (glass, wheels)
     "fal-ai/hunyuan-3d/v3.1/part": 0.45,         # split a fused mesh (FBX, <=30k faces) into parts
     "fal-ai/meshy/rigging": 0.20,                # humanoid auto-rig from a GLB; +0.12 with enable_animation
@@ -110,6 +111,8 @@ def price(model, payload=None):
             usd += 0.20
         if payload.get("quad"):
             usd += 0.05                             # quad topology (default for hard-surface categories)
+    if model.endswith("/retexture") and payload.get("texture_resolution") == "8k":
+        usd += 0.15
     return round(usd, 4)
 
 

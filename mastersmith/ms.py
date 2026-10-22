@@ -337,7 +337,8 @@ def cmd_models(a):
 
 
 def cmd_retexture(a):
-    """A new texture for the whole seed from a mesh-to-texture model (the owner picks it; Meshy v5 retexture by default),
+    """A new texture for the whole seed from a mesh-to-texture model (the owner picks it; Meshy v7 retexture by default
+    since 2026-10-21, v5 before),
     painted onto the seed's own UVs and guided by the approved hero picture and the brief: every side gets texture,
     not only the sides the pictures saw (Tonetta's retexture pass, 2026-09-29). The registered mesh goes out with one
     UV layer and no maps, comes back fitted onto its own bounds; registered_before_retexture.blend is the undo."""
@@ -356,6 +357,8 @@ def cmd_retexture(a):
     hero = job.path("ref", "ref_0.png")
     payload = {"model_url": job.fal.upload(geo), "text_style_prompt": (a.prompt or job.spec.description)[:600],
                "enable_original_uv": True, "enable_pbr": True, "enable_safety_checker": False}
+    if m.get("resolution"):
+        payload["texture_resolution"] = a.resolution    # 4k costs what 2k does; 8k makes the PBR maps 4k, no emission
     if os.path.exists(hero) and not a.no_picture:
         payload["image_style_url"] = job.fal.upload(hero)
     out = job.fal.run(m["endpoint"], payload)
@@ -2180,6 +2183,8 @@ def main(argv=None):
     s = sub.add_parser("retexture"); s.add_argument("job"); s.add_argument("--model", default="meshy-retexture")
     s.add_argument("--part", default="Body"); s.add_argument("--prompt", help="the texture described (default: the brief)")
     s.add_argument("--no-picture", action="store_true", help="text only, no hero picture as the style guide")
+    s.add_argument("--resolution", choices=("2k", "4k", "8k"), default="4k",
+                   help="base colour resolution (v7: 2k and 4k $0.30, 8k $0.45)")
     s.set_defaults(fn=cmd_retexture)
     s = sub.add_parser("refs"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true")
     s.add_argument("--sheet", action="store_true", help="also write <job>/ref_sheet.png per job (every picture, labelled, with warnings) to Read")

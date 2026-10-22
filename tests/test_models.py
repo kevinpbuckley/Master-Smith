@@ -90,6 +90,16 @@ def test_vendor_front_axis_and_segment_models():
         models.resolve("hunyuan-part", kind="seed")
 
 
+def test_retexture_default_is_meshy_v7_and_8k_costs_more():
+    # 2026-10-21: fal lists v6/v7 retexture only; v5 stays reachable for comparison
+    from mastersmith import pricing
+    tex = models.resolve("meshy-retexture", kind="texture")
+    assert tex["endpoint"] == "meshy/v7/retexture" and tex["resolution"] and models.price_of(tex) == 0.30
+    assert pricing.price(tex["endpoint"], {"texture_resolution": "4k"}) == 0.30
+    assert pricing.price(tex["endpoint"], {"texture_resolution": "8k"}) == 0.45
+    assert models.resolve("meshy5-retexture", kind="texture")["endpoint"] == "fal-ai/meshy/v5/retexture"
+
+
 def test_registered_model_may_say_which_way_it_faces(tmp_path):
     reg = str(tmp_path / "local_models.json")
     m = models.add("hy-local", "seed", "hy.exe --in {image} --out {out}", path=reg, front="-y")
