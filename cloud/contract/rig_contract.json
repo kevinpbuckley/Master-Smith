@@ -1,0 +1,109 @@
+{
+  "status": "built; exact original FBX bind and Unreal import verified",
+  "source_mesh": "E:/az-dev-ops/Proteus/SourceArt/ProteusShipModular/SK_Proteus_Ship_Modular.fbx",
+  "source_skeleton": "/Game/Proteus/Characters/Player/Ship/SK_Proteus_Ship_Skeleton.SK_Proteus_Ship_Skeleton",
+  "source_reference_pose": "E:/az-dev-ops/Proteus/SourceArt/ProteusShipModular/extracted/ship_info.json",
+  "source_socket_contract": "E:/az-dev-ops/Proteus/SourceArt/ProteusShipModular/ship_build.json",
+  "preserve": [
+    "entire original bone hierarchy and reference transforms",
+    "original mesh-space pivot",
+    "original scale",
+    "control surface hinge positions",
+    "weapon socket names and transforms",
+    "roof sensor dome and cream/oxblood design identity"
+  ],
+  "axes": {
+    "Unreal": "+X forward, +Y right, +Z up; centimetres",
+    "Blender_source": "+X forward, +Y left, +Z up; metres"
+  },
+  "weapon_mounts_component_space_cm": {
+    "PrimaryMount_L": {
+      "location": [
+        80.0,
+        -50.0,
+        -29.85
+      ],
+      "bone": "Object_26",
+      "alias": "LeftLaserSocket"
+    },
+    "PrimaryMount_R": {
+      "location": [
+        80.0,
+        50.0,
+        -29.8
+      ],
+      "bone": "Object_26",
+      "alias": "RightLaserSocket"
+    },
+    "SecondaryMount": {
+      "location": [
+        66.0,
+        0.0,
+        -35.93
+      ],
+      "bone": "Object_26",
+      "alias": "TorpedoSocket"
+    }
+  },
+  "steering_bones": [
+    "RudderTop",
+    "RudderBottom",
+    "Elevator",
+    "ElevatorL",
+    "ElevatorR"
+  ],
+  "existing_propulsion_problem": {
+    "engine_L_parent": "ElevatorL",
+    "engine_R_parent": "ElevatorR",
+    "required_change": "propulsion outlet and engine attachments must follow the rigid hull instead of animated control surfaces"
+  },
+  "proposed_turbine_mounts": {
+    "TurbineMount_L": {
+      "parent_bone": "Object_26",
+      "location_blender_m": [
+        -1.6,
+        0.8,
+        -0.1515
+      ]
+    },
+    "TurbineMount_R": {
+      "parent_bone": "Object_26",
+      "location_blender_m": [
+        -1.6,
+        -0.8,
+        -0.1515
+      ]
+    }
+  },
+  "turbine_outlets": {
+    "legacy_names": [
+      "engine_L",
+      "engine_R"
+    ],
+    "plan": "retain compatibility names at the fitted pod outlets, parent to rigid hull and configure wake from the actual outlet locations; do not copy old elevator-relative offsets",
+    "flow_axis": "aft (-X in ship component space)",
+    "detachable_module_origin": "top mounting interface"
+  },
+  "cockpit": {
+    "proposed_occupancy": "single pilot",
+    "required": [
+      "enlarged transparent panoramic front windshield",
+      "seat and harness",
+      "dashboard and navigation displays",
+      "HOTAS: pilot-left throttle quadrant and pilot-right flight stick mounted on the side consoles",
+      "two rudder pedals and clear central footwell",
+      "side consoles",
+      "floor and interior sidewalls",
+      "rear bulkhead and access hatch"
+    ],
+    "final_dimensions": "Built into the preserved ship frame; inspect cockpit GLB and editable Blender source."
+  },
+  "modelling_handoff": {
+    "annotated_sheet": "ref/proteus_refit_v3.png",
+    "approval": "v3 approved for construction by owner",
+    "role": "visual design reference; original assets remain authoritative for bone and socket transforms",
+    "steering_surface_requirement": "solid fin skins and tips; remove old fin exhaust grilles, nozzles and ducts; only rear-underbody turbine pods provide propulsion outlets",
+    "seed_input": "isolate clean exterior views from the approved sheet; do not submit annotation leaders, inset models or exploded parts as one object",
+    "geometry_rule": "whole hull seed by default; turbine modules are explicitly requested detachable attachments; cockpit requires genuine interior geometry; rig and sockets applied deterministically after meshing"
+  }
+}
