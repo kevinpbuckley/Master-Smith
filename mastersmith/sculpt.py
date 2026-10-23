@@ -67,8 +67,11 @@ def inflate(verts, faces, centre, radius, strength):
     return verts + vertex_normals(verts, faces) * (w * strength)[:, None]
 
 
-def move(verts, centre, radius, delta):
-    """Drag the vertices within `radius` of `centre` by `delta` (metres) at the centre, less towards the rim."""
+def move(verts, centre, radius, delta, mask=None):
+    """Drag the vertices within `radius` of `centre` by `delta` (metres) at the centre, less towards the rim. With
+    `mask` (a vertex mask: a segmented part, 2026-10-23) exactly those vertices move by `delta`, rigidly."""
+    if mask is not None:
+        return verts + np.asarray(mask, bool)[:, None] * np.asarray(delta, dtype=np.float64)
     w = falloff(np.linalg.norm(verts - np.asarray(centre), axis=1), radius)
     return verts + w[:, None] * np.asarray(delta, dtype=np.float64)
 
@@ -145,7 +148,7 @@ def stroke(verts, faces, op):
     if kind == "inflate":
         return inflate(verts, faces, at, r, s)
     if kind == "move":
-        return move(verts, at, r, op.get("delta", (0, 0, 0)))
+        return move(verts, at, r, op.get("delta", (0, 0, 0)), op.get("mask"))
     if kind == "smooth":
         return smooth(verts, faces, at, r, s, int(op.get("iters", 3)))
     if kind == "flatten":

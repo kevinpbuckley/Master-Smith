@@ -781,6 +781,8 @@ def cmd_brush(a):
             op["strength"] = a.strength / 1000.0                  # mm at the centre
         if a.op == "move":
             op["delta"] = [float(v) / 1000.0 for v in (a.delta or "0,0,0").split(",")]
+            if a.segment:
+                op["segment"] = [int(v) for v in a.segment.split(",")]
         if a.op == "crease":
             op["to"] = _point(a.to or a.at, size)
         if a.op == "taper":
@@ -2136,6 +2138,7 @@ def main(argv=None):
     s.add_argument("--at", default="centre", help="x,y,z metres in the part frame, or front/back/top/bottom/left/right/centre[+dx,dy,dz]")
     s.add_argument("--radius", type=float, default=10.0, help="mm"); s.add_argument("--strength", type=float, default=1.0, help="inflate: mm at the centre; others: 0-1")
     s.add_argument("--delta", help="move: dx,dy,dz in mm"); s.add_argument("--to", help="crease: the line's other end"); s.add_argument("--normal", help="flatten: nx,ny,nz")
+    s.add_argument("--segment", help="move: these ms segment labels (a,b,...) move rigidly by --delta instead of a falloff")
     s.add_argument("--profile", help="taper: x:s,x:s,... metres along X and the half-width scale there beyond --core")
     s.add_argument("--core", type=float, default=0.0, help="taper: the half-width (mm) left as it is about the centre plane")
     s.add_argument("--band", type=float, help="taper: mm beyond the core over which the scale eases in (default half the core)")

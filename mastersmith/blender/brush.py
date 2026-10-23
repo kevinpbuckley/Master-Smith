@@ -52,6 +52,19 @@ for op in args["strokes"]:
         op["mid_y"] = float(centre[1])
     if op["op"] == "inflate":
         op["strength"] = float(op.get("strength", 0.0)) * k
+    if op.get("segment") is not None:
+        # a rigid move of the faces `ms segment` labelled so (the Proteus P2's pods, slid inboard, 2026-10-23)
+        att = me.attributes.get("ms_segment")
+        if att is None:
+            raise SystemExit("brush --segment: the mesh has no ms_segment labels (run ms segment first)")
+        lab = np.empty(len(me.polygons), np.int32)
+        att.data.foreach_get("value", lab)
+        want = set(int(v) for v in op["segment"])
+        mask = np.zeros(len(verts), bool)
+        for poly in me.polygons:
+            if int(lab[poly.index]) in want:
+                mask[list(poly.vertices)] = True
+        op["mask"] = mask
     verts = sculpt.stroke(verts, faces, op)
 moved = np.linalg.norm(verts - before, axis=1) / k
 me.vertices.foreach_set("co", verts.astype(np.float32).ravel())

@@ -139,3 +139,13 @@ def test_taper_narrows_beyond_the_core_and_never_folds():
     assert np.allclose(out[:, 1], -out[::-1, 1])                                 # symmetric
     same = sculpt.taper(verts, [[0.0, 1.0], [2.0, 1.0]], core=0.5)
     assert np.allclose(same, verts)
+
+
+def test_move_with_a_mask_is_rigid():
+    """2026-10-23: a segmented part slides whole; nothing else moves."""
+    v = np.random.default_rng(0).normal(size=(50, 3))
+    m = np.zeros(50, bool)
+    m[:10] = True
+    out = sculpt.stroke(v, None, {"op": "move", "at": [0, 0, 0], "radius": 0.01, "delta": [0, -0.5, 0], "mask": m})
+    assert np.allclose(out[:10] - v[:10], [0, -0.5, 0])
+    assert np.allclose(out[10:], v[10:])
