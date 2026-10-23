@@ -2336,8 +2336,8 @@ for o, _r in liner_parts:
 extra_tris = sum(blib.tri_count(o) for o, _r in glass_parts + liner_parts + frame_parts)
 left = max(budget - code_tris - extra_tris, int(budget * 0.3))
 areas = [surface_area(o) for o, _r in vendor]
-for (o, r), a in zip(vendor, areas):
-    share = max(2000, int(left * a / max(sum(areas), 1e-9)))
+from budget import shares as vendor_shares  # noqa: E402 - pure python, tested
+for (o, r), share in zip(vendor, vendor_shares(left, areas)):
     r["triangles_seed"] = blib.tri_count(o)
     r["triangles"] = decimate_to(o, share)
 for o, r in parts:
