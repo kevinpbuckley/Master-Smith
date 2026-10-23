@@ -2882,6 +2882,11 @@ if args.get("reference") and os.path.exists(args["reference"]):
     ref_img.name = "ms_reference"
     ref_img.pack()
     ref_img.use_fake_user = True
+# 2026-10-23: the LODs counted again as exported. Counted when they were made, LOD0 read 119,996 while the GLB and
+# the .blend held 116,445 (faces dropped between the count and the export), and the package gate failed on a file
+# that was under its budget (cloud test A, round 5)
+for i, o in enumerate((lod0, lod1, lod2)):
+    report["lods"][i]["triangles"] = blib.tri_count(o)
 p = os.path.join(OUT, "SM_%s.blend" % NAME)
 bpy.ops.wm.save_as_mainfile(filepath=p, compress=True)
 report["files"].append(os.path.basename(p))
