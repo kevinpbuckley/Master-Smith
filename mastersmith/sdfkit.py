@@ -251,9 +251,24 @@ def mesh(sdf, lo, hi, voxel, chunk=2_000_000):
     return verts, faces
 
 
+def to_gltf_axes(verts):
+    """Z-up asset-frame points -> glTF's Y-up frame, (x, y, z) -> (x, z, -y), so Blender's importer turns them back
+    unchanged. Written as-is the importer swapped Y and Z: a two-pod band part came in 2.6 m tall (cloud test A, 2026-10-22)."""
+    v = np.asarray(verts, dtype=np.float64)
+    return np.stack([v[:, 0], v[:, 2], -v[:, 1]], axis=1)
+
+
+def auto_voxel(L, W, H, budget=60_000_000):
+    """The default voxel (metres): 1/320 of the longest side, 0.15-1 mm, but never a grid over `budget` points. The 1 mm
+    cap alone asked a 1.5 m pod part for ~650 M points and the run was OOM-killed (cloud test A, 2026-10-22)."""
+    v = min(max(max(L, W, H) / 320.0, 0.00015), 0.001)
+    floor = ((L + 4 * v) * (W + 4 * v) * (H + 4 * v) / float(budget)) ** (1.0 / 3.0)
+    return max(v, floor)
+
+
 def write_glb(verts, faces, path):
     import trimesh
-    m = trimesh.Trimesh(vertices=np.asarray(verts, dtype=np.float64), faces=np.asarray(faces, dtype=np.int64), process=True)
+    m = trimesh.Trimesh(vertices=to_gltf_axes(verts), faces=np.asarray(faces, dtype=np.int64), process=True)
     m.export(path)
     return path
 

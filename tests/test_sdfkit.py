@@ -68,3 +68,20 @@ def test_part_script_runs_in_the_kit_namespace():
         sdfkit.run_part_script("x = 1\n", 1, 1, 1)
     with pytest.raises(Exception):
         sdfkit.run_part_script("def part(kit, L, W, H):\n    import os\n    return kit.sphere(1)\n", 1, 1, 1)
+
+
+def test_glb_is_written_y_up_so_blender_reads_z_up(tmp_path):
+    import trimesh
+    v, f = sdfkit.mesh(box((0.1, 0.02, 0.3)), [-0.05, -0.01, -0.15], [0.05, 0.01, 0.15], 0.005)   # tall in Z
+    p = sdfkit.write_glb(v, f, str(tmp_path / "t.glb"))
+    ext = trimesh.load(p, force="mesh").extents                  # glTF frame: Y up
+    assert ext[1] == pytest.approx(0.3, abs=0.02) and ext[2] == pytest.approx(0.02, abs=0.02)
+    g = sdfkit.to_gltf_axes([[1.0, 2.0, 3.0]])[0]
+    assert list(g) == [1.0, 3.0, -2.0]                           # Blender's import (x, -z, y) gives (1, 2, 3) back
+
+
+def test_auto_voxel_keeps_the_grid_in_memory():
+    assert sdfkit.auto_voxel(0.1, 0.02, 0.02) == pytest.approx(0.1 / 320)
+    v = sdfkit.auto_voxel(1.5, 1.6, 0.7)                         # the two-pod part that was OOM-killed at 1 mm
+    pts = (1.5 / v) * (1.6 / v) * (0.7 / v)
+    assert v > 0.001 and pts <= 60_000_000
