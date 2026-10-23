@@ -357,7 +357,7 @@ def clean_material(mat):
 # and was patched six times on 2026-09-29 for keys the agent had already written (pick, keep, lettering, line, shell).
 TOP_KEYS = {"parts", "notes", "overall_width_m"}
 PART_KEYS = {"name", "what", "method", "side_box", "front_span", "material", "zones", "reference_detail", "skin",
-             "edge_break", "interior", "centreline", "lettering", "carve", "projection"}
+             "edge_break", "interior", "centreline", "lettering", "carve", "projection", "triangles", "sharpen"}
 ZONE_KEYS = {"name", "side_box", "front_span", "material", "pick", "keep", "strength", "fill", "line", "shell", "flat",
              "glow", "vertices", "triangles", "tolerance", "bounds", "segment", "mirror", "inner_mm"}
 MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha", "specular"}
@@ -473,6 +473,17 @@ def validate_plan(raw, dims, max_parts=None):
         # the side view's blurred brass ring as a yellow smear; it is bare steel by plan)
         if p.get("projection") is False:
             part["no_projection"] = True
+        # 2026-10-23: "triangles" fixes a vendor part's share of the triangle budget (the Mk II's cockpit insert held
+        # 9% of the surface and got 10k of 120k: its dials and HOTAS blurred away), "sharpen": false keeps the
+        # planar-flattening pass off a part whose detail is sculpted, not panelled (the same insert: 5,073 of its
+        # 10,442 faces were flattened)
+        if p.get("triangles") is not None:
+            try:
+                part["triangles"] = max(1000, int(p["triangles"]))
+            except (TypeError, ValueError):
+                ignored.append("%s.triangles=%r (a whole number of LOD0 triangles)" % (name, p.get("triangles")))
+        if p.get("sharpen") is False:
+            part["sharpen"] = False
         # 2026-09-29: "lettering", side boxes (percent of the side grid) around painted words: the picture prints
         # there at full strength over the mesher's own copy, and reads the right way round on the far side
         boxes = []

@@ -1782,6 +1782,9 @@ def sharp_by_angle(o, degrees=30):
 # hard-surface edges back on the vendor seeds before anything is copied, decimated or baked
 if args.get("sharpen", True):
     fitted = {p["name"] for p in args["parts"] if p.get("fitted")}
+    # "sharpen": false in the plan keeps the flattening off a part whose detail is sculpted (the Mk II's cockpit
+    # insert lost half its faces to it, 2026-10-23)
+    fitted |= {p["name"] for p in args["parts"] if p.get("sharpen") is False}
     for o, r in parts:
         if r["kind"] == "vendor" and r["name"] not in fitted:      # a fitted seed's texture mottled under the flattening
             r["sharpened"] = sharpen_planar(o)
@@ -2358,7 +2361,9 @@ extra_tris = sum(blib.tri_count(o) for o, _r in glass_parts + liner_parts + fram
 left = max(budget - code_tris - extra_tris, int(budget * 0.3))
 areas = [surface_area(o) for o, _r in vendor]
 from budget import shares as vendor_shares  # noqa: E402 - pure python, tested
-for (o, r), share in zip(vendor, vendor_shares(left, areas)):
+# a part's planned "triangles" fixes its share; the others split the rest by area (2026-10-23)
+wanted = [next((p.get("triangles") for p in args["parts"] if p["name"] == r["name"]), None) for _o, r in vendor]
+for (o, r), share in zip(vendor, vendor_shares(left, areas, want=wanted)):
     r["triangles_seed"] = blib.tri_count(o)
     r["triangles"] = decimate_to(o, share)
 for o, r in parts:
