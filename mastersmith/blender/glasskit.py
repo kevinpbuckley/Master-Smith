@@ -150,9 +150,10 @@ def exterior_faces(tree, cand, centres, normals, diag, need=1):
     return out
 
 
-def canopy_hull(o, box_faces, diag, edge=1 / 120.0):
+def canopy_hull(o, box_faces, diag, edge=1 / 120.0, mirror_y=None):
     """The convex hull of the zone's faces, cut into triangles no longer than `edge` of the diagonal, normals out:
     the canopy's outer envelope (a canopy is convex; its frame and panes lie on the hull, the cockpit deep inside).
+    `mirror_y`: the centre plane's y, the faces' vertices mirrored across it too (a segment holding one side's bars).
     -> bmesh or None"""
     me = o.data
     co = np.empty(len(me.vertices) * 3, np.float32)
@@ -165,14 +166,19 @@ def canopy_hull(o, box_faces, diag, edge=1 / 120.0):
     vi = np.unique(lv[box_faces[np.repeat(np.arange(len(me.polygons)), total)]])
     if len(vi) < 8:
         return None
+    pts = co[vi]
+    if mirror_y is not None:
+        flip = pts.copy()
+        flip[:, 1] = 2 * mirror_y - flip[:, 1]
+        pts = np.concatenate([pts, flip])
     bm = bmesh.new()
-    res = bmesh.ops.convex_hull(bm, input=[bm.verts.new(co[i]) for i in vi])
+    res = bmesh.ops.convex_hull(bm, input=[bm.verts.new(p) for p in pts])
     loose = {g for g in res["geom_interior"] + res["geom_unused"] if isinstance(g, bmesh.types.BMVert)}
     bmesh.ops.delete(bm, geom=list(loose), context="VERTS")
     if not bm.faces:
         bm.free()
         return None
-    mid = Vector(co[vi].mean(axis=0))
+    mid = Vector(pts.mean(axis=0))
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
     if sum((f.calc_center_median() - mid).dot(f.normal) for f in bm.faces) < 0:
         bmesh.ops.reverse_faces(bm, faces=bm.faces[:])
@@ -452,6 +458,25 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     centres = np.empty(n * 3, np.float32)
     me.polygons.foreach_get("center", centres)
     centres = centres.reshape(-1, 3)
+    if mode == "hull":
+        # 2026-10-23: a Tripo P2 canopy came back as an open cage of bars with no panes, so no colour pick finds glass.
+        # The glass is the hull of the zone's faces (the bars' segment), set just inside them; nothing of the seed
+        # is deleted, so the bars stay as the mullions. "mirror": false when the segment holds both sides
+        lo_o, hi_o = blib.dims(o)
+        diag = (hi_o - lo_o).length
+        lo, hi = np.array(z["box_min"]) - 0.02 * diag, np.array(z["box_max"]) + 0.02 * diag
+        sel = np.all((centres >= lo) & (centres <= hi), axis=1)
+        if z.get("segment") is not None:
+            want = segment_mask(segment_labels(o), z["segment"], n)
+            sel = (sel & want) if z.get("box_given") else want
+        # one side's bars mirrored across the body's centre plane: the segmenter split the cage down the middle
+        hull = canopy_hull(o, sel, diag, mirror_y=float(lo_o.y + hi_o.y) / 2 if z.get("mirror", True) else None)
+        panes = glass_shell(hull, mesh_tree(o), diag, full=True) if hull is not None else None
+        if hull is not None:
+            hull.free()
+        return np.zeros(n, bool), {"mode": mode, "faces": 0, "frame_faces": int(sel.sum()), "share_of_part": 0.0,
+                                   "pane_faces": 0 if panes is None else len(panes[1]), "rebuilt": True,
+                                   "preserve_frame": True, "ok": panes is not None}, panes
     normals = np.empty(n * 3, np.float32)
     me.polygons.foreach_get("normal", normals)
     normals = normals.reshape(-1, 3)

@@ -355,10 +355,10 @@ TOP_KEYS = {"parts", "notes", "overall_width_m"}
 PART_KEYS = {"name", "what", "method", "side_box", "front_span", "material", "zones", "reference_detail", "skin",
              "edge_break", "interior", "centreline", "lettering", "carve", "projection"}
 ZONE_KEYS = {"name", "side_box", "front_span", "material", "pick", "keep", "strength", "fill", "line", "shell", "flat",
-             "glow", "vertices", "triangles", "tolerance", "bounds", "segment"}
+             "glow", "vertices", "triangles", "tolerance", "bounds", "segment", "mirror"}
 MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha"}
 GLOW_KEYS = {"hue", "hue_tol", "min_sat", "min_val"}
-PICKS = ("auto", "dark", "pale", "lit", "box", "atlas", "fitted")
+PICKS = ("auto", "dark", "pale", "lit", "box", "atlas", "fitted", "hull")
 # what a validated plan.json carries besides the plan (fed back through `ms plan` it is not "ignored")
 DERIVED = {"box_min", "box_max", "color_planned", "pbr_set", "dropped", "dims_m", "side", "front", "side_grid",
            "front_grid", "ignored"}
@@ -514,7 +514,7 @@ def validate_plan(raw, dims, max_parts=None):
                         "side_box": [pct(v) for v in z["side_box"]], "material": clean_material(z.get("material"))}
                 if segment is not None:
                     zone["segment"], zone["box_given"] = segment, box_given
-                # 2026-09-29: how a glass zone's faces are picked (auto / dark / pale / lit / box / atlas / fitted),
+                # 2026-09-29: how a glass zone's faces are picked (auto / dark / pale / lit / box / atlas / fitted / hull),
                 # how many patches it keeps, whether holes in its frame get a glass shell and the walls seen through
                 # it a lining, and an emissive zone's strength
                 if "pick" in z:
@@ -536,7 +536,7 @@ def validate_plan(raw, dims, max_parts=None):
                             zone[key] = z[key]
                         else:
                             ignored.append("%s.%s=%r (a number)" % (zn, key, z[key]))
-                for key in ("fill", "line", "shell", "flat"):  # shell the frame's holes; line the cockpit's backs;
+                for key in ("fill", "line", "shell", "flat", "mirror"):  # shell the frame's holes; line the cockpit's backs;
                                                                 # "shell": the whole canopy one clean shell; "flat":
                                                                 # the planned colour only, none of the texture
                     if key in z:
