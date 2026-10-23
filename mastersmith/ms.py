@@ -815,7 +815,7 @@ def cmd_sdf(a):
         sys.exit("no script: write %s with `def part(kit, L, W, H)` returning a kit shape (see mastersmith/sdfkit.py)" % src)
     L, W, H = [part["box_max"][i] - part["box_min"][i] for i in range(3)]
     shape = sdfkit.run_part_script(open(src, encoding="utf-8").read(), L, W, H)
-    voxel = (a.voxel / 1000.0) if a.voxel else min(max(max(L, W, H) / 320.0, 0.00015), 0.001)
+    voxel = (a.voxel / 1000.0) if a.voxel else sdfkit.default_voxel(L, W, H)
     half = [L / 2, W / 2, H / 2]
     verts, faces = sdfkit.mesh(shape, [-h for h in half], half, voxel)
     glb = os.path.join(d, "seed.glb")

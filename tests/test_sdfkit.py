@@ -68,3 +68,21 @@ def test_part_script_runs_in_the_kit_namespace():
         sdfkit.run_part_script("x = 1\n", 1, 1, 1)
     with pytest.raises(Exception):
         sdfkit.run_part_script("def part(kit, L, W, H):\n    import os\n    return kit.sphere(1)\n", 1, 1, 1)
+
+
+def test_gltf_frame_round_trips_to_blender_axes():
+    """glTF is Y-up; Blender's importer maps (x, y, z) -> (x, -z, y): our Z-up mesh must come back as it was."""
+    import numpy as np
+    from mastersmith import sdfkit
+    v = np.array([[1.0, 2.0, 3.0]])
+    g = sdfkit.to_gltf_frame(v)
+    back = np.stack([g[:, 0], -g[:, 2], g[:, 1]], axis=1)
+    assert np.allclose(back, v)
+
+
+def test_default_voxel_keeps_the_grid_bounded():
+    from mastersmith import sdfkit
+    assert sdfkit.default_voxel(0.1, 0.05, 0.05) <= 0.001
+    L, W, H = 1.5, 0.6, 0.6
+    v = sdfkit.default_voxel(L, W, H)
+    assert (L / v) * (W / v) * (H / v) <= 60_000_001

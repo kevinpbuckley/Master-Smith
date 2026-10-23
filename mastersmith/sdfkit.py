@@ -251,9 +251,23 @@ def mesh(sdf, lo, hi, voxel, chunk=2_000_000):
     return verts, faces
 
 
+def default_voxel(L, W, H, max_points=60_000_000):
+    """The voxel for a part's box: fine for a small part (1 mm at most), coarser for a big one so the grid stays under
+    `max_points` (a 1.5 m pod part at 1 mm asked for ~650 M points and was killed for memory, 2026-10-22)."""
+    v = min(max(max(L, W, H) / 320.0, 0.00015), 0.001)
+    return max(v, (L * W * H / max_points) ** (1.0 / 3.0))
+
+
+def to_gltf_frame(verts):
+    """Blender's Z-up (x, y, z) as glTF's Y-up (x, z, -y): the importer turns it back, so a part keeps its axes (written
+    Z-up as it was, a two-pod band came into Blender 2.6 m tall, 2026-10-22)."""
+    v = np.asarray(verts, dtype=np.float64)
+    return np.stack([v[:, 0], v[:, 2], -v[:, 1]], axis=1)
+
+
 def write_glb(verts, faces, path):
     import trimesh
-    m = trimesh.Trimesh(vertices=np.asarray(verts, dtype=np.float64), faces=np.asarray(faces, dtype=np.int64), process=True)
+    m = trimesh.Trimesh(vertices=to_gltf_frame(verts), faces=np.asarray(faces, dtype=np.int64), process=True)
     m.export(path)
     return path
 
