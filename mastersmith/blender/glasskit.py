@@ -190,6 +190,17 @@ def canopy_hull(o, box_faces, diag, edge=1 / 120.0, mirror_y=None):
             break
         bmesh.ops.subdivide_edges(bm, edges=long, cuts=1, use_grid_fill=True)
         bmesh.ops.triangulate(bm, faces=bm.faces[:])
+    # 2026-10-23: the subdivision leaves copies of the same triangle (92,515 of 102,348 on the Proteus P2's canopy):
+    # the shell carried them into LOD0, and the GLB came back 2,283 triangles short of the report
+    bm.verts.index_update()
+    seen, dup = set(), []
+    for f in bm.faces:
+        key = tuple(sorted(v.index for v in f.verts))
+        if key in seen:
+            dup.append(f)
+        seen.add(key)
+    if dup:
+        bmesh.ops.delete(bm, geom=dup, context="FACES_ONLY")
     bm.normal_update()
     return bm
 
