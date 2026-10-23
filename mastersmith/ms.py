@@ -349,9 +349,11 @@ def cmd_retexture(a):
     if not os.path.exists(blend):
         sys.exit("no registered seed for %s: ms seed first" % a.part)
     geo = os.path.join(d, "retexture_input.glb")
-    _blender(job, "swap_seed.py", {"mode": "export", "blend": blend, "out_glb": geo}, "retexture_export_%s" % a.part)
-    if os.path.getsize(geo) > 18 * 1024 * 1024:
-        sys.exit("the seed's geometry is %.0f MB; the retexture model takes 18 MB at most" % (os.path.getsize(geo) / 1e6))
+    limit = 18 * 1024 * 1024
+    # 2026-10-23: a 107k-face Hi3D seed exported at 21 MB; the copy that goes out is decimated until it fits
+    _blender(job, "swap_seed.py", {"mode": "export", "blend": blend, "out_glb": geo, "max_bytes": limit}, "retexture_export_%s" % a.part)
+    if os.path.getsize(geo) > limit:
+        sys.exit("the seed's geometry is %.0f MB even decimated; the retexture model takes 18 MB at most" % (os.path.getsize(geo) / 1e6))
     os.environ["MASTERSMITH_NO_SPEND"] = "0"
     config.NO_SPEND = False
     hero = job.path("ref", "ref_0.png")
