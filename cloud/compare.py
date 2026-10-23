@@ -15,6 +15,8 @@ PAIRS = [("iso", "ref_0.png", "preview_iso.png"), ("front", "ref_front.png", "pr
          ("starboard", "ref_side.png", "preview_right.png"), ("top", None, "preview_top.png"),
          ("bottom", None, "preview_bottom.png")]
 
+SIX = {"rear": "back", "port": "right", "starboard": "left"}
+
 
 def fit(im):
     return im.convert("RGB").resize((max(1, round(im.width * H / im.height)), H), Image.LANCZOS)
@@ -26,6 +28,10 @@ def main(job, out):
     rows = []
     for view, ref, render in PAIRS:
         rp = os.path.join(job, "delivery", render)
+        if not os.path.exists(rp):
+            # assemble writes the six sides as six_views/view_<side>.png; the sheet's port panel (bow left) is the
+            # asset's right-hand view (Test A, 2026-10-22)
+            rp = os.path.join(job, "six_views", "view_%s.png" % SIX.get(view, view))
         if not os.path.exists(rp):
             print("no render for %s (%s)" % (view, rp)); continue
         left = fit(sheet.crop(SHEET_CROPS[view])) if ref is None else fit(Image.open(os.path.join(job, "ref", ref)))
