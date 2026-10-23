@@ -258,9 +258,10 @@ def to_gltf_axes(verts):
     return np.stack([v[:, 0], v[:, 2], -v[:, 1]], axis=1)
 
 
-def auto_voxel(L, W, H, budget=60_000_000):
+def auto_voxel(L, W, H, budget=8_000_000):
     """The default voxel (metres): 1/320 of the longest side, 0.15-1 mm, but never a grid over `budget` points. The 1 mm
-    cap alone asked a 1.5 m pod part for ~650 M points and the run was OOM-killed (cloud test A, 2026-10-22)."""
+    cap alone asked a 1.5 m pod part for ~650 M points and the run was OOM-killed (cloud test A, 2026-10-22); 60 M
+    points took over 30 minutes on a 1.3 m cockpit tub, most of it Blender's planar dissolve (cloud test B, 2026-10-23)."""
     v = min(max(max(L, W, H) / 320.0, 0.00015), 0.001)
     floor = ((L + 4 * v) * (W + 4 * v) * (H + 4 * v) / float(budget)) ** (1.0 / 3.0)
     return max(v, floor)

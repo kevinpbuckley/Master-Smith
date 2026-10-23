@@ -84,4 +84,4 @@ def test_auto_voxel_keeps_the_grid_in_memory():
     assert sdfkit.auto_voxel(0.1, 0.02, 0.02) == pytest.approx(0.1 / 320)
     v = sdfkit.auto_voxel(1.5, 1.6, 0.7)                         # the two-pod part that was OOM-killed at 1 mm
     pts = (1.5 / v) * (1.6 / v) * (0.7 / v)
-    assert v > 0.001 and pts <= 60_000_000
+    assert v > 0.001 and pts <= 8_000_000
