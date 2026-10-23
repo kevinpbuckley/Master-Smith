@@ -281,6 +281,15 @@ def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False, force=
             if n.type == "TEX_IMAGE" and n.image:
                 img = n.image
             todo.extend(l.from_node for i in n.inputs for l in i.links)
+        if img is None and m.name.startswith("MI_part_"):
+            # 2026-10-23: a procedural plan material (an sdf part, blib.plan_material) has no image to tint through:
+            # its zones kept the part's colour, so the steel cowls and oxblood bands of the Proteus pods came out
+            # cream (cloud test A). The zone's planned colour replaces it; the smart material adds the variation.
+            for l in list(base.links):
+                t.links.remove(l)
+            t.links.new(rgb.outputs[0], base)
+            done = True
+            continue
         mean = image_mean_luminance(img) if img is not None else None
         if not mean or mean <= 1e-4:
             continue
