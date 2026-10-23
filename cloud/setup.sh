@@ -44,6 +44,6 @@ source cloud/env.sh
 mkdir -p "$MASTERSMITH_LOCAL_MODELS_DIR" "$RESULTS"
 
 echo "== Blender"; "$BLENDER_BIN" -b --version 2>&1 | head -1 || echo "Blender will not start: see CLOUD.md 'If Blender will not start'"
-echo "== ms";      $MS models 2>&1 | head -2
+echo "== ms";      $MS models 2>&1 | head -2 || true     # head closes the pipe; under pipefail that ended the script here (Test A, 2026-10-23)
 if [ -n "${FAL_KEY:-}" ]; then echo "FAL_KEY: set"; else echo "FAL_KEY: MISSING - the environment must carry it; never print it"; fi
 echo "== jobs";    ls "$JOBS"
