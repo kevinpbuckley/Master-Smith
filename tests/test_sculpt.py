@@ -149,3 +149,18 @@ def test_move_with_a_mask_is_rigid():
     out = sculpt.stroke(v, None, {"op": "move", "at": [0, 0, 0], "radius": 0.01, "delta": [0, -0.5, 0], "mask": m})
     assert np.allclose(out[:10] - v[:10], [0, -0.5, 0])
     assert np.allclose(out[10:], v[10:])
+
+
+def test_scale_grows_the_masked_vertices_about_the_pivot_and_leaves_the_rest():
+    v, f = sphere_mesh()
+    mask = v[:, 2] > 0.02                                   # the cap
+    lo, hi = v[mask].min(axis=0), v[mask].max(axis=0)
+    out = sculpt.stroke(v, f, {"op": "scale", "factor": [1.5, 1.5, 1.0], "pivot": list((lo + hi) / 2), "mask": mask})
+    moved = np.linalg.norm(out - v, axis=1)
+    assert moved[~mask].max() < 1e-9
+    assert np.ptp(out[mask, 0]) > 1.4 * np.ptp(v[mask, 0]) and abs(np.ptp(out[mask, 2]) - np.ptp(v[mask, 2])) < 1e-9
+    # without a mask the falloff about `at` keeps it local
+    at = np.array([0.05, 0, 0])
+    out = sculpt.stroke(v, f, {"op": "scale", "at": at, "radius": 0.015, "factor": [1.2, 1.2, 1.2], "pivot": [0.03, 0, 0]})
+    far = np.linalg.norm(v - at, axis=1) > 0.03
+    assert np.linalg.norm(out - v, axis=1)[far].max() < 1e-9 and out[:, 0].max() > v[:, 0].max() + 0.003

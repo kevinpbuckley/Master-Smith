@@ -795,14 +795,21 @@ def cmd_brush(a):
             sys.exit("nothing to replay")
     else:
         if not a.op:
-            sys.exit("--op is required (one of inflate, move, smooth, flatten, crease)")
+            sys.exit("--op is required (one of inflate, move, smooth, flatten, crease, taper, symmetrize, scale)")
         op = {"op": a.op, "at": _point(a.at, size), "radius": a.radius / 1000.0, "strength": a.strength}
         if a.op == "inflate":
             op["strength"] = a.strength / 1000.0                  # mm at the centre
+        if a.op in ("move", "scale") and a.segment:
+            op["segment"] = [int(v) for v in a.segment.split(",")]
         if a.op == "move":
             op["delta"] = [float(v) / 1000.0 for v in (a.delta or "0,0,0").split(",")]
-            if a.segment:
-                op["segment"] = [int(v) for v in a.segment.split(",")]
+        if a.op == "scale":
+            if not a.factor:
+                sys.exit("--factor is required for scale (f or fx,fy,fz)")
+            f = [float(v) for v in a.factor.split(",")]
+            op["factor"] = f * 3 if len(f) == 1 else f
+            about = a.about or ("each" if a.segment else "at")
+            op["about"] = about if about in ("each", "centre", "at") else _point(about, size)
         if a.op == "crease":
             op["to"] = _point(a.to or a.at, size)
         if a.op == "symmetrize":
@@ -2178,11 +2185,13 @@ def main(argv=None):
     s = sub.add_parser("fit"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--quarter", action="store_true")
     s.add_argument("--iters", type=int, default=8); s.add_argument("--step", type=float, default=0.6); s.add_argument("--no-backup", action="store_true")
     s.add_argument("--free", action="store_true", help="move vertices one by one (the old fit) instead of bending a lattice"); s.set_defaults(fn=cmd_fit)
-    s = sub.add_parser("brush"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--op", choices=("inflate", "move", "smooth", "flatten", "crease", "taper", "symmetrize"))
+    s = sub.add_parser("brush"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--op", choices=("inflate", "move", "smooth", "flatten", "crease", "taper", "symmetrize", "scale"))
+    s.add_argument("--factor", help="scale: f or fx,fy,fz (1 leaves an axis alone)")
+    s.add_argument("--about", help="scale: each (every --segment label about its own centre, the default with --segment), centre (the part's), or a point like --at")
     s.add_argument("--at", default="centre", help="x,y,z metres in the part frame, or front/back/top/bottom/left/right/centre[+dx,dy,dz]")
     s.add_argument("--radius", type=float, default=10.0, help="mm"); s.add_argument("--strength", type=float, default=1.0, help="inflate: mm at the centre; others: 0-1")
     s.add_argument("--delta", help="move: dx,dy,dz in mm"); s.add_argument("--to", help="crease: the line's other end"); s.add_argument("--normal", help="flatten: nx,ny,nz")
-    s.add_argument("--segment", help="move: these ms segment labels (a,b,...) move rigidly by --delta instead of a falloff")
+    s.add_argument("--segment", help="move/scale: these ms segment labels (a,b,...) move rigidly by --delta, or scale by --factor, instead of a falloff")
     s.add_argument("--keep", choices=("-y", "+y"), default="-y", help="symmetrize: the half mirrored onto the other")
     s.add_argument("--mid-y", type=float, default=0.0, help="symmetrize: the centre plane's y (mm from the part's centre)")
     s.add_argument("--profile", help="taper: x:s,x:s,... metres along X and the half-width scale there beyond --core")

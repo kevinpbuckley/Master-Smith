@@ -92,6 +92,14 @@ for op in args["strokes"]:
         op["mid_y"] = float(centre[1])
     if op["op"] == "inflate":
         op["strength"] = float(op.get("strength", 0.0)) * k
+    if op["op"] == "scale":
+        about = op.get("about", "each" if op.get("segment") is not None else "at")
+        if about == "centre":
+            op["pivot"] = list(centre)
+        elif about not in ("each", "at"):
+            op["pivot"] = list(centre + np.asarray(about, dtype=np.float64) * sc)
+        else:
+            op["pivot"] = op["at"]
     if op.get("segment") is not None:
         # a rigid move of the faces `ms segment` labelled so (the Proteus P2's pods, slid inboard, 2026-10-23)
         att = me.attributes.get("ms_segment")
@@ -99,11 +107,21 @@ for op in args["strokes"]:
             raise SystemExit("brush --segment: the mesh has no ms_segment labels (run ms segment first)")
         lab = np.empty(len(me.polygons), np.int32)
         att.data.foreach_get("value", lab)
-        want = set(int(v) for v in op["segment"])
-        mask = np.zeros(len(verts), bool)
+        want = [int(v) for v in op["segment"]]
+        masks = {}
         for poly in me.polygons:
-            if int(lab[poly.index]) in want:
-                mask[list(poly.vertices)] = True
+            label = int(lab[poly.index])
+            if label in want:
+                masks.setdefault(label, np.zeros(len(verts), bool))[list(poly.vertices)] = True
+        if op["op"] == "scale" and op.get("about", "each") == "each":
+            # each label grows about its own box centre, so a port and a starboard pod both stay where they are
+            for label, mask in masks.items():
+                lo, hi = verts[mask].min(axis=0), verts[mask].max(axis=0)
+                verts = sculpt.stroke(verts, faces, dict(op, mask=mask, pivot=list((lo + hi) / 2)))
+            continue
+        mask = np.zeros(len(verts), bool)
+        for m in masks.values():
+            mask |= m
         op["mask"] = mask
     verts = sculpt.stroke(verts, faces, op)
 moved = np.linalg.norm(verts - before, axis=1) / k if not resized else np.zeros(len(verts))

@@ -137,7 +137,21 @@ def taper(verts, profile, core, band=None, mid_y=0.0):
     return out
 
 
-BRUSHES = ("inflate", "move", "smooth", "flatten", "crease", "taper")
+def scale(verts, factor, pivot, mask=None, centre=None, radius=0.01):
+    """Scale about `pivot` by the per-axis `factor`: exactly the masked vertices, rigidly (a segmented part grown or
+    thinned in place: the Mk II's turbine pods came back at two thirds of the sheet's diameter, 2026-10-23), else
+    the vertices within `radius` of `centre` with the falloff. A factor of 1 on an axis leaves that axis alone."""
+    f = np.asarray(factor, dtype=np.float64)
+    p = np.asarray(pivot, dtype=np.float64)
+    target = p + (verts - p) * f
+    if mask is not None:
+        w = np.asarray(mask, bool).astype(np.float64)
+    else:
+        w = falloff(np.linalg.norm(verts - np.asarray(centre), axis=1), radius)
+    return verts + w[:, None] * (target - verts)
+
+
+BRUSHES = ("inflate", "move", "smooth", "flatten", "crease", "taper", "scale")
 
 
 def stroke(verts, faces, op):
@@ -157,6 +171,8 @@ def stroke(verts, faces, op):
         return crease(verts, faces, at, op.get("to", at), r, s)
     if kind == "taper":
         return taper(verts, op["profile"], float(op["core"]), op.get("band"), float(op.get("mid_y", 0.0)))
+    if kind == "scale":
+        return scale(verts, op.get("factor", (1, 1, 1)), op.get("pivot", at), op.get("mask"), at, r)
     raise ValueError("unknown brush %r (one of %s)" % (kind, ", ".join(BRUSHES)))
 
 
