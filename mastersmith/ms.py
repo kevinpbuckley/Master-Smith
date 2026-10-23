@@ -1013,7 +1013,9 @@ def cmd_assemble(a):
                       "centreline": bool(p.get("centreline")), "zones": p.get("zones") or [], "blend": blend, "yaw": 0,
                       "carve": bool(p.get("carve")) and not is_largest, "no_projection": bool(p.get("no_projection")),
                       "keep_depth": bool(fit.get("keep_depth")) and is_largest, "fill_box": not is_largest,
-                      "lettering": p.get("lettering") or []})
+                      "lettering": p.get("lettering") or [],
+                      # 2026-10-23: a fixed LOD0 share and the sharpen switch (the Mk II's cockpit insert)
+                      "triangles": p.get("triangles"), "sharpen": p.get("sharpen", True)})
     if not parts:
         sys.exit("nothing to assemble")
     delivery = job.path("delivery")
