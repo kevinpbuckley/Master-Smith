@@ -5,12 +5,13 @@ pictures (the sheet's panel on the left, the delivery's render on the right), `c
 `package` gate output. Look at every picture with the Read tool before scoring. Nobody's history, no leniency.
 
 Score each criterion 0-10. Weights in brackets; overall = weighted mean, then the gate cap.
-- `silhouette` (25): proportions against the six orthographic panels: a rounded manta/arrowhead planform, pointed low
-  bow, the cream deck a narrow rounded spine, oxblood wing lip, the belly rounded up into it, the tall swept fin.
+- `silhouette` (25): proportions against the orthographic panels, which were derived from the hero (the hero is the
+  truth, owner 2026-10-23): a wide flat saucer hull with a broad rounded bow, the cream deck a rounded spine, the
+  oxblood rim all round, the belly rounded up into it, the tall swept fin.
 - `cockpit` (20): one continuous wraparound bubble canopy with brass mullions, clear glass, and the single-pilot
   interior visible through it (seat, dashboard, HOTAS: throttle on the pilot's LEFT console, stick on the RIGHT).
-- `pods` (15): two ducted turbine pods tucked up under the rear hull in nacelle recesses, cream/oxblood banded, open
-  intake with a fan, rear outlet. Pods hanging off slabs or bars in mid-air score 3 at most.
+- `pods` (15): two ducted turbine pods tucked up under the rear hull on short rigid pylons, inboard of the rim,
+  cream/oxblood banded, open intake with a fan, rear outlet. Pods hanging off slabs or bars in mid-air score 3 at most.
 - `control_surfaces` (10): solid upper and lower rudders, left and right planes, rear elevator; no exhaust openings
   on any fin; a fin with no thickness or no paint scores 3 at most.
 - `surface_detail` (15): panel seams, rivets, brass trim strips, the steel roof dome with its brass ring, the three
@@ -23,7 +24,8 @@ matches the sheet closely. Anchor: the code-only cloud build of 2026-10-09 is a 
 window canopy); the 2026-10-08 hand-built delivery is a 6 (right hull, flat plate fin, pods on slabs, wire canopy frame).
 
 Gates (any failure caps the overall at 6):
-1. Size: `report.json` length and width within 3% of 4.079 x 3.917 m; height between 1.45 and 1.75 m.
+1. Size: `report.json` length within 3% of 4.079 m and width within 5% of the job's `plan/dims.json` width (the
+   panels' own reading; ProteusMkII 3.085 m); height between 1.35 and 1.75 m.
 2. Budget: LOD0 at most 120,000 triangles; the `ms package` gate reports no failure.
 3. Glass: the canopy is a real see-through part (the cockpit is visible through it from the front and the iso view);
    no background shows through the hull anywhere.
