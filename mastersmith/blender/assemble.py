@@ -1381,8 +1381,14 @@ for p in args["parts"]:
                 rec.setdefault("glow_zones", []).append(glow_emission(mats, z["glow"]))
                 EMISSIVE["strength"] = max(EMISSIVE["strength"], float(z.get("strength") or zm.get("strength") or 8.0))
                 continue
-            tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")), force=bool(zm.get("color_lock")),
-                         flat=bool(z.get("flat")))
+            if zm.get("keep_texture") and not zm.get("color_lock"):
+                # the seed's own paint stays under the zone's surface, only metal and roughness are the plan's: a
+                # segment zone's faces run past the feature they name (the Mk II's canopy label took a ragged band of
+                # deck round the mullions, and flat brass drew that edge on the deck, 2026-10-23)
+                rec.setdefault("zones_kept_texture", []).append(z.get("name"))
+            else:
+                tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")), force=bool(zm.get("color_lock")),
+                             flat=bool(z.get("flat")))
             surface_to_plan(o, zm, mats)
             if zm.get("finish") == "emissive":
                 # a lamp, a screen, an engine glow: its colour emitted, baked into T_<Name>_E; the strength (6-12, 1-2

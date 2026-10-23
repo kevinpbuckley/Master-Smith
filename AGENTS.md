@@ -171,7 +171,9 @@ A zone may name the seed's own part lines instead of a box: `"segment": 3` or `[
 `parts/<Part>/segments.json` after `ms segment` (2026-10-04); without a `side_box` it is exactly those faces, with one
 it is those faces inside the box. A glass zone with a segment colour-picks its panes inside the labelled faces. Its
 colour is sampled from the picture like any zone's (a red test zone on a black gun came out #3e3e3e, 2026-10-04):
-`"color_lock": true` keeps the planned colour.
+`"color_lock": true` keeps the planned colour; `"keep_texture": true` on a zone's material keeps the seed's own paint and
+takes only the planned surface (metal, roughness): for a segment zone whose faces run past the feature they name
+(2026-10-23: the Mk II's canopy label took a ragged band of deck round the mullions, and flat brass drew that edge).
 `zones` are areas of a part in a different material (rubber pad on a polymer stock, glass lens on a scope); on a
 whole-object seed they carry every material that is not the seed's own texture. A glass zone is cut out into a real
 see-through part: its faces are picked by the seed's texture colour inside the box (`"pick": "auto"`, the default on
