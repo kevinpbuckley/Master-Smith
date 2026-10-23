@@ -592,8 +592,11 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
         me.calc_loop_triangles()
         vco = [v.co.copy() for v in me.vertices]
         gt = BVHTree.FromPolygons(vco, [list(t.vertices) for t in me.loop_triangles if mask[t.polygon_index]])
+        # 2026-10-23: a zone's "inner_mm" reaches further than the default 0.4% of the diagonal (~20 mm): Hi3D's
+        # Mk II canopy had its inner skin 40-80 mm behind the panes and it stayed as a dark wall under clear glass
+        reach = float(z["inner_mm"]) / 1000.0 if isinstance(z.get("inner_mm"), (int, float)) else 0.004 * diag
         for i in np.nonzero(inbox & ~outside & ~mask)[0]:
-            loc, gn, _gi, dist = gt.find_nearest(Vector(centres[i]), 0.004 * diag)
+            loc, gn, _gi, dist = gt.find_nearest(Vector(centres[i]), reach)
             if loc is None or abs(Vector(normals[i]).dot(gn)) < 0.7:
                 continue
             if (loc - Vector(centres[i])).dot(gn) > 0.0002 * diag:
@@ -808,10 +811,11 @@ def interior_material(name, colour=(0.018, 0.02, 0.024), rough=0.8):
     return m
 
 
-def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05):
+def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05, specular=0.45):
     """See-through glass that reads in every viewer (Tonetta's glass skill, 2026-09-29): alpha 0.3 (below 0.2 the pane
     vanishes, above 0.7 it is paint), specular 0.45 (0.8 on grey mirrored the backdrop and read as opaque grey), no
-    normal map, blended, both sides drawn."""
+    normal map, blended, both sides drawn. A zone's "specular" lowers it for a clear bubble canopy whose cockpit must
+    read through it (the Mk II at 0.45 mirrored the studio and read as a dark blue mirror, 2026-10-23)."""
     m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     b = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
     b.inputs["Base Color"].default_value = (*tint, 1.0)
@@ -819,7 +823,7 @@ def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05):
     b.inputs["Roughness"].default_value = rough
     b.inputs["Alpha"].default_value = alpha
     if "Specular IOR Level" in b.inputs:
-        b.inputs["Specular IOR Level"].default_value = 0.45
+        b.inputs["Specular IOR Level"].default_value = float(specular)
     for l in list(b.inputs["Normal"].links):
         m.node_tree.links.remove(l)
     m.surface_render_method = "BLENDED"

@@ -60,6 +60,12 @@ def test_glass_alpha_passes_through_clamped():
     assert "alpha" in planmod.MATERIAL_KEYS
     m = planmod.clean_material({"finish": "glass", "color": "#060808", "alpha": 0.6, "roughness": 0.08})
     assert m["glass"] and m["alpha"] == 0.6 and m["roughness"] == 0.08 and m["color"] == "#060808"
+    # 2026-10-23: a clear canopy's lower specular reaches the assembler too (the Mk II pane at 0.45 read as a mirror)
+    assert "specular" in planmod.MATERIAL_KEYS
+    m = planmod.clean_material({"finish": "glass", "alpha": 0.2, "specular": 0.18})
+    assert m["specular"] == 0.18 and m["alpha"] == 0.2
+    assert planmod.clean_material({"finish": "glass", "alpha": 0.2, "specular": 2.0})["specular"] == 0.8
+    assert "specular" not in planmod.clean_material({"finish": "painted", "specular": 0.2})
     assert planmod.clean_material({"finish": "glass", "alpha": 0.95})["alpha"] == 0.7
     assert planmod.clean_material({"finish": "glass", "alpha": True}).get("alpha") is None
     assert planmod.clean_material({"finish": "painted", "alpha": 0.5}).get("alpha") is None

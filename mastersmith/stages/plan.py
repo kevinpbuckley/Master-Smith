@@ -346,6 +346,10 @@ def clean_material(mat):
     # where a pane still reads as glass (under 0.2 it vanishes, over 0.7 it is paint).
     if out["glass"] and isinstance(mat.get("alpha"), (int, float)) and not isinstance(mat.get("alpha"), bool):
         out["alpha"] = round(min(0.7, max(0.2, float(mat["alpha"]))), 3)
+    # 2026-10-23: a clear bubble canopy the cockpit must read through takes a lower specular than the 0.45 default
+    # (the Mk II's pane at 0.45 mirrored the studio and three reviewers called it "a dark blue mirror")
+    if out["glass"] and isinstance(mat.get("specular"), (int, float)) and not isinstance(mat.get("specular"), bool):
+        out["specular"] = round(min(0.8, max(0.05, float(mat["specular"]))), 3)
     return out
 
 
@@ -355,8 +359,8 @@ TOP_KEYS = {"parts", "notes", "overall_width_m"}
 PART_KEYS = {"name", "what", "method", "side_box", "front_span", "material", "zones", "reference_detail", "skin",
              "edge_break", "interior", "centreline", "lettering", "carve", "projection"}
 ZONE_KEYS = {"name", "side_box", "front_span", "material", "pick", "keep", "strength", "fill", "line", "shell", "flat",
-             "glow", "vertices", "triangles", "tolerance", "bounds", "segment", "mirror"}
-MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha"}
+             "glow", "vertices", "triangles", "tolerance", "bounds", "segment", "mirror", "inner_mm"}
+MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha", "specular"}
 GLOW_KEYS = {"hue", "hue_tol", "min_sat", "min_val"}
 PICKS = ("auto", "dark", "pale", "lit", "box", "atlas", "fitted", "hull")
 # what a validated plan.json carries besides the plan (fed back through `ms plan` it is not "ignored")
@@ -530,7 +534,7 @@ def validate_plan(raw, dims, max_parts=None):
                         ignored.append("%s dropped: %s" % (zn, panes))
                         continue
                     zone.update(panes)
-                for key in ("keep", "strength"):
+                for key in ("keep", "strength", "inner_mm"):    # inner_mm: how far behind a pane its inner skin is glass too
                     if key in z:
                         if isinstance(z[key], (int, float)) and not isinstance(z[key], bool):
                             zone[key] = z[key]

@@ -851,6 +851,8 @@ def zone_glass_kw(z):
     if not isinstance(a, (int, float)) or isinstance(a, bool):
         return {}
     kw = {"alpha": float(a), "rough": float(zm.get("roughness", 0.05))}
+    if isinstance(zm.get("specular"), (int, float)) and not isinstance(zm.get("specular"), bool):
+        kw["specular"] = float(zm["specular"])          # 0.15-0.25 for a clear canopy the cockpit must read through
     h = str(zm.get("color") or "").lstrip("#")
     if len(h) == 6 and h.lower() != "808080":
         from colour import srgb_to_linear
