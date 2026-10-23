@@ -71,6 +71,25 @@ def test_glass_alpha_passes_through_clamped():
     assert planmod.clean_material({"finish": "painted", "alpha": 0.5}).get("alpha") is None
 
 
+def test_an_interior_part_may_carve_a_box_of_its_own():
+    """2026-10-23: the box an insert fills and the box the seed's cockpit is carved out of are two different things."""
+    insert = _part(name="Cockpit", interior=True, side_box=[60, 85, 25, 65], front_span=[37, 63],
+                   carve_box=[60, 90, 10, 65])
+    nozzle = _part(name="Nozzle", carve=True, side_box=[0, 10, 40, 60], carve_box=[0, 12, 40, 60])
+    plan = planmod.validate_plan({"parts": [_part(), insert, nozzle]}, DIMS)
+    parts = {p["name"]: p for p in plan["parts"]}
+    cp = parts["Cockpit"]
+    assert cp["carve_box"] == [60, 90, 10, 65] and "carve_span" not in cp
+    assert cp["carve_min"][0] == cp["box_min"][0] and cp["carve_max"][0] > cp["box_max"][0]   # longer than the fill box
+    assert cp["carve_max"][2] > cp["box_max"][2] and cp["carve_min"][1:] == cp["box_min"][1:]  # up into the canopy, same span
+    assert cp["sharpen"] is False                                   # an interior part is unsharpened by default
+    assert "carve_min" not in parts["Nozzle"] and any("Nozzle.carve_box" in s for s in plan["ignored"])
+    assert "sharpen" not in parts["Nozzle"]
+    assert planmod.validate_plan(plan, DIMS)["ignored"] == []       # carve_min/carve_max fed back are not "ignored"
+    told = planmod.validate_plan({"parts": [_part(name="Cab", interior=True, sharpen=True, carve_box=[1, 2])]}, DIMS)
+    assert "sharpen" not in told["parts"][0] and any("Cab.carve_box" in s for s in told["ignored"])
+
+
 def test_a_zone_may_name_segmentation_labels_instead_of_a_box():
     # 2026-10-04: `ms segment` labels the seed's faces; a zone names labels, with or without a box
     raw = {"parts": [_part(zones=[{"name": "Barrel", "segment": 3, "material": {"finish": "metal", "metal": True}},

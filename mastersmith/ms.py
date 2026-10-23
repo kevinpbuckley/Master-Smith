@@ -713,7 +713,8 @@ def cmd_cabin(a):
     hm = hull.get("material") or {}
     zones = [dict(z, pick=z.get("pick") or ("auto" if hm.get("keep_texture") else "box")) for z in hull.get("zones") or []
              if ((z.get("material") or {}).get("glass") or (z.get("material") or {}).get("finish") == "glass") and z.get("pick") != "atlas"]
-    carve = {"zones": zones, "box_min": part["box_min"], "box_max": part["box_max"]} if zones else None
+    carve = {"zones": zones, "box_min": part.get("carve_min") or part["box_min"],
+             "box_max": part.get("carve_max") or part["box_max"]} if zones else None
     _blender(job, "cabin.py", {"hull_blend": blend, "box_min": hull["box_min"], "box_max": hull["box_max"],
                                "keep_depth": bool(fit.get("keep_depth")), "x_range": [part["box_min"][0], part["box_max"][0]],
                                "z_top": part["box_max"][2] if carve else None, "out_json": out, "carve": carve}, "cabin_%s" % part["name"])
@@ -1014,8 +1015,10 @@ def cmd_assemble(a):
                       "carve": bool(p.get("carve")) and not is_largest, "no_projection": bool(p.get("no_projection")),
                       "keep_depth": bool(fit.get("keep_depth")) and is_largest, "fill_box": not is_largest,
                       "lettering": p.get("lettering") or [],
-                      # 2026-10-23: a fixed LOD0 share and the sharpen switch (the Mk II's cockpit insert)
-                      "triangles": p.get("triangles"), "sharpen": p.get("sharpen", True)})
+                      # 2026-10-23: a fixed LOD0 share, the sharpen switch and an interior's own carve box (the Mk II's
+                      # cockpit insert). This list is what reaches Blender: a new plan key goes here too.
+                      "triangles": p.get("triangles"), "sharpen": p.get("sharpen", True),
+                      "carve_min": p.get("carve_min"), "carve_max": p.get("carve_max")})
     if not parts:
         sys.exit("nothing to assemble")
     delivery = job.path("delivery")

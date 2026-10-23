@@ -357,7 +357,8 @@ def clean_material(mat):
 # and was patched six times on 2026-09-29 for keys the agent had already written (pick, keep, lettering, line, shell).
 TOP_KEYS = {"parts", "notes", "overall_width_m"}
 PART_KEYS = {"name", "what", "method", "side_box", "front_span", "material", "zones", "reference_detail", "skin",
-             "edge_break", "interior", "centreline", "lettering", "carve", "projection", "triangles", "sharpen"}
+             "edge_break", "interior", "centreline", "lettering", "carve", "projection", "triangles", "sharpen",
+             "carve_box", "carve_span"}
 ZONE_KEYS = {"name", "side_box", "front_span", "material", "pick", "keep", "strength", "fill", "line", "shell", "flat",
              "glow", "vertices", "triangles", "tolerance", "bounds", "segment", "mirror", "inner_mm"}
 MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha", "specular"}
@@ -365,7 +366,7 @@ GLOW_KEYS = {"hue", "hue_tol", "min_sat", "min_val"}
 PICKS = ("auto", "dark", "pale", "lit", "box", "atlas", "fitted", "hull")
 # what a validated plan.json carries besides the plan (fed back through `ms plan` it is not "ignored")
 DERIVED = {"box_min", "box_max", "color_planned", "pbr_set", "dropped", "dims_m", "side", "front", "side_grid",
-           "front_grid", "ignored"}
+           "front_grid", "ignored", "carve_min", "carve_max"}
 
 
 def clean_segment(value):
@@ -482,8 +483,26 @@ def validate_plan(raw, dims, max_parts=None):
                 part["triangles"] = max(1000, int(p["triangles"]))
             except (TypeError, ValueError):
                 ignored.append("%s.triangles=%r (a whole number of LOD0 triangles)" % (name, p.get("triangles")))
-        if p.get("sharpen") is False:
+        # an interior part is sculpted detail (seat, dash, controls) by its nature: unsharpened unless the plan says
+        # "sharpen": true (the Mk II's first insert lost its dials to the flattening before the key existed)
+        if p.get("sharpen") is False or (part.get("interior") and p.get("sharpen") is not True):
             part["sharpen"] = False
+        # 2026-10-23: "carve_box" [x0, x1, z_top, z_bottom] (+ "carve_span" [y0, y1], the part's own span otherwise) on
+        # an interior part: the box the seed's own cockpit is carved out of, apart from the box the insert fills. The
+        # Mk II's tub box raised into the canopy carved the seed's painted cockpit "shards" under the panes, but the
+        # insert then filled that box too and every bulkhead poked through the deck (round 9's three drafts).
+        if "carve_box" in p or "carve_span" in p:
+            if not part.get("interior"):
+                ignored.append("%s.carve_box (only an interior part has a carve box; \"carve\": true for a replacement part)" % name)
+            else:
+                try:
+                    cmin, cmax = to_metres(p.get("carve_box") or p["side_box"], p.get("carve_span") or p["front_span"], dims)
+                    part["carve_min"], part["carve_max"] = cmin, cmax
+                    part["carve_box"] = [pct(v) for v in (p.get("carve_box") or p["side_box"])]
+                    if p.get("carve_span"):
+                        part["carve_span"] = [pct(v) for v in p["carve_span"]]
+                except (ValueError, TypeError) as exc:
+                    ignored.append("%s.carve_box=%r (four percents off the side grid; %s)" % (name, p.get("carve_box"), exc))
         # 2026-09-29: "lettering", side boxes (percent of the side grid) around painted words: the picture prints
         # there at full strength over the mesher's own copy, and reads the right way round on the far side
         boxes = []

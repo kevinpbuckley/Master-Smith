@@ -1284,8 +1284,11 @@ for p in args["parts"]:
                 delete_faces(o, gone)
                 log("%s: %d faces carved out for %s" % (p["name"], int(gone.sum()), ", ".join(q["name"] for q in carvers)))
         if p.get("body") and interiors and glass_zones:
-            # an interior part replaces the seed's own cockpit: its contents go before the glass is picked
-            carve, cst = cockpit_contents(o, glass_zones, [(q["box_min"], q["box_max"]) for q in interiors])
+            # an interior part replaces the seed's own cockpit: its contents go before the glass is picked. The carve
+            # box is the part's own unless the plan gives "carve_box" (2026-10-23: the box the insert fills and the box
+            # the seed's painted cockpit is carved out of are two different things on the Mk II)
+            carve, cst = cockpit_contents(o, glass_zones, [(q.get("carve_min") or q["box_min"], q.get("carve_max") or q["box_max"])
+                                                           for q in interiors])
             if cst["faces"]:
                 delete_faces(o, carve)
             rec["cockpit_carved"] = cst
