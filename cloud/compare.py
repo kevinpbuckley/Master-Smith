@@ -16,6 +16,23 @@ PAIRS = [("iso", "ref_0.png", "preview_iso.png"), ("front", "ref_front.png", "pr
          ("bottom", None, "preview_bottom.png")]
 
 
+# 2026-10-23: the six views land in <job>/six_views/view_<v>.png (stages/review.py), not delivery/preview_<v>.png.
+# blib's "right" camera sits on +Y, the asset's port side: the sheet's port panel (bow left) is view_right.
+SIX = {"preview_front.png": "view_front.png", "preview_back.png": "view_back.png", "preview_left.png": "view_right.png",
+       "preview_right.png": "view_left.png", "preview_top.png": "view_top.png", "preview_bottom.png": "view_bottom.png"}
+
+
+def render_path(job, render):
+    """The delivery's own preview when it has one, else the orthographic six view of the same side."""
+    rp = os.path.join(job, "delivery", render)
+    if os.path.exists(rp) or render not in SIX:
+        return rp
+    for d in (os.path.join(job, "six_views"), os.path.join(job, "delivery", "six_views")):
+        if os.path.exists(os.path.join(d, SIX[render])):
+            return os.path.join(d, SIX[render])
+    return rp
+
+
 def fit(im):
     return im.convert("RGB").resize((max(1, round(im.width * H / im.height)), H), Image.LANCZOS)
 
@@ -25,7 +42,7 @@ def main(job, out):
     sheet = Image.open(os.path.join(job, "ref", "proteus_refit_v3.png"))
     rows = []
     for view, ref, render in PAIRS:
-        rp = os.path.join(job, "delivery", render)
+        rp = render_path(job, render)
         if not os.path.exists(rp):
             print("no render for %s (%s)" % (view, rp)); continue
         left = fit(sheet.crop(SHEET_CROPS[view])) if ref is None else fit(Image.open(os.path.join(job, "ref", ref)))
