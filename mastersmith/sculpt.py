@@ -114,7 +114,27 @@ def crease(verts, faces, a, b, radius, strength=0.5):
     return verts - off * (w * 0.6)[:, None] + normals * (w * radius * 0.15)[:, None]
 
 
-BRUSHES = ("inflate", "move", "smooth", "flatten", "crease")
+def taper(verts, profile, core, band=None, mid_y=0.0):
+    """Narrow the planform: the half-width beyond `core` (from the centre plane y = mid_y) is scaled by s(x), the
+    profile [[x, s], ...] interpolated along X (s = 1 keeps it). The scale ramps in over `band` beyond the core so the
+    deck bends instead of creasing; the map is monotonic in |y|, so no surface folds over. The Proteus P2's bow came
+    back round where the sheet draws a pointed arch (2026-10-23): a move brush that far folds the wing."""
+    prof = np.asarray(sorted(profile), dtype=np.float64)
+    s = np.interp(verts[:, 0], prof[:, 0], prof[:, 1])
+    band = float(band if band is not None else core * 0.5)
+    y = verts[:, 1] - mid_y
+    a = np.abs(y)
+    over = np.maximum(a - core, 0.0)
+    # beyond core + band the excess is scaled by s; in the band the scale eases in (the integral of a linear ramp)
+    t = np.clip(over / max(band, 1e-12), 0.0, 1.0)
+    eased = np.where(over < band, over * t / 2.0, band / 2.0 + (over - band))
+    shrink = (1.0 - s) * eased
+    out = verts.astype(np.float64).copy()
+    out[:, 1] = mid_y + np.sign(y) * (a - shrink)
+    return out
+
+
+BRUSHES = ("inflate", "move", "smooth", "flatten", "crease", "taper")
 
 
 def stroke(verts, faces, op):
@@ -132,6 +152,8 @@ def stroke(verts, faces, op):
         return flatten(verts, at, r, s, op.get("normal"))
     if kind == "crease":
         return crease(verts, faces, at, op.get("to", at), r, s)
+    if kind == "taper":
+        return taper(verts, op["profile"], float(op["core"]), op.get("band"), float(op.get("mid_y", 0.0)))
     raise ValueError("unknown brush %r (one of %s)" % (kind, ", ".join(BRUSHES)))
 
 

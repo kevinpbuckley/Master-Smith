@@ -125,3 +125,17 @@ def test_lattice_weights_reproduce_the_points():
     grid = np.stack(np.meshgrid(*[np.linspace(0, 1, s) for s in shape], indexing="ij"), axis=-1).reshape(-1, 3)
     assert np.allclose((w[:, :, None] * grid[idx]).sum(axis=1), pts)
     assert np.allclose(w.sum(axis=1), 1.0)
+
+
+def test_taper_narrows_beyond_the_core_and_never_folds():
+    """2026-10-23: the planform taper keeps the cabin (inside the core) and scales the wing beyond it, monotonic in |y|."""
+    ys = np.linspace(-2.0, 2.0, 81)
+    verts = np.stack([np.full_like(ys, 1.0), ys, np.zeros_like(ys)], axis=1)
+    out = sculpt.taper(verts, [[0.0, 1.0], [2.0, 0.5]], core=0.5, band=0.2)
+    assert np.allclose(out[np.abs(ys) <= 0.5, 1], ys[np.abs(ys) <= 0.5])       # the core stays
+    assert np.all(np.diff(out[:, 1]) > 0)                                        # no fold
+    tip = out[-1, 1]
+    assert abs(tip - (0.5 + 0.2 - 0.25 * 0.1 + 1.3 * 0.75)) < 1e-9               # s(1.0) = 0.75, eased in over the band
+    assert np.allclose(out[:, 1], -out[::-1, 1])                                 # symmetric
+    same = sculpt.taper(verts, [[0.0, 1.0], [2.0, 1.0]], core=0.5)
+    assert np.allclose(same, verts)

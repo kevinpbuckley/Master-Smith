@@ -783,6 +783,13 @@ def cmd_brush(a):
             op["delta"] = [float(v) / 1000.0 for v in (a.delta or "0,0,0").split(",")]
         if a.op == "crease":
             op["to"] = _point(a.to or a.at, size)
+        if a.op == "taper":
+            if not a.profile:
+                sys.exit("--profile is required for taper (x:s,x:s,...)")
+            op = {"op": "taper", "profile": [[float(v) for v in pair.split(":")] for pair in a.profile.split(",")],
+                  "core": a.core / 1000.0}
+            if a.band is not None:
+                op["band"] = a.band / 1000.0
         if a.op == "flatten" and a.normal:
             op["normal"] = [float(v) for v in a.normal.split(",")]
         strokes = [op]
@@ -2125,10 +2132,13 @@ def main(argv=None):
     s = sub.add_parser("fit"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--quarter", action="store_true")
     s.add_argument("--iters", type=int, default=8); s.add_argument("--step", type=float, default=0.6); s.add_argument("--no-backup", action="store_true")
     s.add_argument("--free", action="store_true", help="move vertices one by one (the old fit) instead of bending a lattice"); s.set_defaults(fn=cmd_fit)
-    s = sub.add_parser("brush"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--op", choices=("inflate", "move", "smooth", "flatten", "crease"))
+    s = sub.add_parser("brush"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--op", choices=("inflate", "move", "smooth", "flatten", "crease", "taper"))
     s.add_argument("--at", default="centre", help="x,y,z metres in the part frame, or front/back/top/bottom/left/right/centre[+dx,dy,dz]")
     s.add_argument("--radius", type=float, default=10.0, help="mm"); s.add_argument("--strength", type=float, default=1.0, help="inflate: mm at the centre; others: 0-1")
     s.add_argument("--delta", help="move: dx,dy,dz in mm"); s.add_argument("--to", help="crease: the line's other end"); s.add_argument("--normal", help="flatten: nx,ny,nz")
+    s.add_argument("--profile", help="taper: x:s,x:s,... metres along X and the half-width scale there beyond --core")
+    s.add_argument("--core", type=float, default=0.0, help="taper: the half-width (mm) left as it is about the centre plane")
+    s.add_argument("--band", type=float, help="taper: mm beyond the core over which the scale eases in (default half the core)")
     s.add_argument("--replay", action="store_true", help="re-apply brush_log.json to a fresh mesh"); s.set_defaults(fn=cmd_brush)
     s = sub.add_parser("cabin"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--hull", help="the body part (default: the longest vendor part)")
     s.set_defaults(fn=cmd_cabin)

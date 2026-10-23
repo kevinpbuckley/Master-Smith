@@ -43,6 +43,13 @@ for op in args["strokes"]:
     if "delta" in op:
         op["delta"] = list(np.asarray(op["delta"]) * sc)
     op["radius"] = float(op.get("radius", 0.01)) * k
+    if op["op"] == "taper":
+        # the profile's X and the core's half-width in the mesh's own units, about its centre plane
+        op["profile"] = [[centre[0] + x * sc[0], s] for x, s in op["profile"]]
+        op["core"] = float(op["core"]) * sc[1]
+        if op.get("band") is not None:
+            op["band"] = float(op["band"]) * sc[1]
+        op["mid_y"] = float(centre[1])
     if op["op"] == "inflate":
         op["strength"] = float(op.get("strength", 0.0)) * k
     verts = sculpt.stroke(verts, faces, op)
