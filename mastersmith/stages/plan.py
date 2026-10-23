@@ -447,7 +447,9 @@ def validate_plan(raw, dims, max_parts=None):
         part = {"name": name, "what": str(p.get("what") or name)[:400],
                 # 2026-09-28: an explicit "code" is kept under all-vendor too - the hybrid build codes the machined parts
                 # (rails, sights, trigger, barrel) and meshes only the sculpted ones (receiver, grip, handguard)
-                "method": method if method in ("code", "vendor") else ("vendor" if config.ALL_VENDOR else "code"),
+                # 2026-10-23: "sdf" (set by `ms sdf`, meshed into registered.blend like a seed) is kept: taken as vendor,
+                # every `ms plan` after an `ms sdf` lost it (cloud test A, 2026-10-22)
+                "method": method if method in ("code", "vendor", "sdf") else ("vendor" if config.ALL_VENDOR else "code"),
                 "side_box": [pct(v) for v in p["side_box"]], "front_span": [pct(v) for v in p["front_span"]],
                 "box_min": box_min, "box_max": box_max, "material": clean_material(p.get("material")),
                 # 2026-09-28: a code part whose shape is not the drawn one (the bullpup's folding sights) opts out of the
@@ -456,8 +458,8 @@ def validate_plan(raw, dims, max_parts=None):
         # 2026-09-29: "skin" (a code part dressed in its own diffused mesh's texture), "edge_break" (false keeps a code
         # part's edges razor sharp), "interior" (a cockpit or cabin inside the body, checked to fit in it) and an
         # explicit "centreline" pass through to the assembler
-        if str(p.get("method") or "code").lower() not in ("code", "vendor"):
-            ignored.append("%s.method=%r (code or vendor; taken as %s)" % (name, p.get("method"), part["method"]))
+        if str(p.get("method") or "code").lower() not in ("code", "vendor", "sdf"):
+            ignored.append("%s.method=%r (code, vendor or sdf; taken as %s)" % (name, p.get("method"), part["method"]))
         # 2026-10-04: "carve" (a replacement part: the body's faces inside its box go before it is placed - the
         # Kestrel's soft seed nozzle under an exact sdf one)
         for key in ("skin", "edge_break", "interior", "centreline", "carve"):
@@ -484,9 +486,9 @@ def validate_plan(raw, dims, max_parts=None):
                 ignored.append("%s.lettering[%d]=%r (x1 > x0 and z_bottom > z_top)" % (name, k, b))
         if boxes:
             part["lettering"] = boxes
-        if p.get("zones") and part["method"] != "vendor":
-            ignored.append("%s.zones (zones are for vendor parts; a code part is one material)" % name)
-        if part["method"] == "vendor":
+        if p.get("zones") and part["method"] == "code":
+            ignored.append("%s.zones (zones are for vendor and sdf parts; a code part is one material)" % name)
+        if part["method"] != "code":
             zones = []
             for k, z in enumerate(p.get("zones") or []):
                 zn = "%s.zones[%s]" % (name, z.get("name") if isinstance(z, dict) else k)
