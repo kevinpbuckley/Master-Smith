@@ -85,4 +85,4 @@ def test_default_voxel_keeps_the_grid_bounded():
     assert sdfkit.default_voxel(0.1, 0.05, 0.05) <= 0.001
     L, W, H = 1.5, 0.6, 0.6
     v = sdfkit.default_voxel(L, W, H)
-    assert (L / v) * (W / v) * (H / v) <= 60_000_001
+    assert (L / v) * (W / v) * (H / v) <= 8_000_001

@@ -251,7 +251,7 @@ def mesh(sdf, lo, hi, voxel, chunk=2_000_000):
     return verts, faces
 
 
-def default_voxel(L, W, H, max_points=60_000_000):
+def default_voxel(L, W, H, max_points=8_000_000):
     """The voxel for a part's box: fine for a small part (1 mm at most), coarser for a big one so the grid stays under
     `max_points` (a 1.5 m pod part at 1 mm asked for ~650 M points and was killed for memory, 2026-10-22)."""
     v = min(max(max(L, W, H) / 320.0, 0.00015), 0.001)
