@@ -20,13 +20,48 @@ args = json.load(open(sys.argv[sys.argv.index("--") + 1]))
 bpy.ops.wm.open_mainfile(filepath=os.path.abspath(args["blend"]))
 ob = next(o for o in bpy.data.objects if o.type == "MESH")
 me = ob.data
-me.calc_loop_triangles()
-verts = np.empty(len(me.vertices) * 3, np.float32)
-me.vertices.foreach_get("co", verts)
-verts = verts.reshape(-1, 3).astype(np.float64)
-faces = np.empty(len(me.loop_triangles) * 3, np.int32)
-me.loop_triangles.foreach_get("vertices", faces)
-faces = faces.reshape(-1, 3).astype(np.int64)
+
+
+def read_mesh():
+    me.calc_loop_triangles()
+    v = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", v)
+    f = np.empty(len(me.loop_triangles) * 3, np.int32)
+    me.loop_triangles.foreach_get("vertices", f)
+    return v.reshape(-1, 3).astype(np.float64), f.reshape(-1, 3).astype(np.int64)
+
+
+def symmetrize(verts, mid_y, keep):
+    """The kept half (keep "-y" or "+y") mirrored onto the other across y = mid_y: cut at the plane, the far half
+    deleted, the kept half duplicated with scale -1 (UVs, materials and segment labels come along), the seam welded.
+    A seed lopsided on one side is repaired about its own centre plane (AGENTS.md; the Proteus P2's port wing and
+    stern were narrower than its starboard ones, 2026-10-23). -> (verts, faces) of the new mesh"""
+    import bmesh
+    me.vertices.foreach_set("co", verts.astype(np.float32).ravel())
+    me.update()
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    sign = -1.0 if keep == "-y" else 1.0
+    geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+    # clear_outer removes the side the normal points to: the far half
+    bmesh.ops.bisect_plane(bm, geom=geom, plane_co=(0.0, mid_y, 0.0), plane_no=(0.0, -sign, 0.0), clear_outer=True)
+    span = float(np.ptp(verts, axis=0).max())
+    eps = span * 1e-5
+    dup = bmesh.ops.duplicate(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:])
+    new_v = [g for g in dup["geom"] if isinstance(g, bmesh.types.BMVert)]
+    for v in new_v:
+        v.co.y = 2 * mid_y - v.co.y
+    bmesh.ops.reverse_faces(bm, faces=[g for g in dup["geom"] if isinstance(g, bmesh.types.BMFace)])
+    seam = [v for v in bm.verts if abs(v.co.y - mid_y) <= 2 * eps]
+    bmesh.ops.remove_doubles(bm, verts=seam, dist=4 * eps)
+    bm.to_mesh(me)
+    bm.free()
+    me.validate()
+    me.update()
+    return read_mesh()
+
+
+verts, faces = read_mesh()
 # the seed is in the mesher's units and only reaches its box's metres at assembly: strokes are given in metres of
 # the finished part, so scale them into the mesh (per axis for positions, the mean for radii and strengths)
 ext = verts.max(axis=0) - verts.min(axis=0)
@@ -35,8 +70,13 @@ sc = ext / np.maximum(box, 1e-9)
 k = float(sc.mean())
 centre = (verts.max(axis=0) + verts.min(axis=0)) / 2
 before = verts.copy()
+resized = False
 for op in args["strokes"]:
     op = dict(op)
+    if op["op"] == "symmetrize":
+        verts, faces = symmetrize(verts, float(centre[1] + float(op.get("mid_y", 0.0)) * sc[1]), op.get("keep", "-y"))
+        resized = True
+        continue
     op["at"] = list(centre + np.asarray(op.get("at", (0, 0, 0))) * sc)
     if "to" in op:
         op["to"] = list(centre + np.asarray(op["to"]) * sc)
@@ -66,7 +106,7 @@ for op in args["strokes"]:
                 mask[list(poly.vertices)] = True
         op["mask"] = mask
     verts = sculpt.stroke(verts, faces, op)
-moved = np.linalg.norm(verts - before, axis=1) / k
+moved = np.linalg.norm(verts - before, axis=1) / k if not resized else np.zeros(len(verts))
 me.vertices.foreach_set("co", verts.astype(np.float32).ravel())
 me.update()
 bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(args["out_blend"]), compress=True)
