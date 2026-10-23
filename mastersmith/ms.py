@@ -57,7 +57,7 @@ import webbrowser
 
 from PIL import Image, ImageOps
 
-from . import config, glbcheck, jobs as jobtools, ledger, models, picturecheck, pricing, refs_review, results_page, site
+from . import config, glbcheck, jobs as jobtools, ledger, models, picturecheck, pricing, refs_review, results_page, site, viewcheck
 from .fal import Fal, first_url
 from .images import Images
 from .spec import Spec
@@ -375,6 +375,23 @@ def cmd_retexture(a):
     print("in place: %s (%s); the old mesh is %s. Read seed_render.png, then ms assemble." % (blend, json.load(open(res)), backup))
 
 
+def _views_agree_or_exit(job, unchecked=False):
+    """The reference views must describe one object before a seed is paid for (owner, 2026-10-23): the Mk II sheet's
+    hero was a saucer and its top view an arrowhead, and three seed models each followed the picture they were given.
+    ref/consistency.json is written every time; a failed check stops unless --unchecked."""
+    rep = viewcheck.write(job.path("ref"))
+    if rep.get("dims_ratio"):
+        r = rep["dims_ratio"]
+        print("views: L:W:H = 1 : %.2f : %.2f from side, front and top (closure error %.1f%%)"
+              % (r["W"], r["H"], 100 * rep["closure"]["error"]))
+    for w in rep["warnings"]:
+        print("  views: %s" % w)
+    hard = [w for w in rep["warnings"] if not w.startswith("cannot close")]      # a weapon has no top view: say so, go on
+    if hard and not unchecked:
+        sys.exit("the reference views disagree (ref/consistency.json). Redraw the odd one out with ms view --fixes, or "
+                 "--unchecked to seed anyway")
+
+
 def cmd_seed(a):
     """The whole object in ONE request (the default since 2026-09-29: one Hi3D v3 multi-view seed of the M4A1 scored
     6.5 against 4.5 for the same model part by part): the approved views go to the model the owner picked, the mesh
@@ -383,6 +400,7 @@ def cmd_seed(a):
     job = Job(a.job)
     if not os.path.exists(job.path("plan", "side.png")) or not os.path.exists(job.path("plan", "dims.json")):
         sys.exit("grid the approved views first: ms grid %s --side ref/ref_side.png --front ref/ref_front.png" % a.job)
+    _views_agree_or_exit(job, a.unchecked)
     m = models.resolve(a.model, kind="seed")
     d = job.path("parts", a.part)
     os.makedirs(d, exist_ok=True)
@@ -1166,6 +1184,12 @@ def cmd_refs(a):
     for j in jobs:
         if not os.path.isfile(os.path.join(out_dir, j, "brief.json")):
             sys.exit("no job %s in %s" % (j, out_dir))
+    if a.check:
+        # the views against each other, nothing drawn or served (the seed gate runs the same check)
+        for j in jobs:
+            print("%s:" % j)
+            _print_consistency(os.path.join(out_dir, j, "ref"))
+        return
     if a.sheet:
         # the agent's own look before the owner's: one picture per job it can Read (2026-10-01: 9 of 38 redrawn)
         for j in jobs:
@@ -1174,6 +1198,7 @@ def cmd_refs(a):
             print("sheet: %s" % path)
             for w in warns:
                 print("  check: %s" % w)
+            _print_consistency(os.path.join(out_dir, j, "ref"))
         print(picturecheck.REF_CHECKLIST)
         if a.no_open:
             return
@@ -1223,6 +1248,20 @@ def cmd_serve(a):
     print("site: %s  (builds %sresults, references %srefs)" % (url, url, url))
     if not a.no_open:
         webbrowser.open(url)
+
+
+def _print_consistency(ref_dir):
+    """ref/consistency.json written and said in two lines: the object's L:W:H as the views read it, and what disagrees."""
+    rep = viewcheck.write(ref_dir)
+    if rep.get("dims_ratio"):
+        r = rep["dims_ratio"]
+        print("consistency: L:W:H = 1 : %.2f : %.2f, closure error %.1f%% -> %s"
+              % (r["W"], r["H"], 100 * rep["closure"]["error"], "PASS" if rep["pass"] else "FAIL"))
+    else:
+        print("consistency: %s (%d view%s)" % ("PASS" if rep["pass"] else "FAIL", len(rep["views"]), "" if len(rep["views"]) == 1 else "s"))
+    for w in rep["warnings"]:
+        print("  ! %s" % w)
+    return rep
 
 
 def cmd_views(a):
@@ -1296,6 +1335,7 @@ def cmd_views(a):
     for p, q, s in same:
         print("  WARNING: %s and %s look like the same picture (%.2f): a view drawn again; redraw it with ms view --fixes" % (p, q, s))
     print("sheet: %s (Read it; a weapon's side view must point right: --mirror when it does not)" % sheet)
+    _print_consistency(job.path("ref"))
     if refused:
         sys.exit("not written: %s. Crop them by hand from the sheet, or draw them one at a time: ms view %s --which <view> --from %s"
                  % ("; ".join(refused), a.job, a.src))
@@ -2196,6 +2236,7 @@ def main(argv=None):
                                                              help="the picture a single-image model gets (default: the hero; a weapon's side)")
     s.add_argument("--replan", action="store_true", help="write the one-part plan again"); s.add_argument("--reseed", action="store_true")
     s.add_argument("--mirror-far-side", action="store_true", help="give a multi-view model the side view mirrored as the far side (weapons get it anyway)")
+    s.add_argument("--unchecked", action="store_true", help="seed even when the reference views disagree (ref/consistency.json)")
     s.set_defaults(fn=cmd_seed)
     s = sub.add_parser("retexture"); s.add_argument("job"); s.add_argument("--model", default="meshy-retexture")
     s.add_argument("--part", default="Body"); s.add_argument("--prompt", help="the texture described (default: the brief)")
@@ -2205,6 +2246,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_retexture)
     s = sub.add_parser("refs"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true")
     s.add_argument("--sheet", action="store_true", help="also write <job>/ref_sheet.png per job (every picture, labelled, with warnings) to Read")
+    s.add_argument("--check", action="store_true", help="only check that the views describe one object (ref/consistency.json); ms seed runs it too")
     s.set_defaults(fn=cmd_refs)
     s = sub.add_parser("results"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_results)
     s = sub.add_parser("serve"); s.add_argument("--restart", action="store_true"); s.add_argument("--stop", action="store_true")

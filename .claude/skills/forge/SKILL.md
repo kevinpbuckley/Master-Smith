@@ -71,8 +71,14 @@ registered once: `$PY models add <key> --kind seed --command "<exe> {image} {out
 - A muzzle is an open dark bore in every prompt and brief: never "a lens", "a crystal", "a glowing tip" or "a cap" in
   a muzzle (AGENTS.md rule 2; the laser cannon's ruby lens was the agent's own words, 2026-10-01). Glow belongs on a
   coil, a band or a lamp, never in a bore.
+- ONE picture is the truth (the hero; fix what is wrong in it first, with the owner's words) and every view is derived
+  from it; `$PY refs out/<Name> --check` closes the proportions the views give (side H/L = front H/W x top W/L within
+  12%, front = back, every view the hero's colour) and `seed` refuses views that fail (`--unchecked` overrides). A failed
+  check means one panel is of another object: redraw that panel, never the hero. `mastersmith/skills/seed-sheet.md`
+  has the nine rules (2026-10-23: the Mk II sheet's hero was a saucer and its top view an arrowhead; three seed models
+  each followed the picture they were given and every build lost its silhouette score to the panel it had not seen).
 - Read each picture: `$PY refs out/<Name> [more jobs] --sheet --no-open` writes `<job>/ref_sheet.png` with every
-  picture labelled, the checklist and what the pixels can warn (a long gun's muzzle on the left). What drifted on the
+  picture labelled, the checklist, the consistency line and what the pixels can warn (a long gun's muzzle on the left). What drifted on the
   Proteus weapons (9 of 38 pictures redrawn, 2026-09-30): heroes drawn three-quarter or facing left, a back view that
   was the front drawn again, a muzzle drawn closed or with a window in it, three tubes drawn as four in a diamond
   (accepted without a word - say it to the owner). Redraw with `--fixes "..."` when the design drifted; move a

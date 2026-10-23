@@ -37,15 +37,33 @@ def fit(im):
     return im.convert("RGB").resize((max(1, round(im.width * H / im.height)), H), Image.LANCZOS)
 
 
+def reference(job, view, ref):
+    """The sheet's panel for a view: ref/ref_<view>.png when the job has one (a job whose views were derived from its
+    hero, 2026-10-23), else a crop of the concept sheet, else the side view mirrored for the far side; None when
+    there is nothing to compare against (no bottom view was ever drawn: that row is skipped)."""
+    ref_dir = os.path.join(job, "ref")
+    own = {"top": "ref_top.png", "bottom": "ref_bottom.png"}.get(view, ref)
+    if own and os.path.exists(os.path.join(ref_dir, own)):
+        return Image.open(os.path.join(ref_dir, own))
+    sheet = os.path.join(ref_dir, "proteus_refit_v3.png")
+    if view in SHEET_CROPS and os.path.exists(sheet):
+        return Image.open(sheet).crop(SHEET_CROPS[view])
+    if view == "port" and os.path.exists(os.path.join(ref_dir, "ref_side.png")):
+        return Image.open(os.path.join(ref_dir, "ref_side.png")).transpose(Image.FLIP_LEFT_RIGHT)
+    return None
+
+
 def main(job, out):
     os.makedirs(out, exist_ok=True)
-    sheet = Image.open(os.path.join(job, "ref", "proteus_refit_v3.png"))
     rows = []
     for view, ref, render in PAIRS:
         rp = render_path(job, render)
         if not os.path.exists(rp):
             print("no render for %s (%s)" % (view, rp)); continue
-        left = fit(sheet.crop(SHEET_CROPS[view])) if ref is None else fit(Image.open(os.path.join(job, "ref", ref)))
+        src = reference(job, view, ref)
+        if src is None:
+            print("no reference panel for %s: skipped" % view); continue
+        left = fit(src)
         right = fit(Image.open(rp))
         sheet_row = Image.new("RGB", (left.width + right.width + 12, H + 28), (30, 30, 30))
         sheet_row.paste(left, (0, 28)); sheet_row.paste(right, (left.width + 12, 28))
