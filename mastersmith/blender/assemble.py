@@ -511,6 +511,10 @@ def split_zones(o, zones):
             # 2026-10-04: a zone named by the segmentation's labels (ms segment; the ms_segment face attribute)
             # instead of a box: exactly the labelled faces, inside the box only when the plan gave one
             want = segment_mask(seg, z["segment"], n)
+            if z.get("mirror"):
+                # "mirror": the labelled faces' mirror images too, when the segmenter labelled one side only
+                lo_o, hi_o = blib.dims(o)
+                want = mirror_mask(centres, want, float(lo_o.y + hi_o.y) / 2, 0.004 * (hi_o - lo_o).length)
             inside = (inside & want) if z.get("box_given") else want
         else:
             for _ in range(2):
@@ -821,7 +825,7 @@ EMISSIVE = {"strength": 0.0}
 
 
 import muzzle as muzzlekit  # noqa: E402 - the open bores end-on (pure numpy, tested)
-from glasskit import crease_bars, rim_band, segment_labels, segment_mask, smooth_rim  # noqa: E402
+from glasskit import crease_bars, mirror_mask, rim_band, segment_labels, segment_mask, smooth_rim  # noqa: E402
 from glasskit import (  # noqa: E402 - the glass and cockpit passes, shared with cabin.py
     base_image, face_rgb, face_pairs, components, mesh_tree, escapes,
     exterior_faces, canopy_hull, glass_shell, pane_object, glass_paint, pick_glass,

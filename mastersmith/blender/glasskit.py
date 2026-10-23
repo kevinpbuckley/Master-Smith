@@ -421,6 +421,25 @@ def glass_paint(rgb, mode):
     return (mx <= 0.22) & (sat <= 0.35), mx <= 0.35
 
 
+def mirror_mask(centres, mask, mid_y, tol):
+    """`mask` plus the faces whose centre, mirrored across the plane y = mid_y, lies within `tol` of a masked face's:
+    the segmenter labelled the Proteus P2's canopy bars on one side only (2026-10-23)."""
+    from mathutils.kdtree import KDTree
+    idx = np.nonzero(mask)[0]
+    if not len(idx):
+        return mask
+    kd = KDTree(len(idx))
+    for j, i in enumerate(idx):
+        kd.insert(centres[i], j)
+    kd.balance()
+    out = mask.copy()
+    for i in np.nonzero(~mask)[0]:
+        c = centres[i]
+        if kd.find((c[0], 2 * mid_y - c[1], c[2]))[2] <= tol:
+            out[i] = True
+    return out
+
+
 def segment_labels(o):
     """The segmentation's part label of every face (`ms segment` wrote the ms_segment face attribute), or None."""
     att = o.data.attributes.get("ms_segment")
