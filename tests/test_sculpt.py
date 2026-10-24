@@ -164,3 +164,36 @@ def test_scale_grows_the_masked_vertices_about_the_pivot_and_leaves_the_rest():
     out = sculpt.stroke(v, f, {"op": "scale", "at": at, "radius": 0.015, "factor": [1.2, 1.2, 1.2], "pivot": [0.03, 0, 0]})
     far = np.linalg.norm(v - at, axis=1) > 0.03
     assert np.linalg.norm(out - v, axis=1)[far].max() < 1e-9 and out[:, 0].max() > v[:, 0].max() + 0.003
+
+
+def plate_mesh(R=0.5, T=0.12, voxel=0.01):
+    """A round plate (a rim): radius R, thickness T, its edge a half-round bead."""
+    disc = sdfkit.cylinder(R - T / 2, 0.001, axis="z").round(T / 2 - 0.001)
+    return sdfkit.mesh(disc, [-R, -R, -T / 2], [R, R, T / 2], voxel)
+
+
+def test_thin_sharpens_the_plate_edge_and_leaves_the_middle():
+    v, f = plate_mesh()
+    out = sculpt.thin(v, width=0.2, edge=0.2)
+    r = np.hypot(v[:, 0], v[:, 1])
+    edge = r > 0.46          # the bead
+    middle = r < 0.25
+    assert np.abs(out[edge, 2]).max() < 0.4 * np.abs(v[edge, 2]).max()
+    assert np.abs(out[middle] - v[middle]).max() < 1e-9
+    assert np.abs(out[:, :2] - v[:, :2]).max() < 1e-9      # only the thickness changes
+
+
+def test_thin_skips_a_tall_body_at_the_outline():
+    v, f = plate_mesh()
+    tall = v.copy()
+    tall[:, 2] *= 6.0        # a 0.72 m deep body: not a plate
+    out = sculpt.thin(tall, width=0.2, edge=0.2, plate=0.3)
+    assert np.abs(out - tall).max() < 1e-9
+
+
+def test_taper_with_a_mask_moves_only_the_masked_vertices():
+    v, f = plate_mesh()
+    mask = v[:, 0] > 0
+    out = sculpt.taper(v, [[-1, 1.3], [1, 1.3]], core=0.1, band=0.05, mask=mask)
+    assert np.abs(out[~mask] - v[~mask]).max() < 1e-9
+    assert np.abs(out[mask, 1]).max() > np.abs(v[mask, 1]).max() * 1.15

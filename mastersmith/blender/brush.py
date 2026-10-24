@@ -92,6 +92,9 @@ for op in args["strokes"]:
         op["mid_y"] = float(centre[1])
     if op["op"] == "inflate":
         op["strength"] = float(op.get("strength", 0.0)) * k
+    if op["op"] == "thin":
+        op["width"] = float(op["width"]) * k
+        op["plate"] = float(op.get("plate", 0.3)) * sc[2]
     if op["op"] == "scale":
         about = op.get("about", "each" if op.get("segment") is not None else "at")
         if about == "centre":

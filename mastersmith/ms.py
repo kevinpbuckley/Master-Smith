@@ -800,7 +800,7 @@ def cmd_brush(a):
         op = {"op": a.op, "at": _point(a.at, size), "radius": a.radius / 1000.0, "strength": a.strength}
         if a.op == "inflate":
             op["strength"] = a.strength / 1000.0                  # mm at the centre
-        if a.op in ("move", "scale") and a.segment:
+        if a.op in ("move", "scale", "taper", "thin") and a.segment:
             op["segment"] = [int(v) for v in a.segment.split(",")]
         if a.op == "move":
             op["delta"] = [float(v) / 1000.0 for v in (a.delta or "0,0,0").split(",")]
@@ -822,6 +822,13 @@ def cmd_brush(a):
                   "core": a.core / 1000.0}
             if a.band is not None:
                 op["band"] = a.band / 1000.0
+            if a.segment:
+                op["segment"] = [int(v) for v in a.segment.split(",")]
+        if a.op == "thin":
+            # the Mk II's rim bead thinned to an aerofoil edge (owner, 2026-10-23: "more aerodynamic")
+            op = {"op": "thin", "width": a.width / 1000.0, "edge": a.edge}
+            if a.segment:
+                op["segment"] = [int(v) for v in a.segment.split(",")]
         if a.op == "flatten" and a.normal:
             op["normal"] = [float(v) for v in a.normal.split(",")]
         strokes = [op]
@@ -2190,7 +2197,7 @@ def main(argv=None):
     s = sub.add_parser("fit"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--quarter", action="store_true")
     s.add_argument("--iters", type=int, default=8); s.add_argument("--step", type=float, default=0.6); s.add_argument("--no-backup", action="store_true")
     s.add_argument("--free", action="store_true", help="move vertices one by one (the old fit) instead of bending a lattice"); s.set_defaults(fn=cmd_fit)
-    s = sub.add_parser("brush"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--op", choices=("inflate", "move", "smooth", "flatten", "crease", "taper", "symmetrize", "scale"))
+    s = sub.add_parser("brush"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--op", choices=("inflate", "move", "smooth", "flatten", "crease", "taper", "thin", "symmetrize", "scale"))
     s.add_argument("--factor", help="scale: f or fx,fy,fz (1 leaves an axis alone)")
     s.add_argument("--about", help="scale: each (every --segment label about its own centre, the default with --segment), centre (the part's), or a point like --at")
     s.add_argument("--at", default="centre", help="x,y,z metres in the part frame, or front/back/top/bottom/left/right/centre[+dx,dy,dz]")
@@ -2202,6 +2209,8 @@ def main(argv=None):
     s.add_argument("--profile", help="taper: x:s,x:s,... metres along X and the half-width scale there beyond --core")
     s.add_argument("--core", type=float, default=0.0, help="taper: the half-width (mm) left as it is about the centre plane")
     s.add_argument("--band", type=float, help="taper: mm beyond the core over which the scale eases in (default half the core)")
+    s.add_argument("--width", type=float, default=250.0, help="thin: mm inboard of the planform edge over which the plate thins")
+    s.add_argument("--edge", type=float, default=0.25, help="thin: the share of the thickness kept at the edge")
     s.add_argument("--replay", action="store_true", help="re-apply brush_log.json to a fresh mesh"); s.set_defaults(fn=cmd_brush)
     s = sub.add_parser("cabin"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--hull", help="the body part (default: the longest vendor part)")
     s.set_defaults(fn=cmd_cabin)
