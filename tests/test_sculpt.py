@@ -125,3 +125,75 @@ def test_lattice_weights_reproduce_the_points():
     grid = np.stack(np.meshgrid(*[np.linspace(0, 1, s) for s in shape], indexing="ij"), axis=-1).reshape(-1, 3)
     assert np.allclose((w[:, :, None] * grid[idx]).sum(axis=1), pts)
     assert np.allclose(w.sum(axis=1), 1.0)
+
+
+def test_taper_narrows_beyond_the_core_and_never_folds():
+    """2026-10-23: the planform taper keeps the cabin (inside the core) and scales the wing beyond it, monotonic in |y|."""
+    ys = np.linspace(-2.0, 2.0, 81)
+    verts = np.stack([np.full_like(ys, 1.0), ys, np.zeros_like(ys)], axis=1)
+    out = sculpt.taper(verts, [[0.0, 1.0], [2.0, 0.5]], core=0.5, band=0.2)
+    assert np.allclose(out[np.abs(ys) <= 0.5, 1], ys[np.abs(ys) <= 0.5])       # the core stays
+    assert np.all(np.diff(out[:, 1]) > 0)                                        # no fold
+    tip = out[-1, 1]
+    assert abs(tip - (0.5 + 0.2 - 0.25 * 0.1 + 1.3 * 0.75)) < 1e-9               # s(1.0) = 0.75, eased in over the band
+    assert np.allclose(out[:, 1], -out[::-1, 1])                                 # symmetric
+    same = sculpt.taper(verts, [[0.0, 1.0], [2.0, 1.0]], core=0.5)
+    assert np.allclose(same, verts)
+
+
+def test_move_with_a_mask_is_rigid():
+    """2026-10-23: a segmented part slides whole; nothing else moves."""
+    v = np.random.default_rng(0).normal(size=(50, 3))
+    m = np.zeros(50, bool)
+    m[:10] = True
+    out = sculpt.stroke(v, None, {"op": "move", "at": [0, 0, 0], "radius": 0.01, "delta": [0, -0.5, 0], "mask": m})
+    assert np.allclose(out[:10] - v[:10], [0, -0.5, 0])
+    assert np.allclose(out[10:], v[10:])
+
+
+def test_scale_grows_the_masked_vertices_about_the_pivot_and_leaves_the_rest():
+    v, f = sphere_mesh()
+    mask = v[:, 2] > 0.02                                   # the cap
+    lo, hi = v[mask].min(axis=0), v[mask].max(axis=0)
+    out = sculpt.stroke(v, f, {"op": "scale", "factor": [1.5, 1.5, 1.0], "pivot": list((lo + hi) / 2), "mask": mask})
+    moved = np.linalg.norm(out - v, axis=1)
+    assert moved[~mask].max() < 1e-9
+    assert np.ptp(out[mask, 0]) > 1.4 * np.ptp(v[mask, 0]) and abs(np.ptp(out[mask, 2]) - np.ptp(v[mask, 2])) < 1e-9
+    # without a mask the falloff about `at` keeps it local
+    at = np.array([0.05, 0, 0])
+    out = sculpt.stroke(v, f, {"op": "scale", "at": at, "radius": 0.015, "factor": [1.2, 1.2, 1.2], "pivot": [0.03, 0, 0]})
+    far = np.linalg.norm(v - at, axis=1) > 0.03
+    assert np.linalg.norm(out - v, axis=1)[far].max() < 1e-9 and out[:, 0].max() > v[:, 0].max() + 0.003
+
+
+def plate_mesh(R=0.5, T=0.12, voxel=0.01):
+    """A round plate (a rim): radius R, thickness T, its edge a half-round bead."""
+    disc = sdfkit.cylinder(R - T / 2, 0.001, axis="z").round(T / 2 - 0.001)
+    return sdfkit.mesh(disc, [-R, -R, -T / 2], [R, R, T / 2], voxel)
+
+
+def test_thin_sharpens_the_plate_edge_and_leaves_the_middle():
+    v, f = plate_mesh()
+    out = sculpt.thin(v, width=0.2, edge=0.2)
+    r = np.hypot(v[:, 0], v[:, 1])
+    edge = r > 0.46          # the bead
+    middle = r < 0.25
+    assert np.abs(out[edge, 2]).max() < 0.4 * np.abs(v[edge, 2]).max()
+    assert np.abs(out[middle] - v[middle]).max() < 1e-9
+    assert np.abs(out[:, :2] - v[:, :2]).max() < 1e-9      # only the thickness changes
+
+
+def test_thin_skips_a_tall_body_at_the_outline():
+    v, f = plate_mesh()
+    tall = v.copy()
+    tall[:, 2] *= 6.0        # a 0.72 m deep body: not a plate
+    out = sculpt.thin(tall, width=0.2, edge=0.2, plate=0.3)
+    assert np.abs(out - tall).max() < 1e-9
+
+
+def test_taper_with_a_mask_moves_only_the_masked_vertices():
+    v, f = plate_mesh()
+    mask = v[:, 0] > 0
+    out = sculpt.taper(v, [[-1, 1.3], [1, 1.3]], core=0.1, band=0.05, mask=mask)
+    assert np.abs(out[~mask] - v[~mask]).max() < 1e-9
+    assert np.abs(out[mask, 1]).max() > np.abs(v[mask, 1]).max() * 1.15

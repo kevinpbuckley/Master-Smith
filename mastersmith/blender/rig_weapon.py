@@ -208,7 +208,7 @@ for pb in arm.pose.bones:
     pb.scale = (1, 1, 1)
 common = dict(use_selection=True, apply_unit_scale=True, global_scale=0.01, apply_scale_options="FBX_SCALE_NONE",
               axis_forward="-Z", axis_up="Y", add_leaf_bones=False, primary_bone_axis="Y", secondary_bone_axis="X",
-              use_armature_deform_only=False)
+              use_armature_deform_only=False, use_tspace=True)      # the bake's tangents in the file (2026-10-04)
 blib.select_only([arm, body])
 sk = os.path.join(OUT, "SK_%s.fbx" % NAME)
 bpy.ops.export_scene.fbx(filepath=sk, object_types={"ARMATURE", "MESH"}, mesh_smooth_type="FACE", use_mesh_modifiers=False,

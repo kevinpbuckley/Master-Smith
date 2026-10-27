@@ -150,9 +150,10 @@ def exterior_faces(tree, cand, centres, normals, diag, need=1):
     return out
 
 
-def canopy_hull(o, box_faces, diag, edge=1 / 120.0):
+def canopy_hull(o, box_faces, diag, edge=1 / 120.0, mirror_y=None):
     """The convex hull of the zone's faces, cut into triangles no longer than `edge` of the diagonal, normals out:
     the canopy's outer envelope (a canopy is convex; its frame and panes lie on the hull, the cockpit deep inside).
+    `mirror_y`: the centre plane's y, the faces' vertices mirrored across it too (a segment holding one side's bars).
     -> bmesh or None"""
     me = o.data
     co = np.empty(len(me.vertices) * 3, np.float32)
@@ -165,14 +166,19 @@ def canopy_hull(o, box_faces, diag, edge=1 / 120.0):
     vi = np.unique(lv[box_faces[np.repeat(np.arange(len(me.polygons)), total)]])
     if len(vi) < 8:
         return None
+    pts = co[vi]
+    if mirror_y is not None:
+        flip = pts.copy()
+        flip[:, 1] = 2 * mirror_y - flip[:, 1]
+        pts = np.concatenate([pts, flip])
     bm = bmesh.new()
-    res = bmesh.ops.convex_hull(bm, input=[bm.verts.new(co[i]) for i in vi])
+    res = bmesh.ops.convex_hull(bm, input=[bm.verts.new(p) for p in pts])
     loose = {g for g in res["geom_interior"] + res["geom_unused"] if isinstance(g, bmesh.types.BMVert)}
     bmesh.ops.delete(bm, geom=list(loose), context="VERTS")
     if not bm.faces:
         bm.free()
         return None
-    mid = Vector(co[vi].mean(axis=0))
+    mid = Vector(pts.mean(axis=0))
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
     if sum((f.calc_center_median() - mid).dot(f.normal) for f in bm.faces) < 0:
         bmesh.ops.reverse_faces(bm, faces=bm.faces[:])
@@ -184,6 +190,17 @@ def canopy_hull(o, box_faces, diag, edge=1 / 120.0):
             break
         bmesh.ops.subdivide_edges(bm, edges=long, cuts=1, use_grid_fill=True)
         bmesh.ops.triangulate(bm, faces=bm.faces[:])
+    # 2026-10-23: the subdivision leaves copies of the same triangle (92,515 of 102,348 on the Proteus P2's canopy):
+    # the shell carried them into LOD0, and the GLB came back 2,283 triangles short of the report
+    bm.verts.index_update()
+    seen, dup = set(), []
+    for f in bm.faces:
+        key = tuple(sorted(v.index for v in f.verts))
+        if key in seen:
+            dup.append(f)
+        seen.add(key)
+    if dup:
+        bmesh.ops.delete(bm, geom=dup, context="FACES_ONLY")
     bm.normal_update()
     return bm
 
@@ -404,6 +421,43 @@ def glass_paint(rgb, mode):
     return (mx <= 0.22) & (sat <= 0.35), mx <= 0.35
 
 
+def mirror_mask(centres, mask, mid_y, tol):
+    """`mask` plus the faces whose centre, mirrored across the plane y = mid_y, lies within `tol` of a masked face's:
+    the segmenter labelled the Proteus P2's canopy bars on one side only (2026-10-23)."""
+    from mathutils.kdtree import KDTree
+    idx = np.nonzero(mask)[0]
+    if not len(idx):
+        return mask
+    kd = KDTree(len(idx))
+    for j, i in enumerate(idx):
+        kd.insert(centres[i], j)
+    kd.balance()
+    out = mask.copy()
+    for i in np.nonzero(~mask)[0]:
+        c = centres[i]
+        if kd.find((c[0], 2 * mid_y - c[1], c[2]))[2] <= tol:
+            out[i] = True
+    return out
+
+
+def segment_labels(o):
+    """The segmentation's part label of every face (`ms segment` wrote the ms_segment face attribute), or None."""
+    att = o.data.attributes.get("ms_segment")
+    if att is None or att.domain != "FACE":
+        return None
+    out = np.empty(len(o.data.polygons), np.int32)
+    att.data.foreach_get("value", out)
+    return out
+
+
+def segment_mask(labels, wanted, n):
+    """The faces whose label is in `wanted` (one label or a list); none when the part was never segmented."""
+    if labels is None:
+        return np.zeros(n, bool)
+    want = list(wanted) if isinstance(wanted, (list, tuple)) else [wanted]
+    return np.isin(labels, [int(v) for v in want])
+
+
 def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     """A glass zone's faces picked the way Tonetta's forge picks them (glass/SKILL.md, 2026-09-29): inside the zone's
     box (grown a little), the faces whose seed texture is painted like glass (`glass_paint`; "auto" takes the style
@@ -434,6 +488,25 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     centres = np.empty(n * 3, np.float32)
     me.polygons.foreach_get("center", centres)
     centres = centres.reshape(-1, 3)
+    if mode == "hull":
+        # 2026-10-23: a Tripo P2 canopy came back as an open cage of bars with no panes, so no colour pick finds glass.
+        # The glass is the hull of the zone's faces (the bars' segment), set just inside them; nothing of the seed
+        # is deleted, so the bars stay as the mullions. "mirror": false when the segment holds both sides
+        lo_o, hi_o = blib.dims(o)
+        diag = (hi_o - lo_o).length
+        lo, hi = np.array(z["box_min"]) - 0.02 * diag, np.array(z["box_max"]) + 0.02 * diag
+        sel = np.all((centres >= lo) & (centres <= hi), axis=1)
+        if z.get("segment") is not None:
+            want = segment_mask(segment_labels(o), z["segment"], n)
+            sel = (sel & want) if z.get("box_given") else want
+        # one side's bars mirrored across the body's centre plane: the segmenter split the cage down the middle
+        hull = canopy_hull(o, sel, diag, mirror_y=float(lo_o.y + hi_o.y) / 2 if z.get("mirror", True) else None)
+        panes = glass_shell(hull, mesh_tree(o), diag, full=True) if hull is not None else None
+        if hull is not None:
+            hull.free()
+        return np.zeros(n, bool), {"mode": mode, "faces": 0, "frame_faces": int(sel.sum()), "share_of_part": 0.0,
+                                   "pane_faces": 0 if panes is None else len(panes[1]), "rebuilt": True,
+                                   "preserve_frame": True, "ok": panes is not None}, panes
     normals = np.empty(n * 3, np.float32)
     me.polygons.foreach_get("normal", normals)
     normals = normals.reshape(-1, 3)
@@ -443,6 +516,11 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     diag = (hi_o - lo_o).length
     lo, hi = np.array(z["box_min"]) - 0.02 * diag, np.array(z["box_max"]) + 0.02 * diag
     inbox = np.all((centres >= lo) & (centres <= hi), axis=1)
+    if z.get("segment") is not None:
+        # 2026-10-04: the segmentation's labelled faces stand in for the box (ms segment); the colour pick below
+        # still separates the panes from the frame inside them
+        want = segment_mask(segment_labels(o), z["segment"], n)
+        inbox = (inbox & want) if z.get("box_given") else want
     fa, fb, _ = face_pairs(me, diag * 1e-5)
     rgb = face_rgb(o) if mode != "box" else None
     tree = mesh_tree(o)
@@ -487,6 +565,23 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     ids, counts = np.unique(roots[grown], return_counts=True)
     mask = grown & np.isin(roots, ids[np.argsort(-counts)[:keep]]) if len(ids) else grown
     kept = np.sort(counts)[::-1][:keep] if len(ids) else np.array([0])
+    # 2026-10-04: an opaque island the glass encloses on every side is glass too - a highlight or a dark streak the
+    # mesher painted across a pane fails the colour test and, bigger than the two-neighbour rule closes, stayed as an
+    # opaque shard between the Kestrel's panes (261 faces). An island touching anything that is not glass (the frame,
+    # the hull outside the box) is a real frame piece and stays. Capped at a fifth of the glass so a whole hood
+    # ringed by panes cannot be swallowed.
+    enclosed = 0
+    hole = inbox & outside & ~mask
+    if hole.any() and mask.any():
+        hroots = components(n, fa, fb, hole)
+        edge_a, edge_b = fa[hole[fa] & ~hole[fb]], fb[hole[fa] & ~hole[fb]]     # island face -> non-island neighbour
+        open_root = np.unique(hroots[edge_a[~mask[edge_b]]])                    # islands with a non-glass neighbour
+        for r in np.unique(hroots[hole]):
+            comp = hole & (hroots == r)
+            if r in open_root or comp.sum() > 0.2 * mask.sum():
+                continue
+            mask |= comp
+            enclosed += int(comp.sum())
     panes_kept = mask.copy()                     # the outer panes the colour pick settled on (the envelope's source)
     # a pane modelled with a thickness has an inner skin just behind it, whatever it is painted: glass too. Left
     # opaque, the Havoc's inner skins were lined dark and read as black panels in every window (2026-09-29). Behind
@@ -497,8 +592,11 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
         me.calc_loop_triangles()
         vco = [v.co.copy() for v in me.vertices]
         gt = BVHTree.FromPolygons(vco, [list(t.vertices) for t in me.loop_triangles if mask[t.polygon_index]])
+        # 2026-10-23: a zone's "inner_mm" reaches further than the default 0.4% of the diagonal (~20 mm): Hi3D's
+        # Mk II canopy had its inner skin 40-80 mm behind the panes and it stayed as a dark wall under clear glass
+        reach = float(z["inner_mm"]) / 1000.0 if isinstance(z.get("inner_mm"), (int, float)) else 0.004 * diag
         for i in np.nonzero(inbox & ~outside & ~mask)[0]:
-            loc, gn, _gi, dist = gt.find_nearest(Vector(centres[i]), 0.004 * diag)
+            loc, gn, _gi, dist = gt.find_nearest(Vector(centres[i]), reach)
             if loc is None or abs(Vector(normals[i]).dot(gn)) < 0.7:
                 continue
             if (loc - Vector(centres[i])).dot(gn) > 0.0002 * diag:
@@ -588,7 +686,7 @@ def pick_glass(o, z, mode, keep=8, min_run=40, fill=True, rebuild=False):
     return mask, {"mode": mode, "styles_m2": {k: round(v[3], 2) for k, v in styles.items()}, "faces": faces, "islands": int(min(len(ids), keep)), "islands_found": int(len(ids)),
                   "largest_share": round(share, 3), "coverage": round(coverage, 3),
                   "dropped": np.sort(counts)[::-1][keep:keep + 6].tolist() if len(ids) else [], "interior_left_opaque": interior - inner,
-                  "inner_skin": inner, "fragments": fragments, "rebuilt": bool(rebuild and panes is not None),
+                  "inner_skin": inner, "enclosed": enclosed, "fragments": fragments, "rebuilt": bool(rebuild and panes is not None),
                   "shell_faces": int(len(panes[1])) if panes is not None else 0,
                   "share_of_part": round(part_share, 4), "pane_faces": int(len(panes[1])) if panes is not None else 0,
                   "ok": bool(panes is not None and len(panes[1]) >= 50) if rebuild else
@@ -713,10 +811,11 @@ def interior_material(name, colour=(0.018, 0.02, 0.024), rough=0.8):
     return m
 
 
-def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05):
+def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05, specular=0.45):
     """See-through glass that reads in every viewer (Tonetta's glass skill, 2026-09-29): alpha 0.3 (below 0.2 the pane
     vanishes, above 0.7 it is paint), specular 0.45 (0.8 on grey mirrored the backdrop and read as opaque grey), no
-    normal map, blended, both sides drawn."""
+    normal map, blended, both sides drawn. A zone's "specular" lowers it for a clear bubble canopy whose cockpit must
+    read through it (the Mk II at 0.45 mirrored the studio and read as a dark blue mirror, 2026-10-23)."""
     m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     b = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
     b.inputs["Base Color"].default_value = (*tint, 1.0)
@@ -724,7 +823,7 @@ def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05):
     b.inputs["Roughness"].default_value = rough
     b.inputs["Alpha"].default_value = alpha
     if "Specular IOR Level" in b.inputs:
-        b.inputs["Specular IOR Level"].default_value = 0.45
+        b.inputs["Specular IOR Level"].default_value = float(specular)
     for l in list(b.inputs["Normal"].links):
         m.node_tree.links.remove(l)
     m.surface_render_method = "BLENDED"

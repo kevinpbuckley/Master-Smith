@@ -35,6 +35,8 @@ test set is `$PY bench --model <key>` (six assets, says the cost and waits for `
 
 ## 1. Brief
 `$PY new <Name> --category weapon|vehicle|aircraft|helicopter|prop --size <longest side, m> --description "..."`
+(a humanoid character is `--category character --size <height>` and follows the `metahuman` skill instead:
+`.claude/skills/metahuman/SKILL.md`, since 2026-10-04)
 Sizes (the category skills have more): a pistol ~0.2 m, a carbine 0.75-0.9, a rifle 0.9-1.1, a sniper rifle
 1.1-1.3; a car 4.5, a truck 5-6, a main battle tank 8-10 with the gun; a fighter ~15; an attack helicopter 14-18
 fuselage (rotors overhang); a gunship 12-18. `--tris 100000` for a hero asset.
@@ -58,15 +60,25 @@ registered once: `$PY models add <key> --kind seed --command "<exe> {image} {out
 - A hero picture: `$PY picture out/<Name> --out ref/ref_0.png --model <picture model> --prompt "..."` (`--ref` the
   owner's photo). Name the object first, then its construction and its materials as surfaces; one angle per prompt;
   plain background, even light, no text, watermark or people. Weapons: the hero is the side profile, muzzle right.
-- Standard views from it: `$PY view out/<Name> --which side --from ref/ref_0.png` (forward end RIGHT; `--mirror` if not)
+- Standard views from it, in one call: `$PY views out/<Name> --from ref/ref_0.png --which side,front,back,top` (a
+  weapon: `front,back,top`; its hero is the side) draws one turnaround sheet and splits it into `ref/ref_<view>.png`
+  (one picture's price for four views, every view the same object); a panel it refuses (empty, bled into its
+  neighbour) you draw alone with `view`; a "same picture" warning means a view was the hero drawn again.
+  One at a time: `$PY view out/<Name> --which side --from ref/ref_0.png` (forward end RIGHT; `--mirror` if not)
   and `--which front`; vehicles and aircraft also `--which back` and `--which top`. A multi-view seed is only as good
   as these: the same object, level and orthographic. A sheet of several views in one picture fuses into one mesh;
   strong perspective seeds a foreshortened mesh; a generated mechanism is not to be trusted.
 - A muzzle is an open dark bore in every prompt and brief: never "a lens", "a crystal", "a glowing tip" or "a cap" in
   a muzzle (AGENTS.md rule 2; the laser cannon's ruby lens was the agent's own words, 2026-10-01). Glow belongs on a
   coil, a band or a lamp, never in a bore.
+- ONE picture is the truth (the hero; fix what is wrong in it first, with the owner's words) and every view is derived
+  from it; `$PY refs out/<Name> --check` closes the proportions the views give (side H/L = front H/W x top W/L within
+  12%, front = back, every view the hero's colour) and `seed` refuses views that fail (`--unchecked` overrides). A failed
+  check means one panel is of another object: redraw that panel, never the hero. `mastersmith/skills/seed-sheet.md`
+  has the nine rules (2026-10-23: the Mk II sheet's hero was a saucer and its top view an arrowhead; three seed models
+  each followed the picture they were given and every build lost its silhouette score to the panel it had not seen).
 - Read each picture: `$PY refs out/<Name> [more jobs] --sheet --no-open` writes `<job>/ref_sheet.png` with every
-  picture labelled, the checklist and what the pixels can warn (a long gun's muzzle on the left). What drifted on the
+  picture labelled, the checklist, the consistency line and what the pixels can warn (a long gun's muzzle on the left). What drifted on the
   Proteus weapons (9 of 38 pictures redrawn, 2026-09-30): heroes drawn three-quarter or facing left, a back view that
   was the front drawn again, a muzzle drawn closed or with a window in it, three tubes drawn as four in a diamond
   (accepted without a word - say it to the owner). Redraw with `--fixes "..."` when the design drifted; move a
@@ -97,6 +109,11 @@ The seed is the shape; these passes make it a game asset. Protect the seed: neve
 pass a check, strip parts or run "delete loose / remove small islands" on it (a latch and a bar are small islands too);
 copy the mesh before a carve; two failed tries at the same part mean the approach is wrong - restore it and try a
 different, smaller change. Look at the six views after each pass and keep only what helps.
+- **The seed's own part lines** (optional, $0.45): `$PY segment out/<Name>` sends a decimated copy of the seed to
+  Hunyuan3D-Part and labels every face of the seed with the part it came back in (`parts/Body/segments.json`,
+  `segments.png`, `segments_side.png`; the seed's geometry is untouched). Read the two renders, name the labels
+  (barrel, grip, magazine, canopy...), and give a zone `"segment": <label>` instead of a box: its faces follow the
+  seed's own edges, and a glass zone's colour pick runs inside them. Use it when boxes keep catching the wrong faces.
 - **Materials by zone**: in `plan/plan_draft.json` give the one part `zones` (percent boxes read off
   `plan/side_grid.png`) for every region in another material (materials.md): bare dark steel (barrel, muzzle device,
   sights, bolts), glass (canopy, windows, lenses, lamp covers), rubber (tyres, pads), `emissive` lights and screens
@@ -151,7 +168,7 @@ different, smaller change. Look at the six views after each pass and keep only w
   tools below); a replacement is placed in its box on the body.
 
 - **A blurry or washed-out seed texture** (paid, the owner's pick in `ms models`): `$PY retexture out/<Name>` repaints the
-  whole seed on its own UVs from the hero picture and the brief (Meshy v5, ~$0.30); `registered_before_retexture.blend`
+  whole seed on its own UVs from the hero picture and the brief (Meshy v7, $0.30 at 4k; `--resolution 8k` $0.45); `registered_before_retexture.blend`
   is the undo. Compare before and after; keep it only when it reads better.
 
 ## 6. Assemble and review
@@ -205,7 +222,9 @@ owner scores it (`"owner_score"`).
 ## 7. Package
 `$PY package out/<Name>` -> `delivery/<Name>.zip`, printing the delivery gate's warnings (LOD0 within the budget
 x1.05, BaseColor/Normal/ORM present, size within +-10% of the brief, glass present when asked for, mean roughness
->= 0.3, UCX hull <= 256 triangles, the muzzle open, the FBX read back at size with unit node scale). The delivery
+>= 0.3, UCX hull <= 256 triangles, the muzzle open, the FBX read back at size with unit node scale, the GLB read
+back without Blender - size, LOD0 triangles, sockets, embedded textures - and no part under 40% of the asset's texel
+density; `report.json` carries `glb_check` and `texel_density` in px/cm). The delivery
 message carries, in this order: the preview URL, the GLB path, the zip path, the score /10 with defects by view, the
 pivot and sockets for a game asset, and what was spent. The same when another project takes the asset (the Proteus
 weapons went without previews, scores or zips, 2026-09-30).

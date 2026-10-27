@@ -1,7 +1,7 @@
 """The brief (out/<Name>/brief.json, written by `ms new`). Everything the pipeline needs, nothing it does not."""
 from dataclasses import dataclass, field, asdict
 
-CATEGORIES = ("weapon", "vehicle", "aircraft", "helicopter", "character", "prop", "environment")
+CATEGORIES = ("weapon", "vehicle", "aircraft", "helicopter", "character", "prop", "environment", "nature")
 ENGINES = ("unreal", "unity", "godot")
 STYLES = ("realistic", "stylized")
 
@@ -29,8 +29,10 @@ def weapon_has_glass(description):
                      text) is not None
 
 
-DEFAULT_TRIS = {"weapon": 60000, "vehicle": 120000, "aircraft": 120000, "helicopter": 120000, "character": 80000, "prop": 30000, "environment": 80000}
-DEFAULT_SIZE_M = {"weapon": 1.0, "vehicle": 5.0, "aircraft": 15.0, "helicopter": 17.0, "character": 1.8, "prop": 1.0, "environment": 4.0}
+DEFAULT_TRIS = {"weapon": 60000, "vehicle": 120000, "aircraft": 120000, "helicopter": 120000, "character": 80000, "prop": 30000,
+                "environment": 80000, "nature": 8000}
+DEFAULT_SIZE_M = {"weapon": 1.0, "vehicle": 5.0, "aircraft": 15.0, "helicopter": 17.0, "character": 1.8, "prop": 1.0,
+                  "environment": 4.0, "nature": 1.0}
 
 
 @dataclass

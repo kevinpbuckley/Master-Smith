@@ -67,8 +67,11 @@ def inflate(verts, faces, centre, radius, strength):
     return verts + vertex_normals(verts, faces) * (w * strength)[:, None]
 
 
-def move(verts, centre, radius, delta):
-    """Drag the vertices within `radius` of `centre` by `delta` (metres) at the centre, less towards the rim."""
+def move(verts, centre, radius, delta, mask=None):
+    """Drag the vertices within `radius` of `centre` by `delta` (metres) at the centre, less towards the rim. With
+    `mask` (a vertex mask: a segmented part, 2026-10-23) exactly those vertices move by `delta`, rigidly."""
+    if mask is not None:
+        return verts + np.asarray(mask, bool)[:, None] * np.asarray(delta, dtype=np.float64)
     w = falloff(np.linalg.norm(verts - np.asarray(centre), axis=1), radius)
     return verts + w[:, None] * np.asarray(delta, dtype=np.float64)
 
@@ -114,7 +117,100 @@ def crease(verts, faces, a, b, radius, strength=0.5):
     return verts - off * (w * 0.6)[:, None] + normals * (w * radius * 0.15)[:, None]
 
 
-BRUSHES = ("inflate", "move", "smooth", "flatten", "crease")
+def taper(verts, profile, core, band=None, mid_y=0.0, mask=None):
+    """Narrow (or widen, s > 1) the planform: the half-width beyond `core` (from the centre plane y = mid_y) is scaled
+    by s(x), the profile [[x, s], ...] interpolated along X (s = 1 keeps it). The scale ramps in over `band` beyond the
+    core so the deck bends instead of creasing; the map is monotonic in |y|, so no surface folds over. The Proteus
+    P2's bow came back round where the sheet draws a pointed arch (2026-10-23): a move brush that far folds the wing.
+    `mask` limits it to those vertices (the Mk II's rim widened over its pods, which stay where they hang)."""
+    if mask is not None:
+        out = verts.astype(np.float64).copy()
+        m = np.asarray(mask, bool)
+        out[m] = taper(verts[m], profile, core, band, mid_y)
+        return out
+    prof = np.asarray(sorted(profile), dtype=np.float64)
+    s = np.interp(verts[:, 0], prof[:, 0], prof[:, 1])
+    band = float(band if band is not None else core * 0.5)
+    y = verts[:, 1] - mid_y
+    a = np.abs(y)
+    over = np.maximum(a - core, 0.0)
+    # beyond core + band the excess is scaled by s; in the band the scale eases in (the integral of a linear ramp)
+    t = np.clip(over / max(band, 1e-12), 0.0, 1.0)
+    eased = np.where(over < band, over * t / 2.0, band / 2.0 + (over - band))
+    shrink = (1.0 - s) * eased
+    out = verts.astype(np.float64).copy()
+    out[:, 1] = mid_y + np.sign(y) * (a - shrink)
+    return out
+
+
+def scale(verts, factor, pivot, mask=None, centre=None, radius=0.01):
+    """Scale about `pivot` by the per-axis `factor`: exactly the masked vertices, rigidly (a segmented part grown or
+    thinned in place: the Mk II's turbine pods came back at two thirds of the sheet's diameter, 2026-10-23), else
+    the vertices within `radius` of `centre` with the falloff. A factor of 1 on an axis leaves that axis alone."""
+    f = np.asarray(factor, dtype=np.float64)
+    p = np.asarray(pivot, dtype=np.float64)
+    target = p + (verts - p) * f
+    if mask is not None:
+        w = np.asarray(mask, bool).astype(np.float64)
+    else:
+        w = falloff(np.linalg.norm(verts - np.asarray(centre), axis=1), radius)
+    return verts + w[:, None] * (target - verts)
+
+
+def thin(verts, width, edge=0.25, mask=None, bins=360, plate=0.3):
+    """A plate's edge thinned to an aerofoil: within `width` of the planform's outline (the outer silhouette of the
+    masked vertices in plan, by azimuth about the planform centre) the thickness about the local mid-plane is scaled
+    from 1 inboard to `edge` at the edge (a smoothstep). Only cells whose vertices span less than `plate` in Z are a
+    plate: where a tall body meets the outline (the Mk II's rear grille inside its rim) nothing moves. The owner,
+    2026-10-23: the Mk II's wing edges "are too rounded, they should be more aerodynamic" - the seed drew a bead."""
+    out = verts.astype(np.float64).copy()
+    m = np.ones(len(verts), bool) if mask is None else np.asarray(mask, bool)
+    idx = np.flatnonzero(m)
+    p = verts[idx]
+    centre = (p[:, :2].min(axis=0) + p[:, :2].max(axis=0)) / 2
+    d = p[:, :2] - centre
+    r = np.hypot(d[:, 0], d[:, 1])
+    b = ((np.arctan2(d[:, 1], d[:, 0]) + np.pi) / (2 * np.pi) * bins).astype(int) % bins
+    R = np.zeros(bins)
+    np.maximum.at(R, b, r)
+    filled = R > 0
+    if not filled.all():                                       # an empty bin takes its neighbours' outline
+        R = np.interp(np.arange(bins), np.flatnonzero(filled), R[filled], period=bins)
+    R = (np.roll(R, 1) + R + np.roll(R, -1)) / 3.0            # a smoothed outline, so one stray vertex is not an edge
+    depth = R[b] - r
+    sub = np.minimum((np.maximum(depth, 0.0) / max(width, 1e-9) * 10).astype(int), 10)   # 10 radial cells per band
+    zmin = np.full((bins, 11), np.inf)
+    zmax = np.full((bins, 11), -np.inf)
+    np.minimum.at(zmin, (b, sub), p[:, 2])
+    np.maximum.at(zmax, (b, sub), p[:, 2])
+    # a cell is plate when the surface from it to half a band inboard (and the neighbouring azimuths) spans less than
+    # `plate` in Z: the rounded vertical edge of a tall body looks thin in its outermost cell alone
+    wmax = np.stack([zmax[:, s:min(s + 6, 11)].max(axis=1) for s in range(11)], axis=1)
+    wmin = np.stack([zmin[:, s:min(s + 6, 11)].min(axis=1) for s in range(11)], axis=1)
+    ext = wmax - wmin
+    ext = np.maximum(np.maximum(ext, np.roll(ext, 1, axis=0)), np.roll(ext, -1, axis=0))
+    is_plate = np.isfinite(ext[b, sub]) & (ext[b, sub] < plate)
+    # the mid-plane at the edge, per azimuth: the mean height of the plate's outer cells
+    rim = (depth < width * 0.35) & is_plate
+    zs = np.zeros(bins)
+    ns = np.zeros(bins)
+    np.add.at(zs, b[rim], p[rim, 2])
+    np.add.at(ns, b[rim], 1.0)
+    have = ns > 0
+    if not have.any():
+        return out
+    zmid = np.where(have, zs / np.maximum(ns, 1), np.interp(np.arange(bins), np.flatnonzero(have), zs[have] / ns[have], period=bins))
+    # the mid-plane smoothed round the outline (a 9-bin circular mean): per-bin means of a coarse seed scalloped the
+    # Mk II's rim edge in the first draft (2026-10-23)
+    zmid = sum(np.roll(zmid, k) for k in range(-4, 5)) / 9.0
+    t = np.clip(depth / max(width, 1e-9), 0.0, 1.0)
+    f = edge + (1.0 - edge) * (t * t * (3.0 - 2.0 * t))
+    sel = (depth < width) & is_plate
+    out[idx[sel], 2] = zmid[b[sel]] + (p[sel, 2] - zmid[b[sel]]) * f[sel]
+    return out
+
+
+BRUSHES = ("inflate", "move", "smooth", "flatten", "crease", "taper", "thin", "scale")
 
 
 def stroke(verts, faces, op):
@@ -125,13 +221,19 @@ def stroke(verts, faces, op):
     if kind == "inflate":
         return inflate(verts, faces, at, r, s)
     if kind == "move":
-        return move(verts, at, r, op.get("delta", (0, 0, 0)))
+        return move(verts, at, r, op.get("delta", (0, 0, 0)), op.get("mask"))
     if kind == "smooth":
         return smooth(verts, faces, at, r, s, int(op.get("iters", 3)))
     if kind == "flatten":
         return flatten(verts, at, r, s, op.get("normal"))
     if kind == "crease":
         return crease(verts, faces, at, op.get("to", at), r, s)
+    if kind == "taper":
+        return taper(verts, op["profile"], float(op["core"]), op.get("band"), float(op.get("mid_y", 0.0)), op.get("mask"))
+    if kind == "thin":
+        return thin(verts, float(op["width"]), float(op.get("edge", 0.25)), op.get("mask"), plate=float(op.get("plate", 0.3)))
+    if kind == "scale":
+        return scale(verts, op.get("factor", (1, 1, 1)), op.get("pivot", at), op.get("mask"), at, r)
     raise ValueError("unknown brush %r (one of %s)" % (kind, ", ".join(BRUSHES)))
 
 

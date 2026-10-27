@@ -31,7 +31,10 @@ BLENDER_BIN = os.environ.get("BLENDER_BIN", r"C:\Program Files\Blender Foundatio
 # Scripts" preference says - customers hand us .blend files. --factory-startup: none of the user's add-ons either (the
 # BlenderMCP add-on loaded in every headless run and printed "cannot start server in background mode", which agents
 # read as an error, 2026-09-29/30); the glTF and FBX add-ons are on in factory settings and the scripts pick CPU Cycles.
-BLENDER_FLAGS = ["-b", "--factory-startup", "-Y"]
+# --python-exit-code: a script that raises makes Blender exit 1, so `_blender` raises instead of the command reading the
+# previous run's files as a result (segment_apply failed on a GLB named .fbx and the stale segments.json was printed as
+# fresh, 2026-10-04)
+BLENDER_FLAGS = ["-b", "--factory-startup", "-Y", "--python-exit-code", "1"]
 
 # --- the few model calls the helpers still make (the three-quarter picture check, the old planner/review paths).
 # Who answers them: a coding agent on this PC on the owner's own subscription, "claude-code" (`claude -p`) or "codex"

@@ -15,6 +15,7 @@ from mathutils import Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blib  # noqa: E402
+import matkind  # noqa: E402
 
 args = json.load(open(sys.argv[sys.argv.index("--") + 1]))
 NAME = args["name"]
@@ -33,9 +34,9 @@ blib.VIEW_DIRS.update({"left": (0, -1, 0.05), "right": (0, 1, 0.05), "back": (-1
 
 
 def slot_kind(m):
-    """Which delivered material a slot is: glass, lining (interior), frame, or the atlas body."""
-    n = (m.name if m else "").lower()
-    return "glass" if n.endswith("_glass") else "lining" if n.endswith("_interior") else "frame" if n.endswith("_frame") else "body"
+    """Which delivered material a slot is: glass, lining (interior), frame, or the atlas body (matkind.py: a glass
+    zone's own pane is MI_<Name>_Glass_<Part>_<Zone>, which an end-of-name test missed, 2026-10-23)."""
+    return matkind.material_kind(m.name if m else "", NAME)
 
 
 def flat(name, rgba, emit=0.0):
@@ -77,8 +78,11 @@ for what in args.get("hide") or []:
     if slots:
         idx = np.empty(len(me.polygons), np.int32)
         me.polygons.foreach_get("material_index", idx)
-        delete_faces(np.nonzero(np.isin(idx, slots))[0])
-        done.append("hid %s" % what)
+        gone = np.nonzero(np.isin(idx, slots))[0]
+        delete_faces(gone)
+        done.append("hid %s (%d faces)" % (what, len(gone)))
+    else:
+        done.append("hide %s: no such material on the delivery (%s)" % (what, ", ".join(sorted(set(kinds)))))
 # --section y=0.1: the model cut open, the near side (towards the camera) taken away
 if args.get("section"):
     axis, value = args["section"]
@@ -117,10 +121,12 @@ if args.get("unlit"):
 for what in args.get("highlight") or []:
     red = flat("ms_highlight_%s" % what, (0.95, 0.05, 0.03, 1.0), emit=2.0)
     if what in ("glass", "lining", "frame"):
+        hit = 0
         for sl, kind in zip(target.material_slots, kinds):
             if kind == what:
                 sl.material = red
-        done.append("highlight %s" % what)
+                hit += 1
+        done.append("highlight %s (%d slots)" % (what, hit) if hit else "highlight %s: no such material on the delivery" % what)
         continue
     box = (args.get("boxes") or {}).get(what)
     if not box:

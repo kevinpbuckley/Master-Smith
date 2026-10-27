@@ -1,0 +1,313 @@
+{
+ "units": "metres, Blender frame (Z up; the Unreal export faces -Y after import)",
+ "meshes": {
+  "body": {
+   "object": "SKM_Body_SKM_Body.001",
+   "vertices": 32334,
+   "triangles": 60816,
+   "polygons": 60816,
+   "bounds_min": [
+    -0.4572,
+    -0.2424,
+    -0.0021
+   ],
+   "bounds_max": [
+    0.4572,
+    0.0991,
+    1.3092
+   ],
+   "height_m": 1.3113,
+   "material_slots": [
+    "M_GrayTexture_Body"
+   ],
+   "uv_tiles": {
+    "M_GrayTexture_Body": {
+     "udim": 1002,
+     "faces": 60816,
+     "u": [
+      1.01,
+      1.99
+     ],
+     "v": [
+      0.006,
+      0.993
+     ]
+    }
+   },
+   "slot_z_range": {
+    "M_GrayTexture_Body": [
+     -0.0021,
+     1.3092
+    ]
+   },
+   "uv_layers": [
+    "DiffuseUV"
+   ]
+  },
+  "face": {
+   "object": "SKM_Face_SKM_Face.001",
+   "vertices": 34657,
+   "triangles": 64094,
+   "polygons": 64094,
+   "bounds_min": [
+    -0.1739,
+    -0.1419,
+    1.3451
+   ],
+   "bounds_max": [
+    0.1739,
+    0.1016,
+    1.7178
+   ],
+   "height_m": 0.3727,
+   "material_slots": [
+    "M_GrayTexture_Head",
+    "M_GrayTexture_Teeth",
+    "M_Hide",
+    "M_GrayTexture_Eyes",
+    "M_GrayTexture_Eyes_4",
+    "M_Hide_5",
+    "M_Hide_6",
+    "M_Hide_7",
+    "M_Hide_8",
+    "M_GrayTexture_Head_9",
+    "M_Hide_10",
+    "M_GrayTexture_Head_11",
+    "M_GrayTexture_Head_12",
+    "M_GrayTexture_Head_13",
+    "M_GrayTexture_Head_14"
+   ],
+   "uv_tiles": {
+    "M_GrayTexture_Head": {
+     "udim": 1001,
+     "faces": 48004,
+     "u": [
+      0.003,
+      0.997
+     ],
+     "v": [
+      0.008,
+      0.992
+     ]
+    },
+    "M_GrayTexture_Teeth": {
+     "udim": 1001,
+     "faces": 8350,
+     "u": [
+      0.011,
+      0.993
+     ],
+     "v": [
+      0.022,
+      0.989
+     ]
+    },
+    "M_Hide": {
+     "udim": 1001,
+     "faces": 1004,
+     "u": [
+      0.008,
+      0.492
+     ],
+     "v": [
+      0.016,
+      0.086
+     ]
+    },
+    "M_GrayTexture_Eyes": {
+     "udim": 1001,
+     "faces": 1536,
+     "u": [
+      0.01,
+      0.99
+     ],
+     "v": [
+      0.01,
+      0.99
+     ]
+    },
+    "M_GrayTexture_Eyes_4": {
+     "udim": 1001,
+     "faces": 1536,
+     "u": [
+      0.01,
+      0.99
+     ],
+     "v": [
+      0.01,
+      0.99
+     ]
+    },
+    "M_Hide_5": {
+     "udim": 1001,
+     "faces": 980,
+     "u": [
+      0.01,
+      0.992
+     ],
+     "v": [
+      0.001,
+      0.991
+     ]
+    },
+    "M_Hide_6": {
+     "udim": 1001,
+     "faces": 1722,
+     "u": [
+      0.003,
+      0.996
+     ],
+     "v": [
+      0.004,
+      0.94
+     ]
+    },
+    "M_Hide_7": {
+     "udim": 1001,
+     "faces": 386,
+     "u": [
+      0.134,
+      0.483
+     ],
+     "v": [
+      0.005,
+      0.997
+     ]
+    },
+    "M_Hide_8": {
+     "udim": 1001,
+     "faces": 576,
+     "u": [
+      0.327,
+      0.673
+     ],
+     "v": [
+      0.608,
+      0.635
+     ]
+    }
+   },
+   "slot_z_range": {
+    "M_GrayTexture_Head": [
+     1.3466,
+     1.7178
+    ],
+    "M_GrayTexture_Teeth": [
+     1.5057,
+     1.5593
+    ],
+    "M_Hide": [
+     1.5257,
+     1.55
+    ],
+    "M_GrayTexture_Eyes": [
+     1.5937,
+     1.6212
+    ],
+    "M_GrayTexture_Eyes_4": [
+     1.5937,
+     1.6212
+    ],
+    "M_Hide_5": [
+     1.6005,
+     1.6115
+    ],
+    "M_Hide_6": [
+     1.5955,
+     1.6172
+    ],
+    "M_Hide_7": [
+     1.601,
+     1.6111
+    ],
+    "M_Hide_8": [
+     1.599,
+     1.6136
+    ]
+   },
+   "uv_layers": [
+    "DiffuseUV"
+   ]
+  },
+  "head_static": {
+   "object": "SM_MH_Head_SM_MH_Head",
+   "vertices": 33345,
+   "triangles": 64094,
+   "polygons": 64094,
+   "bounds_min": [
+    -0.1791,
+    -0.1452,
+    1.3471
+   ],
+   "bounds_max": [
+    0.1791,
+    0.0997,
+    1.7323
+   ],
+   "height_m": 0.3852,
+   "material_slots": [
+    "Fbx Default Material",
+    "Fbx Default Material",
+    "Fbx Default Material",
+    "Fbx Default Material",
+    "Fbx Default Material",
+    "Fbx Default Material",
+    "Fbx Default Material",
+    "Fbx Default Material",
+    "Fbx Default Material"
+   ],
+   "uv_tiles": {
+    "Fbx Default Material": {
+     "udim": 1001,
+     "faces": 576,
+     "u": [
+      0.327,
+      0.672
+     ],
+     "v": [
+      0.608,
+      0.635
+     ]
+    }
+   },
+   "slot_z_range": {
+    "Fbx Default Material": [
+     1.6136,
+     1.6296
+    ]
+   },
+   "uv_layers": [
+    "UVmap_0",
+    "LightMapUV"
+   ]
+  }
+ },
+ "body_neck_seam_z_m": 1.3092,
+ "body_half_span_m": 0.4572,
+ "template_bounds_min": [
+  -0.4572,
+  -0.2424,
+  -0.0021
+ ],
+ "template_bounds_max": [
+  0.4572,
+  0.1016,
+  1.7178
+ ],
+ "template_height_m": 1.7199,
+ "silhouette_front": "template_front.png",
+ "silhouette_side": "template_side.png",
+ "silhouette_back": "template_back.png",
+ "silhouette_frame": "orthographic, the template's bounds with a 5% margin; 'front' is the camera at -Y looking at the face",
+ "facing": "-Y (Blender), feet toward -Y; the Unreal export imports this way and every ms character uses the same frame",
+ "glb": "MH_Template.glb",
+ "silhouette_apose": {
+  "what": "the template itself measured by blender/mh_conform.py the way a seed is (front silhouette, 5 mm cells), 2026-10-04: the reference a seed's report is compared with",
+  "arm_angle_deg": 35.2,
+  "armpit_gap_m": 0.048,
+  "leg_gap_m": 0.12,
+  "finger_tips": 3,
+  "torso_width_m": 0.33,
+  "head_width_m": 0.36
+ }
+}

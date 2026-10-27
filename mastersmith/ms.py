@@ -31,10 +31,22 @@ deterministic thing and writes into a job folder under out/<Name>/:
     python -m mastersmith.ms results [out/A out/B] [--no-open]     (every delivered job on one page, links to each preview)
     python -m mastersmith.ms package out/BullpupCarbine
     python -m mastersmith.ms status out/BullpupCarbine
+    python -m mastersmith.ms mh-conform out/Dryad [--strip hair,lashes] [--extra parts/Head/seed.glb]   (a character seed as the
+                                             combined mesh Unreal 5.8's MetaHuman conform takes, checked against the A-pose)
+    python -m mastersmith.ms mh-bake out/Dryad --posed delivery/metahuman/in/Dryad_Posed.fbx   (the seed's colour and normal
+                                             baked onto the posed MetaHuman mesh Unreal generated from the conformed DNA)
+    python -m mastersmith.ms mh-attach out/Dryad Hair --built delivery/metahuman/in/SKM_Dryad_Body.fbx --bone head
+    python -m mastersmith.ms garment-fit out/Dryad [--args parts/Garment/fit_args.json] [--seed out/DryadOutfit/parts/Outfit/seed.glb]
+    python -m mastersmith.ms garment-refit out/Dryad --out p6 [--from parts/Garment/fitted.blend] [--reseat-old ... --reseat-new ...]
+                                             [--shrink-k 0.7] [--collar-face ... --collar-neck-r 0.17] [--stages reseat,collar,lift,weights]
+    python -m mastersmith.ms garment-attach out/Dryad [--run p6]        (the fitted garment skinned and exported as a drop-in FBX)
+    python -m mastersmith.ms garment-test out/Dryad [--run p6] [--against p5]   (pose test; a before/after table against another run)
+    python -m mastersmith.ms ue -c "print('hello')" [--timeout 600]      (execute_python_code on the editor's MCP, auto_save false)
 """
 import argparse
 import glob
 import json
+import math
 import os
 import shutil
 import socket
@@ -45,7 +57,7 @@ import webbrowser
 
 from PIL import Image, ImageOps
 
-from . import config, jobs as jobtools, ledger, models, picturecheck, pricing, refs_review, results_page, site
+from . import config, glbcheck, jobs as jobtools, ledger, models, picturecheck, pricing, refs_review, results_page, site, viewcheck
 from .fal import Fal, first_url
 from .images import Images
 from .spec import Spec
@@ -238,6 +250,8 @@ def cmd_grid(a):
     else:
         dims = (float(job.spec.size_m), float(a.width or job.spec.size_m * side_px[1] / side_px[0] * 0.3),
                 float(job.spec.size_m) * side_px[1] / float(side_px[0]))
+    if job.spec.category == "nature":
+        dims = planmod.longest_side(dims, job.spec.size_m)
     json.dump({"dims_m": [round(v, 4) for v in dims]}, open(os.path.join(work, "dims.json"), "w"))
     print("gridded side view:", side_g)
     if a.front:
@@ -302,7 +316,7 @@ def cmd_models(a):
     if a.action == "add":
         if not a.key or not a.command:
             sys.exit('usage: ms models add <key> --kind seed|picture --command "exe {image} {out} ..." [--inputs multiview] [--label ...]')
-        m = models.add(a.key, a.kind, a.command, label=a.label or "", inputs=a.inputs, notes=a.notes or "")
+        m = models.add(a.key, a.kind, a.command, label=a.label or "", inputs=a.inputs, notes=a.notes or "", front=a.front)
         print("registered %s (%s, %s): %s -> %s" % (a.key, m["kind"], m["inputs"], m["command"], models.registry_path()))
         return
     if a.action == "remove":
@@ -310,18 +324,21 @@ def cmd_models(a):
         print("removed %s from %s" % (a.key, models.registry_path()))
         return
     rows = sorted(models.all_models().values(), key=lambda m: (m["kind"], m["source"], m["key"]))
-    for kind in ("seed", "texture", "picture"):
-        print("%s models (ms %s --model <key>):" % (kind, {"seed": "seed", "texture": "retexture"}.get(kind, "picture/view/part-pictures")))
+    for kind in ("seed", "texture", "segment", "picture"):
+        print("%s models (ms %s --model <key>):" % (kind, {"seed": "seed", "texture": "retexture", "segment": "segment"}.get(
+            kind, "picture/view/views/part-pictures")))
         for m in (r for r in rows if r["kind"] == kind):
             usd = models.price_of(m)
-            print("  %-13s %-30s %-9s %-10s %s" % (m["key"], m["label"], "free" if usd == 0 else ("$%.2f" % usd if usd else "unpriced"),
-                                                   m["inputs"], m.get("notes") or m.get("command", "")))
+            front = ("faces %s; " % m["front"]) if m.get("front") else ""
+            print("  %-13s %-30s %-9s %-10s %s%s" % (m["key"], m["label"], "free" if usd == 0 else ("$%.2f" % usd if usd else "unpriced"),
+                                                     m["inputs"], front, m.get("notes") or m.get("command", "")))
     print("aliases: " + ", ".join("%s = %s" % kv for kv in sorted(models.ALIASES.items())))
     print('register a local model: ms models add <key> --kind seed --command "<exe> {image} {out} ..."')
 
 
 def cmd_retexture(a):
-    """A new texture for the whole seed from a mesh-to-texture model (the owner picks it; Meshy v5 retexture by default),
+    """A new texture for the whole seed from a mesh-to-texture model (the owner picks it; Meshy v7 retexture by default
+    since 2026-10-21, v5 before),
     painted onto the seed's own UVs and guided by the approved hero picture and the brief: every side gets texture,
     not only the sides the pictures saw (Tonetta's retexture pass, 2026-09-29). The registered mesh goes out with one
     UV layer and no maps, comes back fitted onto its own bounds; registered_before_retexture.blend is the undo."""
@@ -332,14 +349,18 @@ def cmd_retexture(a):
     if not os.path.exists(blend):
         sys.exit("no registered seed for %s: ms seed first" % a.part)
     geo = os.path.join(d, "retexture_input.glb")
-    _blender(job, "swap_seed.py", {"mode": "export", "blend": blend, "out_glb": geo}, "retexture_export_%s" % a.part)
-    if os.path.getsize(geo) > 18 * 1024 * 1024:
-        sys.exit("the seed's geometry is %.0f MB; the retexture model takes 18 MB at most" % (os.path.getsize(geo) / 1e6))
+    limit = 18 * 1024 * 1024
+    # 2026-10-23: a 107k-face Hi3D seed exported at 21 MB; the copy that goes out is decimated until it fits
+    _blender(job, "swap_seed.py", {"mode": "export", "blend": blend, "out_glb": geo, "max_bytes": limit}, "retexture_export_%s" % a.part)
+    if os.path.getsize(geo) > limit:
+        sys.exit("the seed's geometry is %.0f MB even decimated; the retexture model takes 18 MB at most" % (os.path.getsize(geo) / 1e6))
     os.environ["MASTERSMITH_NO_SPEND"] = "0"
     config.NO_SPEND = False
     hero = job.path("ref", "ref_0.png")
     payload = {"model_url": job.fal.upload(geo), "text_style_prompt": (a.prompt or job.spec.description)[:600],
                "enable_original_uv": True, "enable_pbr": True, "enable_safety_checker": False}
+    if m.get("resolution"):
+        payload["texture_resolution"] = a.resolution    # 4k costs what 2k does; 8k makes the PBR maps 4k, no emission
     if os.path.exists(hero) and not a.no_picture:
         payload["image_style_url"] = job.fal.upload(hero)
     out = job.fal.run(m["endpoint"], payload)
@@ -356,6 +377,23 @@ def cmd_retexture(a):
     print("in place: %s (%s); the old mesh is %s. Read seed_render.png, then ms assemble." % (blend, json.load(open(res)), backup))
 
 
+def _views_agree_or_exit(job, unchecked=False):
+    """The reference views must describe one object before a seed is paid for (owner, 2026-10-23): the Mk II sheet's
+    hero was a saucer and its top view an arrowhead, and three seed models each followed the picture they were given.
+    ref/consistency.json is written every time; a failed check stops unless --unchecked."""
+    rep = viewcheck.write(job.path("ref"))
+    if rep.get("dims_ratio"):
+        r = rep["dims_ratio"]
+        print("views: L:W:H = 1 : %.2f : %.2f from side, front and top (closure error %.1f%%)"
+              % (r["W"], r["H"], 100 * rep["closure"]["error"]))
+    for w in rep["warnings"]:
+        print("  views: %s" % w)
+    hard = [w for w in rep["warnings"] if not w.startswith("cannot close")]      # a weapon has no top view: say so, go on
+    if hard and not unchecked:
+        sys.exit("the reference views disagree (ref/consistency.json). Redraw the odd one out with ms view --fixes, or "
+                 "--unchecked to seed anyway")
+
+
 def cmd_seed(a):
     """The whole object in ONE request (the default since 2026-09-29: one Hi3D v3 multi-view seed of the M4A1 scored
     6.5 against 4.5 for the same model part by part): the approved views go to the model the owner picked, the mesh
@@ -364,6 +402,7 @@ def cmd_seed(a):
     job = Job(a.job)
     if not os.path.exists(job.path("plan", "side.png")) or not os.path.exists(job.path("plan", "dims.json")):
         sys.exit("grid the approved views first: ms grid %s --side ref/ref_side.png --front ref/ref_front.png" % a.job)
+    _views_agree_or_exit(job, a.unchecked)
     m = models.resolve(a.model, kind="seed")
     d = job.path("parts", a.part)
     os.makedirs(d, exist_ok=True)
@@ -393,16 +432,25 @@ def cmd_seed(a):
     if a.replan or not os.path.exists(plan_path):
         dims = json.load(open(job.path("plan", "dims.json")))["dims_m"]
         finish = {"weapon": "metal", "prop": "painted"}.get(job.spec.category, "painted")
+        mat = {"color": "#808080", "finish": finish, "keep_texture": True}
+        if job.spec.category == "nature":
+            mat.update(metal=False, roughness=0.7)      # skin, leaf, shell and stone: never Tripo's glaze or chrome
         raw = {"parts": [{"name": a.part, "what": job.spec.description[:400], "method": "vendor", "side_box": [0, 100, 0, 100],
-                          "front_span": [0, 100], "material": {"color": "#808080", "finish": finish, "keep_texture": True}}],
+                          "front_span": [0, 100], "material": mat}],
                "notes": "one seed for the whole object (%s)" % m["label"]}
-        json.dump(planmod.validate_plan(raw, dims), open(plan_path, "w"), indent=1)
+        plan = planmod.validate_plan(raw, dims)
+        # the pictures, as `ms plan` records them: without them `assemble` straight after a seed stopped on a KeyError
+        # and every Training Pool job ran `ms plan` first (2026-10-02)
+        plan["side"] = job.path("plan", "side.png")
+        plan["front"] = job.path("plan", "front.png") if os.path.exists(job.path("plan", "front.png")) else None
+        json.dump(plan, open(plan_path, "w"), indent=1)
         if not os.path.exists(job.path("plan", "plan_draft.json")) or a.replan:
             json.dump(raw, open(job.path("plan", "plan_draft.json"), "w"), indent=1)
         print("plan: one part, %s, keeping the seed's own texture (plan/plan_draft.json)" % a.part)
     shutil.copy2(job.path("plan", "side.png"), os.path.join(d, "side.png"))
     part = _part(_plan(job), a.part)
-    _do_register(job, part, d, False, 0, 0)
+    seed_view = "front" if m["inputs"] == "multiview" else primary     # a multi-view seed faces its front picture
+    _do_register(job, part, d, False, 0, 0, front_yaw=models.front_yaw(m.get("front"), seed_view))
     json.dump({"keep_depth": True}, open(os.path.join(d, "fit.json"), "w"))       # the model saw the depth from its views
     print("Next: Read seed_render.png; add zones to plan/plan_draft.json for the regions in another material (glass, "
           "bare steel, rubber), ms plan, then ms assemble.")
@@ -505,9 +553,10 @@ def cmd_mesh(a):
     _do_register(job, part, d, a.src == "quarter" and os.path.exists(os.path.join(d, "quarter.png")), 0, 0)
 
 
-def _do_register(job, part, d, sweep, yaw, pitch):
+def _do_register(job, part, d, sweep, yaw, pitch, front_yaw=None):
     side = os.path.join(d, "side.png")
-    reg = _register(job, part["name"], os.path.join(d, "seed.glb"), side, d, yaw_sweep=sweep, extra_yaw=yaw, extra_pitch=pitch)
+    reg = _register(job, part["name"], os.path.join(d, "seed.glb"), side, d, yaw_sweep=sweep, extra_yaw=yaw, extra_pitch=pitch,
+                    front_yaw=front_yaw)
     if not reg:
         print("registration failed (silhouette too different); try --from side or a manual --yaw/--pitch")
         return
@@ -515,6 +564,12 @@ def _do_register(job, part, d, sweep, yaw, pitch):
     json.dump(meta, open(os.path.join(d, "fit.json"), "w"))
     print("registered: mode %s, silhouette overlap %.2f (runner-up %.2f); render: %s" % (
         reg["mode"], reg["iou"], reg["runner_up_iou"], reg.get("render")))
+    if reg.get("prior"):
+        # the vendor's usual front (models.py "front", 2026-10-04): a tie-breaker, recorded either way
+        pr = reg["prior"]
+        verdict = ("agrees" if pr.get("agrees") else "APPLIED to break a tie between the two ends" if pr.get("applied")
+                   else "DISAGREES: the silhouette chose the other end; check seed_render.png against side.png")
+        print("  vendor front prior (yaw %.0f): %s (IoU %.2f against the best %.2f)" % (pr["front_yaw"], verdict, pr["iou"], pr["best_iou"]))
     print("Look at seed_render.png next to side.png; re-run register with --yaw/--pitch if it sits wrong.")
 
 
@@ -522,7 +577,8 @@ def cmd_register(a):
     job = Job(a.job)
     part = _part(_plan(job), a.part)
     d = job.path("parts", part["name"])
-    _do_register(job, part, d, a.src == "quarter", a.yaw, a.pitch)
+    _do_register(job, part, d, a.src == "quarter", a.yaw, a.pitch,
+                 front_yaw=models.front_yaw(a.front, "left" if a.src == "side" else None))
 
 
 # ---------------------------------------------------------------- sculpting: fit (#11), sdf (#12), brush (#13)
@@ -657,7 +713,8 @@ def cmd_cabin(a):
     hm = hull.get("material") or {}
     zones = [dict(z, pick=z.get("pick") or ("auto" if hm.get("keep_texture") else "box")) for z in hull.get("zones") or []
              if ((z.get("material") or {}).get("glass") or (z.get("material") or {}).get("finish") == "glass") and z.get("pick") != "atlas"]
-    carve = {"zones": zones, "box_min": part["box_min"], "box_max": part["box_max"]} if zones else None
+    carve = {"zones": zones, "box_min": part.get("carve_min") or part["box_min"],
+             "box_max": part.get("carve_max") or part["box_max"]} if zones else None
     _blender(job, "cabin.py", {"hull_blend": blend, "box_min": hull["box_min"], "box_max": hull["box_max"],
                                "keep_depth": bool(fit.get("keep_depth")), "x_range": [part["box_min"][0], part["box_max"][0]],
                                "z_top": part["box_max"][2] if carve else None, "out_json": out, "carve": carve}, "cabin_%s" % part["name"])
@@ -739,14 +796,39 @@ def cmd_brush(a):
             sys.exit("nothing to replay")
     else:
         if not a.op:
-            sys.exit("--op is required (one of inflate, move, smooth, flatten, crease)")
+            sys.exit("--op is required (one of inflate, move, smooth, flatten, crease, taper, symmetrize, scale)")
         op = {"op": a.op, "at": _point(a.at, size), "radius": a.radius / 1000.0, "strength": a.strength}
         if a.op == "inflate":
             op["strength"] = a.strength / 1000.0                  # mm at the centre
+        if a.op in ("move", "scale", "taper", "thin") and a.segment:
+            op["segment"] = [int(v) for v in a.segment.split(",")]
         if a.op == "move":
             op["delta"] = [float(v) / 1000.0 for v in (a.delta or "0,0,0").split(",")]
+        if a.op == "scale":
+            if not a.factor:
+                sys.exit("--factor is required for scale (f or fx,fy,fz)")
+            f = [float(v) for v in a.factor.split(",")]
+            op["factor"] = f * 3 if len(f) == 1 else f
+            about = a.about or ("each" if a.segment else "at")
+            op["about"] = about if about in ("each", "centre", "at") else _point(about, size)
         if a.op == "crease":
             op["to"] = _point(a.to or a.at, size)
+        if a.op == "symmetrize":
+            op = {"op": "symmetrize", "keep": a.keep, "mid_y": a.mid_y / 1000.0}
+        if a.op == "taper":
+            if not a.profile:
+                sys.exit("--profile is required for taper (x:s,x:s,...)")
+            op = {"op": "taper", "profile": [[float(v) for v in pair.split(":")] for pair in a.profile.split(",")],
+                  "core": a.core / 1000.0}
+            if a.band is not None:
+                op["band"] = a.band / 1000.0
+            if a.segment:
+                op["segment"] = [int(v) for v in a.segment.split(",")]
+        if a.op == "thin":
+            # the Mk II's rim bead thinned to an aerofoil edge (owner, 2026-10-23: "more aerodynamic")
+            op = {"op": "thin", "width": a.width / 1000.0, "edge": a.edge}
+            if a.segment:
+                op["segment"] = [int(v) for v in a.segment.split(",")]
         if a.op == "flatten" and a.normal:
             op["normal"] = [float(v) for v in a.normal.split(",")]
         strokes = [op]
@@ -779,7 +861,7 @@ def cmd_sdf(a):
         sys.exit("no script: write %s with `def part(kit, L, W, H)` returning a kit shape (see mastersmith/sdfkit.py)" % src)
     L, W, H = [part["box_max"][i] - part["box_min"][i] for i in range(3)]
     shape = sdfkit.run_part_script(open(src, encoding="utf-8").read(), L, W, H)
-    voxel = (a.voxel / 1000.0) if a.voxel else min(max(max(L, W, H) / 320.0, 0.00015), 0.001)
+    voxel = (a.voxel / 1000.0) if a.voxel else sdfkit.auto_voxel(L, W, H)
     half = [L / 2, W / 2, H / 2]
     verts, faces = sdfkit.mesh(shape, [-h for h in half], half, voxel)
     glb = os.path.join(d, "seed.glb")
@@ -895,6 +977,16 @@ def _projection_inputs(job, plan, parts):
 def cmd_assemble(a):
     job = Job(a.job)
     plan = _plan(job)
+    nature = job.spec.category == "nature"
+    if nature:
+        # a fish, a kelp, a coral or a rock is no machined part: the sharpening, the baked bevel, the code edge break, the
+        # metal and polymer smart materials and the cast-surface grain each damaged one of the Training Pool pilots
+        # (2026-10-02: glossy creases on the fish, grain on the leaves); its size is its longest side
+        # nor the picture projection and its colour grade: a plant on white read as a pale blue picture and the grade
+        # washed the gold-olive kelp to grey (saturation x0.69, blue x1.36, 2026-10-03)
+        a.no_sharpen = a.no_bevel = a.no_edge_break = a.no_materials = a.no_surface_detail = a.no_projection = True
+        print("nature: no sharpening, bevel, edge break, smart materials, surface grain or picture projection; sized by "
+              "its longest side")
     want = [p.strip().lower() for p in a.parts.split(",")] if a.parts else None
     # the body is the biggest box by volume: by length alone an all-diffused rifle's barrel (334 mm, 17 mm across) was
     # taken for the body, kept in its short seed's proportions and vanished inside the handguard (2026-09-29)
@@ -927,8 +1019,13 @@ def cmd_assemble(a):
         parts.append({"name": p["name"], "kind": "vendor", "box_min": p["box_min"], "box_max": p["box_max"], "material": p["material"],
                       "fitted": os.path.exists(os.path.join(d, "fit_report.json")), "interior": bool(p.get("interior")), "body": is_largest,
                       "centreline": bool(p.get("centreline")), "zones": p.get("zones") or [], "blend": blend, "yaw": 0,
+                      "carve": bool(p.get("carve")) and not is_largest, "no_projection": bool(p.get("no_projection")),
                       "keep_depth": bool(fit.get("keep_depth")) and is_largest, "fill_box": not is_largest,
-                      "lettering": p.get("lettering") or []})
+                      "lettering": p.get("lettering") or [],
+                      # 2026-10-23: a fixed LOD0 share, the sharpen switch and an interior's own carve box (the Mk II's
+                      # cockpit insert). This list is what reaches Blender: a new plan key goes here too.
+                      "triangles": p.get("triangles"), "sharpen": p.get("sharpen", True),
+                      "carve_min": p.get("carve_min"), "carve_max": p.get("carve_max")})
     if not parts:
         sys.exit("nothing to assemble")
     delivery = job.path("delivery")
@@ -960,7 +1057,8 @@ def cmd_assemble(a):
             "bevel_m": 0.0 if a.no_bevel else (min(0.0015, 0.0005 * float(plan["dims_m"][0]))
                 if a.finish_profile == "restrained" else 0.002 * float(plan["dims_m"][0])),
             "finish_profile": a.finish_profile, "drop_floaters": bool(a.drop_floaters), "origin": a.origin,
-            "draft": bool(a.draft), "tubes": a.tubes}
+            "draft": bool(a.draft), "tubes": a.tubes, "surface_detail": not a.no_surface_detail, "size_longest": nature,
+            "wind_masks": nature}
     _blender(job, "assemble.py", args, "assemble_draft" if a.draft else "assemble")
     if a.draft:
         d = os.path.join(delivery, "draft")
@@ -978,10 +1076,17 @@ def cmd_assemble(a):
         print("Read the renders; run the full assemble (no --draft) once the boxes and picks are right.")
         return
     rep = json.load(open(os.path.join(delivery, "report.json")))
+    _glb_gate(job, delivery, rep)
     sheet = six_view_sheet(job, delivery)
     print("assembled %d parts -> %s" % (len(parts), delivery))
     print("  size %s m, LOD0 %s tris, origin %s" % (rep.get("dimensions_m"), (rep.get("lods") or [{}])[0].get("triangles"),
                                                     (rep.get("origin") or {}).get("mode", "centre")))
+    if rep.get("texel_density"):
+        td = rep["texel_density"]
+        print("  texel density: %s px/cm mean (10th percentile %s), %.0f%% of the %s px atlas used" % (
+            td.get("px_per_cm"), td.get("p10_px_per_cm"), (td.get("atlas_used") or 0) * 100, td.get("atlas_px")))
+    if rep.get("glb_check"):
+        print("  GLB read back: %s" % _glb_line(rep["glb_check"]))
     if rep.get("sockets"):
         print("  sockets (SOCKET_ in the FBX, metres): " + ", ".join("%s %s" % (s["name"], s["location"]) for s in rep["sockets"]))
     if rep.get("muzzle") is not None:
@@ -1100,6 +1205,12 @@ def cmd_refs(a):
     for j in jobs:
         if not os.path.isfile(os.path.join(out_dir, j, "brief.json")):
             sys.exit("no job %s in %s" % (j, out_dir))
+    if a.check:
+        # the views against each other, nothing drawn or served (the seed gate runs the same check)
+        for j in jobs:
+            print("%s:" % j)
+            _print_consistency(os.path.join(out_dir, j, "ref"))
+        return
     if a.sheet:
         # the agent's own look before the owner's: one picture per job it can Read (2026-10-01: 9 of 38 redrawn)
         for j in jobs:
@@ -1108,6 +1219,7 @@ def cmd_refs(a):
             print("sheet: %s" % path)
             for w in warns:
                 print("  check: %s" % w)
+            _print_consistency(os.path.join(out_dir, j, "ref"))
         print(picturecheck.REF_CHECKLIST)
         if a.no_open:
             return
@@ -1159,6 +1271,150 @@ def cmd_serve(a):
         webbrowser.open(url)
 
 
+def _print_consistency(ref_dir):
+    """ref/consistency.json written and said in two lines: the object's L:W:H as the views read it, and what disagrees."""
+    rep = viewcheck.write(ref_dir)
+    if rep.get("dims_ratio"):
+        r = rep["dims_ratio"]
+        print("consistency: L:W:H = 1 : %.2f : %.2f, closure error %.1f%% -> %s"
+              % (r["W"], r["H"], 100 * rep["closure"]["error"], "PASS" if rep["pass"] else "FAIL"))
+    else:
+        print("consistency: %s (%d view%s)" % ("PASS" if rep["pass"] else "FAIL", len(rep["views"]), "" if len(rep["views"]) == 1 else "s"))
+    for w in rep["warnings"]:
+        print("  ! %s" % w)
+    return rep
+
+
+def cmd_views(a):
+    """Several standard views from ONE picture call (2026-10-04, Mixar's turnaround sheet as the prompt): a sheet of
+    panels drawn from the hero and split into ref/ref_<view>.png. One call instead of one per view keeps every
+    view the same object and costs a quarter. A panel with nothing in it, or whose object bleeds into its
+    neighbour, is refused by name and left to `ms view`, never cropped as if it were fine (Mixar: a multi-view
+    submit refuses loudly rather than degrading to one picture)."""
+    job = Job(a.job)
+    src = job.path(a.src)
+    which = [w.strip().lower() for w in a.which.split(",") if w.strip()]
+    bad = [w for w in which if w not in VIEW_TEXT or w == "quarter"]
+    if bad or not which:
+        sys.exit("--which takes a comma list of %s" % ", ".join(sorted(k for k in VIEW_TEXT if k != "quarter")))
+    outs = {w: job.path("ref", "ref_%s.png" % w) for w in which}
+    todo = {w: p for w, p in outs.items() if not keep_existing(p, a.redraw)}
+    if not todo:
+        return
+    n = len(todo)
+    rows, cols = (1, n) if n <= 2 else ((2, 2) if n <= 4 else (2, 3))
+    aspect = {(1, 1): "1:1", (1, 2): "16:9", (2, 2): "1:1", (2, 3): "4:3"}[(rows, cols)]
+    order = list(todo)
+    panels = "; ".join("panel %d (row %d, column %d): %s" % (i + 1, i // cols + 1, i % cols + 1, VIEW_TEXT[w])
+                       for i, w in enumerate(order))
+    prompt = ("A turnaround reference sheet of this exact same object: %d panels in a grid of %d row%s and %d column%s on "
+              "one plain pure white background, wide empty white gutters between the panels, the whole object inside each "
+              "panel touching nothing, no labels, no text, no frames, no lines, no shadows. Same object, same design, same "
+              "colours, markings and materials in every panel; each panel strictly orthographic with no perspective. %s. %s"
+              % (n, rows, "s" if rows > 1 else "", cols, "s" if cols > 1 else "", panels, a.fixes or "")).strip()
+    if a.sheet:
+        # a sheet that exists: the one a refused run kept, or a turnaround the owner dropped in (the Kestrel's concept
+        # sheet, 2026-10-04); its panels are read in the order of --which, nothing is drawn
+        sheet, usd = job.path(a.sheet), None
+    else:
+        sheet = job.path("ref", "sheet_%s.png" % "_".join(order))
+        job.images.generate(prompt, sheet, model=_picture_model(a.model), references=[src], aspect_ratio=aspect)
+        usd = job.images.spent() if hasattr(job.images, "spent") else None
+    cells = picturecheck.sheet_cells(sheet, len(order))
+    im = Image.open(sheet).convert("RGB")
+    written, refused = [], []
+    for w, cell in zip(order, cells):
+        if cell["box"] is None:
+            refused.append("%s: %s" % (w, cell["reason"]))
+            continue
+        x0, y0, x1, y1 = cell["box"]
+        mx, my = int(0.05 * (x1 - x0)) + 2, int(0.05 * (y1 - y0)) + 2
+        crop = im.crop((x0, y0, x1, y1))
+        out = Image.new("RGB", (crop.width + 2 * mx, crop.height + 2 * my), (255, 255, 255))
+        out.paste(crop, (mx, my))
+        if a.mirror and w in ("side", "left"):
+            out = ImageOps.mirror(out)
+        out.save(outs[w])
+        written.append(w)
+    # a panel that is the hero drawn again, mirrored or not (the bullpup's "top" came back as its side, 2026-10-04):
+    # the hero's own proportions and a high correlation; two end-on views correlate at 0.86 but are four times
+    # narrower than the hero, so the proportions carry the test
+    same = [(p, q, picturecheck.same_picture(outs[p], outs[q])) for i, p in enumerate(written) for q in written[i + 1:]]
+    same = [s for s in same if s[2] > 0.95]
+    hero_aspect = picturecheck.object_aspect(src)
+    for w in written:
+        asp = picturecheck.object_aspect(outs[w])
+        if hero_aspect and asp and abs(math.log(asp / hero_aspect)) < math.log(1.15):
+            s = picturecheck.same_picture(outs[w], src)
+            if s > 0.8:
+                same.append((w, "the hero", s))
+    if not a.sheet:
+        ledger.record(job.dir, "views", model=a.model, usd=usd, out=os.path.relpath(sheet, job.dir), which=written,
+                      refused=refused or None)
+    for w in written:
+        print("view %s: %s" % (w, outs[w]))
+    for p, q, s in same:
+        print("  WARNING: %s and %s look like the same picture (%.2f): a view drawn again; redraw it with ms view --fixes" % (p, q, s))
+    print("sheet: %s (Read it; a weapon's side view must point right: --mirror when it does not)" % sheet)
+    _print_consistency(job.path("ref"))
+    if refused:
+        sys.exit("not written: %s. Crop them by hand from the sheet, or draw them one at a time: ms view %s --which <view> --from %s"
+                 % ("; ".join(refused), a.job, a.src))
+
+
+def cmd_segment(a):
+    """The registered seed split into labelled parts by a segmentation model (2026-10-04; Mixar wires Tripo's and
+    Hunyuan's segmenters, and Hunyuan3D-Part is on fal): the seed goes out welded and decimated under the service's
+    face limit (the seed file's geometry is untouched), the parts come back as meshes, every seed face takes the
+    nearest part's label (`parts/<Part>/segments.json`, the ms_segment face attribute in registered.blend,
+    segments.png and segments_side.png), and a zone in the plan can name labels instead of a box: "segment": 3 or
+    [3, 5]. Material zones and glass picks then follow the seed's own part lines instead of percent boxes."""
+    job = Job(a.job)
+    m = models.resolve(a.model, kind="segment")
+    part = _part(_plan(job), a.part)
+    d = job.path("parts", part["name"])
+    blend = os.path.join(d, "registered.blend")
+    if not os.path.exists(blend):
+        sys.exit("%s is not seeded and registered yet (ms seed)" % part["name"])
+    out_json = os.path.join(d, "segments.json")
+    if os.path.exists(out_json) and not a.redo:
+        sys.exit("%s is segmented already (%s); --redo spends again" % (part["name"], out_json))
+    seg_dir = os.path.join(d, "segments")
+    os.makedirs(seg_dir, exist_ok=True)
+    print("segmenting %s with %s: $%.2f" % (part["name"], m["label"], models.price_of(m) or 0))
+    fbx = os.path.join(seg_dir, "input.fbx")
+    _blender(job, "segment_export.py", {"blend": blend, "out": fbx, "max_faces": a.max_faces},
+             "segment_export_%s" % part["name"], timeout=900)
+    os.environ["MASTERSMITH_NO_SPEND"] = "0"
+    config.NO_SPEND = False
+    url = job.fal.upload(fbx, mime="application/octet-stream")
+    out = job.fal.run(m["endpoint"], {"input_file_url": url}, timeout=1800)
+    files = [f.get("url") for f in (out.get("result_files") or []) if isinstance(f, dict) and f.get("url")]
+    if not files:
+        sys.exit("%s returned no parts: %s" % (m["label"], str(out)[:300]))
+    for stale in os.listdir(seg_dir):                     # an older run's parts never mix with these
+        if stale.startswith("part_"):
+            os.remove(os.path.join(seg_dir, stale))
+    paths = [job.fal.download(u, os.path.join(seg_dir, "part_%d.fbx" % i)) for i, u in enumerate(files)]
+    if os.path.exists(out_json):
+        os.remove(out_json)
+    ledger.record(job.dir, "segment", model=a.model, usd=job.fal.spent(), part=part["name"], parts=len(paths))
+    _blender(job, "segment_apply.py", {"blend": blend, "parts": paths, "out_json": out_json,
+                                       "out_render": os.path.join(d, "segments.png"),
+                                       "out_side_render": os.path.join(d, "segments_side.png")},
+             "segment_apply_%s" % part["name"], timeout=900)
+    if not os.path.exists(out_json):
+        sys.exit("segment_apply wrote no %s; see %s" % (out_json, job.path("segment_apply_%s.log" % part["name"])))
+    seg = json.load(open(out_json))
+    print("%d labels on %d faces ($%.2f)%s:" % (len(seg["labels"]), seg["faces"], job.fal.spent(),
+                                                "; the parts came back re-centred and were fitted to the seed's box" if seg.get("parts_refitted") else ""))
+    for lab in seg["labels"]:
+        print("  label %-3d %5.1f%%  side_box %-24s front_span %-14s %s" % (lab["label"], lab["share"] * 100, lab["side_box"],
+                                                                           lab["front_span"], lab["colour"]))
+    print("Read %s and %s, name each label, then give zones \"segment\": <label> in plan/plan_draft.json and ms plan."
+          % (os.path.join(d, "segments.png"), os.path.join(d, "segments_side.png")))
+
+
 def cmd_sheet(a):
     class J:
         pass
@@ -1176,9 +1432,35 @@ def cmd_sheet(a):
     print("six views:", out)
 
 
+def _glb_line(chk):
+    return "%s tris, %s m, %d socket(s), %d texture(s)%s, %s" % (
+        chk.get("triangles"), chk.get("dimensions_m"), len(chk.get("sockets") or {}), chk.get("images") or 0,
+        " embedded" if chk.get("images_embedded") else "", "ok" if chk.get("passed") else "; ".join(chk.get("issues") or ["not checked"]))
+
+
+def _glb_gate(job, delivery, rep):
+    """The delivered GLB read back without Blender (mastersmith/glbcheck.py, 2026-10-04, from Mixar's export
+    verification): its size, triangles, sockets and textures against report.json, its findings added to the gate
+    and the report written again. The FBX was read back at the end of assemble; the GLB never was."""
+    glb = os.path.join(delivery, "SM_%s.glb" % job.spec.name)
+    if not os.path.exists(glb):
+        return None
+    chk = glbcheck.check(glb, rep)
+    rep["glb_check"] = chk
+    gate = rep.setdefault("gate", {"ok": True, "warnings": []})
+    gate["warnings"] = [w for w in gate.get("warnings") or [] if not w.startswith("GLB: ")] + ["GLB: " + w for w in chk["issues"]]
+    gate["ok"] = not gate["warnings"]
+    with open(os.path.join(delivery, "report.json"), "w") as f:
+        json.dump(rep, f, indent=1)
+    return chk
+
+
 def cmd_package(a):
     job = Job(a.job)
     rep = json.load(open(job.path("delivery", "report.json")))
+    chk = _glb_gate(job, job.path("delivery"), rep)
+    if chk:
+        print("  GLB read back: %s" % _glb_line(chk))
     review = json.load(open(job.path("delivery", "review.json"))) if os.path.exists(job.path("delivery", "review.json")) else None
     gate = rep.get("gate") or {"ok": True, "warnings": ["assembled before the delivery gate existed"]}
     for w in gate.get("warnings") or []:
@@ -1201,7 +1483,7 @@ def cmd_status(a):
         plan = _plan(job)
         for p in plan["parts"]:
             d = job.path("parts", p["name"])
-            have = [f for f in ("side.png", "quarter.png", "seed.glb", "registered.blend") if os.path.exists(os.path.join(d, f))]
+            have = [f for f in ("side.png", "quarter.png", "seed.glb", "registered.blend", "segments.json") if os.path.exists(os.path.join(d, f))]
             reg = json.load(open(os.path.join(d, "registration.json"))) if os.path.exists(os.path.join(d, "registration.json")) else {}
             print("  %-22s %s %s" % (p["name"], have, ("iou %.2f" % reg["iou"]) if reg else ""))
     else:
@@ -1290,6 +1572,343 @@ def cmd_rig(a):
         sys.exit("the skeletal FBX does not read back at the weapon's size with a unit root: do not hand it to the engine")
     print("Read the renders. In Unreal: import SK_%s.fbx as a skeletal mesh, then the A_ clips onto its skeleton; the "
           "Muzzle bones are the sockets." % job.spec.name)
+
+
+def _mh_dir(job):
+    d = job.path("delivery", "metahuman")
+    os.makedirs(os.path.join(d, "in"), exist_ok=True)
+    return d
+
+
+def cmd_mh_conform(a):
+    """A character seed as the ONE combined mesh Unreal 5.8's "custom mesh to MetaHuman" conform takes (the owner's
+    video, 2026-10-04): Z up, facing -Y, feet on the floor, the brief's height, transforms applied, hair / lashes /
+    accessories stripped by name; the A-pose measured off its silhouette and judged against the MetaHuman template
+    (mastersmith/metahuman), front and side overlays on the template -> delivery/metahuman/<Name>_conform.glb"""
+    from .metahuman import template as mh
+    job = Job(a.job)
+    if job.spec.category != "character":
+        print("note: %s is a %s; the conform is for a humanoid character" % (job.spec.name, job.spec.category))
+    src = a.source
+    if not src:
+        for cand in (job.path("parts", a.part, "registered.blend"), job.path("parts", a.part, "seed.glb")):
+            if os.path.exists(cand):
+                src = cand
+                break
+    if not src or not os.path.exists(src):
+        sys.exit("no seed for %s (ms seed first, or --source <mesh>)" % a.part)
+    out = _mh_dir(job)
+    height = a.height if a.height is not None else job.spec.size_m
+    head = a.head
+    if head and not os.path.isabs(head) and not os.path.exists(head):
+        head = job.path(head)
+    if head and not os.path.exists(head):
+        sys.exit("no head mesh at %s" % head)
+    args = {"source": src, "extra": [p for p in (a.extra or "").split(",") if p], "name": job.spec.name, "height_m": height,
+            "out_dir": out, "template_glb": os.path.join(mh.TEMPLATES, "MH_Template.glb"),
+            "template_json": os.path.join(mh.TEMPLATES, "template.json"),
+            "strip": [s for s in (a.strip or "").split(",") if s], "head": head, "head_yaw": a.head_yaw, "head_cut_m": a.head_cut}
+    _blender(job, "mh_conform.py", args, "mh_conform", timeout=1200)
+    rep = json.load(open(os.path.join(out, "conform_report.json"), encoding="utf-8"))
+    verdict = mh.check_pose(rep)
+    rep["pose_check"] = verdict
+    json.dump(rep, open(os.path.join(out, "conform_report.json"), "w", encoding="utf-8"), indent=1)
+    print("conform mesh -> %s (%.2f m, %d tris)" % (os.path.join(out, rep["glb"]), rep["height_m"], rep["triangles"]))
+    if rep.get("head"):
+        h = rep["head"]
+        print("  head mesh -> %s (x%.3f onto the body's %.0f mm skull, cut below %.2f m, %s): the solver's HeadAndBody conform; "
+              "its renders conform_head_front/side.png" % (os.path.join(out, h["glb"]), h["scale"], h["skull_width_m"] * 1000,
+                                                             h["cut_below_m"], "textured" if h.get("textured") else "NO texture"))
+    print("  A-pose: arms %s / %s deg (template %.0f), armpit gap %.0f mm, knee gap %.0f mm, finger tips %s, head %s%s" % (
+        rep.get("arm_angle_deg_l"), rep.get("arm_angle_deg_r"), mh.load()["apose"]["arm_angle_deg"], rep.get("armpit_gap_m", 0) * 1000,
+        rep.get("leg_gap_m", 0) * 1000, rep.get("finger_tips"), rep.get("head_present"), ", hair suspected" if rep.get("hair_suspected") else ""))
+    for p in verdict["problems"]:
+        print("  PROBLEM " + p)
+    for n in verdict["notes"]:
+        print("  note " + n)
+    print("  overlays: " + ", ".join(os.path.join(out, r) for r in rep["renders"].values()) + "  (white: the seed; red: the template where the seed does not cover it)")
+    print("Read both overlays. Then in Unreal 5.8 (the metahuman skill): import the GLB, MetaHuman Character > Import > from custom "
+          "mesh > Combined, Auto Solve, Manual Solve > Save Pose (the posed DNA), then the rig and the texture sources.")
+    ledger.record(job.dir, "mh-conform", glb=rep["glb"], height_m=rep["height_m"], ok=verdict["ok"], problems=verdict["problems"])
+
+
+def cmd_mh_bake(a):
+    """The seed's colour and surface detail baked onto the POSED MetaHuman mesh Unreal generated from the conformed DNA
+    (Mesh to MetaHuman > Save Pose > Generate Skeletal Mesh > Asset Actions > Export), head on UDIM 1001 and body on
+    1002 moved onto 0-1 -> delivery/metahuman/T_<Name>_<Head|Body>_<BC|N>.png and a preview."""
+    job = Job(a.job)
+    out = _mh_dir(job)
+    src = a.source or os.path.join(out, "%s_conform.glb" % job.spec.name)
+    if not os.path.exists(src):
+        sys.exit("no conform mesh at %s: ms mh-conform first, or --source <the textured seed>" % src)
+    posed = a.posed if os.path.isabs(a.posed) else job.path(a.posed)
+    if not os.path.exists(posed):
+        sys.exit("no posed FBX at %s: export the skeletal mesh Unreal generated from the posed DNA into delivery/metahuman/in/" % posed)
+    head_src = a.head_source
+    if head_src is None:
+        cand = os.path.join(out, "%s_head.glb" % job.spec.name)
+        head_src = cand if os.path.exists(cand) else ""
+    elif head_src and not os.path.isabs(head_src) and not os.path.exists(head_src):
+        head_src = job.path(head_src)
+    args = {"source": src, "posed_fbx": posed, "name": job.spec.name, "out_dir": out, "resolution": a.resolution,
+            "cage_m": a.cage / 1000.0, "maps": ["color", "normal"] if not a.color_only else ["color"],
+            "head_source": head_src or None, "far_pass": bool(a.far_pass), "skin_color": a.skin_color,
+            "skin_parts": [p for p in (a.skin_parts or "Body").split(",") if p], "align": not a.no_align,
+            "swing_arms": not a.no_swing_arms, "body_cut_z": 0.0, "face_fit": not a.no_face_fit, "eye_inset": a.eye_inset}
+    if a.head_landmarks:
+        hl = a.head_landmarks if os.path.isabs(a.head_landmarks) else job.path(a.head_landmarks)
+        args["head_landmarks"] = json.load(open(hl, encoding="utf-8"))
+    # with a separate head the body source loses its own head above the neck the conform measured
+    crep = os.path.join(out, "conform_report.json")
+    if a.body_cut:
+        args["body_cut_z"] = float(a.body_cut)
+    elif head_src and os.path.exists(crep):
+        neck = (json.load(open(crep, encoding="utf-8")).get("head") or {}).get("neck_z_m")
+        if neck:
+            args["body_cut_z"] = float(neck)
+    if head_src:
+        print("the head bakes from %s" % head_src)
+    _blender(job, "mh_bake.py", args, "mh_bake", timeout=3600)
+    rep = json.load(open(os.path.join(out, "bake_report.json"), encoding="utf-8"))
+    al = rep["alignment"]
+    print("baked -> %s" % out)
+    for name, m in rep["maps"].items():
+        print("  %s: %dpx, %.0f%% of the texels written, %.1f%% far pass, %d nearest-point, %d skin-tinted (%s)" % (
+            name, m["resolution"], m["coverage"] * 100, m.get("far_pass_share", 0) * 100, m.get("nearest_seed_point", 0), m.get("skin_tinted", 0), m["convention"]))
+    print("  alignment: seed %.3f m, posed mesh %.3f m, centres off by %s m%s" % (al["source_height_m"], al["posed_height_m"], al["centre_offset_m"],
+          " (moved onto the seed before baking)" if al.get("shifted_onto_seed") else ""))
+    if rep.get("arms_swung_onto_seed"):
+        print("  arms swung onto the seed's hands: " + ", ".join("%s %.1f deg" % (k, v["angle_deg"]) for k, v in rep["arms_swung_onto_seed"].items()))
+    print("  faces: %s" % rep["face_split"])
+    ff = rep.get("face_fit")
+    if ff:
+        print("  face fit: %d landmark pairs onto the MetaHuman's (eyes %s / %s mm, mouth %s mm, largest vertex move %s mm)%s" % (
+            len(ff["pairs"]), ff["pairs"].get("eye_in_l", {}).get("move_mm"), ff["pairs"].get("eye_in_r", {}).get("move_mm"),
+            ff["pairs"].get("mouth", {}).get("move_mm"), ff["max_vertex_move_mm"],
+            "; not found: " + ", ".join(ff["missing"]) if ff["missing"] else ""))
+    elif head_src and not a.no_face_fit:
+        print("  face fit: FAILED (bake_report notes) - the head baked as placed; read face_fit_front.png / give --head-landmarks")
+    print("  previews: " + ", ".join(os.path.join(out, r) for r in rep["renders"].values()))
+    print("  " + rep["unreal"])
+    ledger.record(job.dir, "mh-bake", maps=sorted(rep["maps"]), alignment=al)
+
+
+def cmd_mh_attach(a):
+    """An accessory (hair, horns, ears, armour) weighted onto the built MetaHuman's skeleton and exported as a skeletal
+    mesh in centimetres, no leaf bones, read back -> delivery/metahuman/SK_<Name>_<Part>.fbx. Drop it onto the
+    MetaHuman Blueprint's Body component in Unreal."""
+    job = Job(a.job)
+    out = _mh_dir(job)
+    built = a.built if os.path.isabs(a.built) else job.path(a.built)
+    if not os.path.exists(built):
+        sys.exit("no built MetaHuman FBX at %s: export the built body (or face) skeletal mesh into delivery/metahuman/in/" % built)
+    acc = a.source
+    if not acc:
+        for cand in (job.path("parts", a.part, "registered.blend"), job.path("parts", a.part, "seed.glb")):
+            if os.path.exists(cand):
+                acc = cand
+                break
+    if not acc or not os.path.exists(acc):
+        sys.exit("no mesh for %s (a part with a seed, or --source <mesh in the conform's frame>)" % a.part)
+    args = {"built_fbx": built, "accessory": acc, "name": job.spec.name, "part": a.part, "out_dir": out, "bone": a.bone,
+            "offset_m": [float(v) for v in a.offset.split(",")] if a.offset else [0, 0, 0], "decimate_to": a.decimate_to}
+    _blender(job, "mh_attach.py", args, "mh_attach_%s" % a.part, timeout=1200)
+    rep = json.load(open(os.path.join(out, "attach_report.json"), encoding="utf-8"))
+    print("attached %s -> %s (%d tris, weights %s)" % (a.part, os.path.join(out, rep["fbx"]), rep["triangles"], rep["weights"]))
+    print("  read back: %s" % rep["fbx_check"])
+    print("  renders: " + ", ".join(os.path.join(out, r) for r in rep["renders"].values()))
+    if not rep["fbx_check"].get("ok"):
+        sys.exit("the FBX does not read back at size with a unit root: do not hand it to the engine")
+    print("In Unreal: import %s as a skeletal mesh ON the MetaHuman's body skeleton (pick it in the import dialog), then drag it "
+          "onto the MetaHuman Blueprint's Body component." % rep["fbx"])
+    ledger.record(job.dir, "mh-attach", part=a.part, fbx=rep["fbx"], weights=rep["weights"])
+
+
+def _garment_dir(job):
+    d = job.path("parts", "Garment")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _resolve(job, path, default_rel=None):
+    """A path the owner gave (absolute, or relative to the job) or, failing that, `default_rel` under the job."""
+    if path:
+        return path if os.path.isabs(path) else job.path(path)
+    return job.path(default_rel) if default_rel else None
+
+
+def cmd_garment_fit(a):
+    """A real garment cut from a seed of the character wearing the outfit, fitted onto the BUILT MetaHuman body and
+    skinned with its own weights (GARMENTS.md): the collar on the neck/spine only, the armpits by inward ray, the
+    boots rigid on the A-pose foot. `--args` takes a hand-written fit_args.json (GARMENTS.md's options in full);
+    without it the defaults are the built body/face FBX in delivery/metahuman/in/ and the sibling <Name>Outfit job's
+    seed."""
+    job = Job(a.job)
+    gdir = _garment_dir(job)
+    if a.args:
+        args = json.load(open(_resolve(job, a.args), encoding="utf-8"))
+    else:
+        mh = _mh_dir(job)
+        args = {"name": job.spec.name, "part": a.part,
+                "body_fbx": os.path.join(mh, "in", "SKM_MH_%s_BodyMesh.fbx" % job.spec.name),
+                "face_fbx": os.path.join(mh, "in", "SKM_MH_%s_FaceMesh.fbx" % job.spec.name),
+                "seed": a.seed or os.path.join(os.path.dirname(job.dir), "%sOutfit" % job.spec.name, "parts", a.part, "seed.glb"),
+                "out_dir": gdir}
+    if a.seed:
+        args["seed"] = _resolve(job, a.seed)
+    if a.out:
+        args["out_dir"] = _resolve(job, a.out)
+    for required in ("body_fbx", "seed"):
+        if not os.path.exists(args[required]):
+            sys.exit("no %s at %s (export the built body FBX / seed the outfit first)" % (required, args[required]))
+    out_dir = os.path.abspath(args["out_dir"])
+    args["out_dir"] = out_dir
+    _blender(job, "garment_fit.py", args, "garment_fit", timeout=2400)
+    rep = json.load(open(os.path.join(out_dir, "fit_report.json"), encoding="utf-8"))
+    print("fitted -> %s" % os.path.join(out_dir, "fitted.blend"))
+    print("  " + json.dumps({k: rep[k] for k in rep if k not in ("notes",)})[:2000])
+    ledger.record(job.dir, "garment-fit", part=args.get("part", "Outfit"), out_dir=out_dir)
+
+
+def cmd_garment_refit(a):
+    """A shipped garment pulled in / re-collared / lifted / re-weighted without a new seed, in one Blender process
+    (garment_refit.py, generalised off MissionCommander's r4/r5 one-off scripts): each stage writes its own numbers
+    into refit_report.json so a run can be checked, or compared with `ms garment-test --against`, stage by stage."""
+    job = Job(a.job)
+    gdir = _garment_dir(job)
+    if not a.out:
+        sys.exit("ms garment-refit needs --out <run name> (a new folder under parts/Garment/)")
+    out_dir = os.path.join(gdir, a.out)
+    src = _resolve(job, a.src, os.path.join("parts", "Garment", "fitted.blend"))
+    if not os.path.exists(src):
+        sys.exit("no garment at %s (ms garment-fit first, or --from <run>/fitted.blend)" % src)
+    order = ["reseat", "shrink", "collar", "lift", "weights"]
+    if a.stages:
+        stages = [s.strip() for s in a.stages.split(",")]
+        for s in stages:
+            if s not in order:
+                sys.exit("unknown stage %r (have: %s)" % (s, ", ".join(order)))
+        if "reseat" in stages and not (a.reseat_old and a.reseat_new):
+            sys.exit("--stages reseat needs --reseat-old and --reseat-new (the two built body FBXs)")
+        if "collar" in stages and not a.collar_face:
+            sys.exit("--stages collar needs --collar-face <built face FBX>")
+    else:
+        # the default run is every stage whose required input was given; reseat/collar need a body/face FBX pair
+        # that has no sensible default, so they are skipped (not errored) unless asked for by their own flags
+        stages = [s for s in order if s not in ("reseat", "collar") or
+                  (s == "reseat" and a.reseat_old and a.reseat_new) or (s == "collar" and a.collar_face)]
+    if a.reseat_old and not a.reseat_new or a.reseat_new and not a.reseat_old:
+        sys.exit("--reseat-old and --reseat-new go together")
+    args = {"garment": src, "object": a.object, "out_dir": out_dir, "stages": stages}
+    if "reseat" in stages:
+        args["reseat"] = {"old_body_fbx": _resolve(job, a.reseat_old), "new_body_fbx": _resolve(job, a.reseat_new),
+                          "proxy": _resolve(job, a.proxy) if a.proxy else None, "smooth": a.reseat_smooth}
+    if "shrink" in stages:
+        shrink = {"k": a.shrink_k, "floor_m": a.shrink_floor, "min_gap_m": a.shrink_min_gap, "band_m": a.shrink_band}
+        if a.proxy:
+            shrink["proxy"] = _resolve(job, a.proxy)
+        args["shrink"] = shrink
+    if "collar" in stages:
+        args["collar"] = {"face_fbx": _resolve(job, a.collar_face), "clear_m": a.collar_clear,
+                          "fade_m": a.collar_fade, "neck_r_m": a.collar_neck_r, "cap_m": a.collar_cap}
+    if "lift" in stages:
+        lift = {"clear_m": a.lift_clear, "fade_m": a.lift_fade, "cap_m": a.lift_cap}
+        if a.proxy:
+            lift["proxy"] = _resolve(job, a.proxy)
+        args["lift"] = lift
+    if "weights" in stages:
+        weights = {"near_m": a.weights_near, "far_m": a.weights_far, "min_gap_m": a.weights_min_gap}
+        if a.proxy:
+            weights["proxy"] = _resolve(job, a.proxy)
+        args["weights"] = weights
+    args = {k: v for k, v in args.items() if v is not None}
+    print("garment-refit: running %s on %s" % (", ".join(stages), src))
+    _blender(job, "garment_refit.py", args, "garment_refit_%s" % a.out, timeout=2400)
+    rep = json.load(open(os.path.join(out_dir, "refit_report.json"), encoding="utf-8"))
+    print("refit -> %s (stages: %s)" % (rep["out_blend"], ", ".join(rep["stages_run"])))
+    for stage, s in rep["stages"].items():
+        print("  %s: %s" % (stage, json.dumps(s)[:600]))
+    ledger.record(job.dir, "garment-refit", run=a.out, stages=rep["stages_run"])
+
+
+def cmd_garment_attach(a):
+    """The fitted garment skinned onto the built MetaHuman's skeleton and exported as a drop-in skeletal mesh FBX
+    (garment_attach.py: Unreal's own axis system, every bone copied byte-exact from the body FBX)."""
+    job = Job(a.job)
+    gdir = _garment_dir(job)
+    run_dir = os.path.join(gdir, a.run) if a.run else gdir
+    mh = _mh_dir(job)
+    garment = _resolve(job, a.garment, os.path.join(run_dir, "fitted.blend"))
+    if not os.path.exists(garment):
+        sys.exit("no fitted garment at %s" % garment)
+    built_fbx = _resolve(job, a.built) or os.path.join(mh, "in", "SKM_MH_%s_BodyMesh.fbx" % job.spec.name)
+    maps = [_resolve(job, m) for m in a.maps.split(",")] if a.maps else [
+        os.path.join(run_dir if os.path.exists(os.path.join(run_dir, "T_%s_Outfit_BC.png" % job.spec.name)) else gdir,
+                     "T_%s_Outfit_%s.png" % (job.spec.name, suf)) for suf in ("BC", "RM", "N")]
+    args = {"built_fbx": built_fbx, "garment": garment, "name": job.spec.name, "part": a.part, "out_dir": run_dir,
+            "maps": [m for m in maps if os.path.exists(m)]}
+    _blender(job, "garment_attach.py", args, "garment_attach_%s" % (a.run or "root"), timeout=1200)
+    rep = json.load(open(os.path.join(run_dir, "attach_%s_report.json" % a.part), encoding="utf-8"))
+    print("attached -> %s" % os.path.join(run_dir, "SK_%s_%s.fbx" % (job.spec.name, a.part)))
+    print("  drop_in: %s" % rep.get("drop_in"))
+    ledger.record(job.dir, "garment-attach", run=a.run, drop_in=rep.get("drop_in"))
+
+
+def cmd_garment_test(a):
+    """The attached garment pose-tested (garment_posetest.py: leader pose through 12 poses, measured and rendered
+    with the delivered maps) and, with --against, a before/after table of the two runs' headline numbers."""
+    job = Job(a.job)
+    gdir = _garment_dir(job)
+    run_dir = os.path.join(gdir, a.run) if a.run else gdir
+    mh = _mh_dir(job)
+    sk_fbx = _resolve(job, a.sk, os.path.join(run_dir, "SK_%s_%s.fbx" % (job.spec.name, a.part)))
+    if not os.path.exists(sk_fbx):
+        sys.exit("no %s (ms garment-attach first)" % sk_fbx)
+    body_proxy = _resolve(job, a.proxy, os.path.join(run_dir, "body_proxy.blend"))
+    if not os.path.exists(body_proxy):
+        body_proxy = os.path.join(gdir, "body_proxy.blend")
+    maps = {suf: os.path.join(run_dir, "T_%s_%s_%s.png" % (job.spec.name, a.part, suf)) for suf in ("BC", "RM", "N")}
+    out_dir = os.path.join(run_dir, "posetest")
+    args = {"body_fbx": os.path.join(mh, "in", "SKM_MH_%s_BodyMesh.fbx" % job.spec.name),
+            "face_fbx": os.path.join(mh, "in", "SKM_MH_%s_FaceMesh.fbx" % job.spec.name),
+            "sk_fbx": sk_fbx, "body_proxy": body_proxy, "maps": maps, "out_dir": out_dir,
+            "render_size": a.render_size, "samples": a.samples}
+    _blender(job, "garment_posetest.py", args, "garment_posetest_%s" % (a.run or "root"), timeout=2400)
+    rep = json.load(open(os.path.join(out_dir, "posetest_report.json"), encoding="utf-8"))
+    print("pose test -> %s (pass: %s)" % (out_dir, rep.get("pass")))
+    if rep.get("failures"):
+        for f in rep["failures"]:
+            print("  FAIL: %s" % f)
+    if a.against:
+        other_report = os.path.join(gdir, a.against, "posetest", "posetest_report.json")
+        if os.path.exists(other_report):
+            other = json.load(open(other_report, encoding="utf-8"))
+            print("  before (%s) / after (%s):" % (a.against, a.run or "root"))
+            for pose in sorted(set(rep.get("poses", {})) | set(other.get("poses", {}))):
+                b = other.get("poses", {}).get(pose, {})
+                aa = rep.get("poses", {}).get(pose, {})
+                print("    %-16s before %s  after %s" % (pose, json.dumps(b)[:120], json.dumps(aa)[:120]))
+        else:
+            print("  no report at %s to compare against" % other_report)
+    ledger.record(job.dir, "garment-test", run=a.run, passed=rep.get("pass"))
+
+
+def cmd_ue(a):
+    """Runs code on the editor's own MCP endpoint (VibeUE, execute_python_code, auto_save always false) without going
+    through any Unreal MCP tool connection - for when the session's own connection drops while the editor is fine.
+    Importable with no editor running (`from mastersmith import ue_client`); this is just its CLI."""
+    from . import ue_client
+    if a.list:
+        print(ue_client.list_tools(timeout=a.timeout))
+        return
+    if a.code is not None:
+        code = a.code
+    else:
+        # a file runs through runpy with its own globals: pasted as code it ran in the editor's shared __main__, and a
+        # global one script set (GROOM, a full asset path) was read by the next as a name and doubled into a package
+        # path - a fatal assertion that left the editor's interpreter corrupt (2026-10-07)
+        code = "import runpy; runpy.run_path(%r, run_name='__main__')" % os.path.abspath(a.file).replace("\\", "/")
+    print(ue_client.run(code, timeout=a.timeout))
 
 
 def cmd_open(a):
@@ -1478,6 +2097,80 @@ def main(argv=None):
     s.add_argument("--idle", choices=("coil",), help="a coil's slow pulse at idle")
     s.add_argument("--no-glow", action="store_true", help="leave the emissive map out (a muzzle that must not glow)")
     s.set_defaults(fn=cmd_rig)
+    s = sub.add_parser("mh-conform", help="a character seed as the combined mesh Unreal 5.8's MetaHuman conform takes, A-pose checked")
+    s.add_argument("job"); s.add_argument("--part", default="Body", help="the part whose seed is the body (default Body)")
+    s.add_argument("--source", help="a mesh file instead of the part's seed (.glb/.fbx/.obj/.blend)")
+    s.add_argument("--extra", help="more meshes to join, comma-separated (a separate high-poly head)")
+    s.add_argument("--strip", help="object-name substrings to drop before joining: hair,lash,weapon")
+    s.add_argument("--height", type=float, help="the character's height in metres (default: the brief's size)")
+    s.add_argument("--head", help="a separate head seed (parts/Head/seed.glb): placed on the body's head, exported alone as <Name>_head.glb for a HeadAndBody conform")
+    s.add_argument("--head-yaw", type=float, default=0.0, help="degrees about the vertical to turn the head seed so its face points -Y (read its renders)")
+    s.add_argument("--head-cut", type=float, default=0.12, help="metres of neck and shoulder kept below the neck on the head mesh (the tracker frames on its bounds)")
+    s.set_defaults(fn=cmd_mh_conform)
+    s = sub.add_parser("mh-bake", help="the seed's colour and normal baked onto the posed MetaHuman mesh exported from Unreal")
+    s.add_argument("job"); s.add_argument("--posed", required=True, help="the skeletal mesh FBX Unreal generated from the POSED DNA")
+    s.add_argument("--source", help="the textured seed (default delivery/metahuman/<Name>_conform.glb)")
+    s.add_argument("--resolution", type=int, default=4096); s.add_argument("--cage", type=float, default=12.0, help="ray cage in mm")
+    s.add_argument("--color-only", action="store_true")
+    s.add_argument("--head-source", help="a textured head mesh in the conform's frame for the head part (default delivery/metahuman/<Name>_head.glb when it exists; '' for none)")
+    s.add_argument("--far-pass", action="store_true", help="a second bake with a 4x cage for texels the near pass missed (off: the nearest seed point fills them)")
+    s.add_argument("--skin-color", help="#rrggbb: pale texels on --skin-parts take this colour (washed-out hands and feet)")
+    s.add_argument("--skin-parts", default="Body", help="comma-separated parts the skin colour applies to (default Body)")
+    s.add_argument("--no-align", action="store_true", help="do not move the posed mesh onto the seed's bounds centre before baking")
+    s.add_argument("--no-swing-arms", action="store_true", help="keep the posed arms where the solve left them (default: swung onto the seed's hands)")
+    s.add_argument("--body-cut", type=float, help="metres: with a head source the body seed loses everything above this (default: the conform's neck); set it at the collar top when the seed's neck skin shows above it")
+    s.add_argument("--no-face-fit", action="store_true", help="bake the head source as the conform placed it (default: its face warped onto the MetaHuman's eyes, brows, nose, mouth, chin and ears first)")
+    s.add_argument("--eye-inset", type=float, default=0.35, help="how far inside the MetaHuman's lower lid (and corners) the seed's painted eye edge goes, 0-1 of the way to the eye's centre (0: on the lid margins; a stylised eye's big iris then shows on the lid rim)")
+    s.add_argument("--head-landmarks", help="a JSON file of seed landmarks given by hand ({\"eye_in_l\": [x, y, z], ...}, metres in the conform's frame) over the detected ones")
+    s.set_defaults(fn=cmd_mh_bake)
+    s = sub.add_parser("mh-attach", help="an accessory weighted onto the built MetaHuman's skeleton, exported as a skeletal mesh")
+    s.add_argument("job"); s.add_argument("part", help="the part (its seed is the accessory) and the FBX's name")
+    s.add_argument("--built", required=True, help="the built MetaHuman's body or face skeletal mesh FBX exported from Unreal")
+    s.add_argument("--source", help="a mesh file instead of the part's seed, in the conform's frame")
+    s.add_argument("--bone", default="head", help="head | <bone> | transfer (the MetaHuman mesh's own weights)")
+    s.add_argument("--offset", help="x,y,z metres to move the accessory first")
+    s.add_argument("--decimate-to", type=int, default=0, help="triangles to decimate the accessory to (0 = keep)")
+    s.set_defaults(fn=cmd_mh_attach)
+    s = sub.add_parser("garment-fit", help="a real garment cut from the outfit's own seed, fitted onto the built body and skinned")
+    s.add_argument("job"); s.add_argument("--args", help="a hand-written fit_args.json (GARMENTS.md); default: the built body/face FBX and the sibling <Name>Outfit job's seed")
+    s.add_argument("--seed", help="the outfit seed .glb (default: ../<Name>Outfit/parts/Outfit/seed.glb)")
+    s.add_argument("--part", default="Outfit"); s.add_argument("--out", help="out_dir (default: parts/Garment)")
+    s.set_defaults(fn=cmd_garment_fit)
+    s = sub.add_parser("garment-refit", help="a shipped garment reseated/shrunk/re-collared/lifted/re-weighted, no new seed or re-fit")
+    s.add_argument("job"); s.add_argument("--out", required=True, help="a new run folder under parts/Garment/")
+    s.add_argument("--from", dest="src", help="the garment .blend to start from (default: parts/Garment/fitted.blend)")
+    s.add_argument("--object", help="the garment mesh's object name (default: the only/largest mesh)")
+    s.add_argument("--stages", help="a subset of reseat,shrink,collar,lift,weights, in that order (default: all five)")
+    s.add_argument("--proxy", help="body_proxy.blend for shrink/lift/weights (default: beside --from, or reseat's own output)")
+    s.add_argument("--reseat-old", help="the OLD built body FBX"); s.add_argument("--reseat-new", help="the NEW built body FBX")
+    s.add_argument("--reseat-smooth", type=int, default=8)
+    s.add_argument("--shrink-k", type=float, default=0.7, help="share of the gap above the floor that is kept")
+    s.add_argument("--shrink-floor", type=float, default=0.010, help="metres: gaps under this are not pulled in")
+    s.add_argument("--shrink-min-gap", type=float, default=0.006); s.add_argument("--shrink-band", type=float, default=0.06)
+    s.add_argument("--collar-face", help="the built face FBX the collar must clear")
+    s.add_argument("--collar-clear", type=float, default=0.008); s.add_argument("--collar-fade", type=float, default=0.05)
+    s.add_argument("--collar-neck-r", type=float, default=0.12, help="metres from the neck axis: how much cloth counts as the collar")
+    s.add_argument("--collar-cap", type=float, default=0.02)
+    s.add_argument("--lift-clear", type=float, default=0.006); s.add_argument("--lift-fade", type=float, default=0.03); s.add_argument("--lift-cap", type=float, default=0.015)
+    s.add_argument("--weights-near", type=float, default=0.012); s.add_argument("--weights-far", type=float, default=0.030); s.add_argument("--weights-min-gap", type=float, default=0.005)
+    s.set_defaults(fn=cmd_garment_refit)
+    s = sub.add_parser("garment-attach", help="the fitted garment skinned onto the built skeleton, exported as a drop-in FBX")
+    s.add_argument("job"); s.add_argument("--run", help="a parts/Garment/<run> folder (default: parts/Garment itself)")
+    s.add_argument("--garment", help="the fitted .blend (default: <run>/fitted.blend)")
+    s.add_argument("--built", help="the built body FBX (default: delivery/metahuman/in/SKM_MH_<Name>_BodyMesh.fbx)")
+    s.add_argument("--part", default="Outfit"); s.add_argument("--maps", help="comma-separated BC,RM,N PNG paths (default: T_<Name>_Outfit_* beside the garment)")
+    s.set_defaults(fn=cmd_garment_attach)
+    s = sub.add_parser("garment-test", help="the attached garment pose-tested; --against compares with another run")
+    s.add_argument("job"); s.add_argument("--run", help="a parts/Garment/<run> folder (default: parts/Garment itself)")
+    s.add_argument("--part", default="Outfit"); s.add_argument("--sk", help="the SK_<Name>_<Part>.fbx (default: in --run)")
+    s.add_argument("--proxy", help="body_proxy.blend (default: <run>/body_proxy.blend, else parts/Garment/body_proxy.blend)")
+    s.add_argument("--render-size", type=int, default=768); s.add_argument("--samples", type=int, default=16)
+    s.add_argument("--against", help="another run's posetest_report.json to print a before/after table against")
+    s.set_defaults(fn=cmd_garment_test)
+    s = sub.add_parser("ue", help="execute_python_code on the editor's own MCP endpoint (VibeUE), auto_save always false")
+    s.add_argument("file", nargs="?", help="a .py file to run"); s.add_argument("-c", dest="code", help="code given inline instead of a file")
+    s.add_argument("--timeout", type=int, default=600); s.add_argument("--list", action="store_true", help="list the endpoint's tools instead")
+    s.set_defaults(fn=cmd_ue)
     s = sub.add_parser("picture"); s.add_argument("job"); s.add_argument("--out", required=True); s.add_argument("--prompt", required=True)
     s.add_argument("--ref", action="append"); s.add_argument("--model", default="nano"); s.add_argument("--aspect", default="4:3")
     s.add_argument("--redraw", action="store_true", help="draw over an existing picture (ask the owner first)"); s.set_defaults(fn=cmd_picture)
@@ -1498,14 +2191,26 @@ def main(argv=None):
     s = sub.add_parser("mesh"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--vendor", default="local")
     s.add_argument("--from", dest="src", default="quarter", choices=("quarter", "side")); s.set_defaults(fn=cmd_mesh)
     s = sub.add_parser("register"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--from", dest="src", default="quarter", choices=("quarter", "side"))
+    s.add_argument("--front", choices=sorted(models.FRONT_YAW), help="the axis the pictured side faces on the vendor's seeds (+X for Tripo); "
+                   "with --from side it is a tie-breaker between the two ends")
     s.add_argument("--yaw", type=float, default=0.0); s.add_argument("--pitch", type=float, default=0.0); s.set_defaults(fn=cmd_register)
     s = sub.add_parser("fit"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--quarter", action="store_true")
     s.add_argument("--iters", type=int, default=8); s.add_argument("--step", type=float, default=0.6); s.add_argument("--no-backup", action="store_true")
     s.add_argument("--free", action="store_true", help="move vertices one by one (the old fit) instead of bending a lattice"); s.set_defaults(fn=cmd_fit)
-    s = sub.add_parser("brush"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--op", choices=("inflate", "move", "smooth", "flatten", "crease"))
+    s = sub.add_parser("brush"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--op", choices=("inflate", "move", "smooth", "flatten", "crease", "taper", "thin", "symmetrize", "scale"))
+    s.add_argument("--factor", help="scale: f or fx,fy,fz (1 leaves an axis alone)")
+    s.add_argument("--about", help="scale: each (every --segment label about its own centre, the default with --segment), centre (the part's), or a point like --at")
     s.add_argument("--at", default="centre", help="x,y,z metres in the part frame, or front/back/top/bottom/left/right/centre[+dx,dy,dz]")
     s.add_argument("--radius", type=float, default=10.0, help="mm"); s.add_argument("--strength", type=float, default=1.0, help="inflate: mm at the centre; others: 0-1")
     s.add_argument("--delta", help="move: dx,dy,dz in mm"); s.add_argument("--to", help="crease: the line's other end"); s.add_argument("--normal", help="flatten: nx,ny,nz")
+    s.add_argument("--segment", help="move/scale: these ms segment labels (a,b,...) move rigidly by --delta, or scale by --factor, instead of a falloff")
+    s.add_argument("--keep", choices=("-y", "+y"), default="-y", help="symmetrize: the half mirrored onto the other")
+    s.add_argument("--mid-y", type=float, default=0.0, help="symmetrize: the centre plane's y (mm from the part's centre)")
+    s.add_argument("--profile", help="taper: x:s,x:s,... metres along X and the half-width scale there beyond --core")
+    s.add_argument("--core", type=float, default=0.0, help="taper: the half-width (mm) left as it is about the centre plane")
+    s.add_argument("--band", type=float, help="taper: mm beyond the core over which the scale eases in (default half the core)")
+    s.add_argument("--width", type=float, default=250.0, help="thin: mm inboard of the planform edge over which the plate thins")
+    s.add_argument("--edge", type=float, default=0.25, help="thin: the share of the thickness kept at the edge")
     s.add_argument("--replay", action="store_true", help="re-apply brush_log.json to a fresh mesh"); s.set_defaults(fn=cmd_brush)
     s = sub.add_parser("cabin"); s.add_argument("job"); s.add_argument("part"); s.add_argument("--hull", help="the body part (default: the longest vendor part)")
     s.set_defaults(fn=cmd_cabin)
@@ -1530,24 +2235,43 @@ def main(argv=None):
                    help="restrained (default since 2026-10-02): bevel 0.05%% of the length up to 1.5 mm, weaker relief, "
                         "matte floors by finish; standard: the 0.2%% bevel and full relief of before")
     s.add_argument("--drop-floaters", action="store_true", help="delete the far, small loose islands of a seed (they are reported anyway)")
+    s.add_argument("--no-surface-detail", action="store_true", help="no procedural cast-surface wear and grain on a seed (always "
+                   "off for a nature brief)")
     s.set_defaults(fn=cmd_assemble)
+    s = sub.add_parser("views", help="several standard views from ONE turnaround-sheet picture call, split into ref/ref_<view>.png")
+    s.add_argument("job"); s.add_argument("--from", dest="src", required=True, help="the hero picture")
+    s.add_argument("--which", default="front,left,back,top", help="comma list of %s (a weapon's hero is its side: front,back,top)"
+                   % ", ".join(sorted(k for k in VIEW_TEXT if k != "quarter")))
+    s.add_argument("--fixes"); s.add_argument("--mirror", action="store_true", help="mirror the side view (its forward end must point right)")
+    s.add_argument("--sheet", help="split this sheet (a kept one, or the owner's) in the order of --which; nothing is drawn")
+    s.add_argument("--model", default="nano"); s.add_argument("--redraw", action="store_true", help="draw over existing views (ask the owner first)")
+    s.set_defaults(fn=cmd_views)
+    s = sub.add_parser("segment", help="the registered seed split into labelled parts that zones can name (ms models: segment models)")
+    s.add_argument("job"); s.add_argument("--part", default="Body"); s.add_argument("--model", default="hunyuan-part")
+    s.add_argument("--max-faces", type=int, default=28000, help="the decimated copy that is sent (Hunyuan takes 30k at most)")
+    s.add_argument("--redo", action="store_true", help="segment again (it costs again)"); s.set_defaults(fn=cmd_segment)
     s = sub.add_parser("sheet"); s.add_argument("glb"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
     s = sub.add_parser("models"); s.add_argument("action", nargs="?", default="list", choices=("list", "add", "remove"))
     s.add_argument("key", nargs="?"); s.add_argument("--kind", default="seed", choices=("seed", "picture")); s.add_argument("--command")
     s.add_argument("--inputs", default="single", choices=("single", "multiview")); s.add_argument("--label"); s.add_argument("--notes")
+    s.add_argument("--front", choices=sorted(models.FRONT_YAW), help="the axis its seeds usually face after import")
     s.set_defaults(fn=cmd_models)
     s = sub.add_parser("seed"); s.add_argument("job"); s.add_argument("--model", required=True, help="a seed model from ms models")
     s.add_argument("--part", default="Body"); s.add_argument("--view", choices=("hero", "left", "front", "back", "top"),
                                                              help="the picture a single-image model gets (default: the hero; a weapon's side)")
     s.add_argument("--replan", action="store_true", help="write the one-part plan again"); s.add_argument("--reseed", action="store_true")
     s.add_argument("--mirror-far-side", action="store_true", help="give a multi-view model the side view mirrored as the far side (weapons get it anyway)")
+    s.add_argument("--unchecked", action="store_true", help="seed even when the reference views disagree (ref/consistency.json)")
     s.set_defaults(fn=cmd_seed)
     s = sub.add_parser("retexture"); s.add_argument("job"); s.add_argument("--model", default="meshy-retexture")
     s.add_argument("--part", default="Body"); s.add_argument("--prompt", help="the texture described (default: the brief)")
     s.add_argument("--no-picture", action="store_true", help="text only, no hero picture as the style guide")
+    s.add_argument("--resolution", choices=("2k", "4k", "8k"), default="4k",
+                   help="base colour resolution (v7: 2k and 4k $0.30, 8k $0.45)")
     s.set_defaults(fn=cmd_retexture)
     s = sub.add_parser("refs"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true")
     s.add_argument("--sheet", action="store_true", help="also write <job>/ref_sheet.png per job (every picture, labelled, with warnings) to Read")
+    s.add_argument("--check", action="store_true", help="only check that the views describe one object (ref/consistency.json); ms seed runs it too")
     s.set_defaults(fn=cmd_refs)
     s = sub.add_parser("results"); s.add_argument("jobs", nargs="*"); s.add_argument("--no-open", action="store_true"); s.set_defaults(fn=cmd_results)
     s = sub.add_parser("serve"); s.add_argument("--restart", action="store_true"); s.add_argument("--stop", action="store_true")

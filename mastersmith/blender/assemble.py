@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import blib  # noqa: E402
 from mastersmith import sculpt  # noqa: E402
+import texel  # noqa: E402
 
 args = json.load(open(sys.argv[sys.argv.index("--") + 1]))
 NAME = args["name"]
@@ -107,15 +108,40 @@ def fit(o, p):
     return {"scale": [round(v, 4) for v in scale], "proportion": [round(v / s, 3) for v in scale]}
 
 
+def weld_seams(o):
+    """Merge the copies of each seam vertex (positions identical; UVs and normals are per corner and stay). A Tripo seed
+    is split along every UV seam - 10-19k open edges on the Training Pool pilots - and the collapse decimator kept each
+    island's rim on its own: the 8k LOD0 of a coral or a kelp came out with ~5,600 open edges, torn leaves and black
+    bake holes (2026-10-03). Welded first it decimates as one closed surface. -> vertices merged"""
+    lo, hi = blib.dims(o)
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    n = len(bm.verts)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=max((hi - lo).length * 1e-6, 1e-9))
+    merged = n - len(bm.verts)
+    if merged:
+        bm.to_mesh(o.data)
+        o.data.update()
+    bm.free()
+    return merged
+
+
 def decimate_to(o, target):
     have = blib.tri_count(o)
     if have <= target:
         return have
-    m = o.modifiers.new("dec", "DECIMATE")
-    m.ratio = max(0.02, target / float(have))
-    m.use_collapse_triangulate = True
-    blib.select_only([o])
-    bpy.ops.object.modifier_apply(modifier="dec")
+    weld_seams(o)
+    # each pass takes at most 98%: a 149k conch seed stopped at 2,980 triangles of its 2,000 (2026-10-03), so a
+    # second pass takes the rest
+    for _ in range(3):
+        have = blib.tri_count(o)
+        if have <= target * 1.02:
+            break
+        m = o.modifiers.new("dec", "DECIMATE")
+        m.ratio = max(0.02, target / float(have))
+        m.use_collapse_triangulate = True
+        blib.select_only([o])
+        bpy.ops.object.modifier_apply(modifier="dec")
     return blib.tri_count(o)
 
 
@@ -255,6 +281,15 @@ def tint_to_plan(o, colour, mats=None, metal=False, luminance_only=False, force=
             if n.type == "TEX_IMAGE" and n.image:
                 img = n.image
             todo.extend(l.from_node for i in n.inputs for l in i.links)
+        if img is None and m.name.startswith("MI_part_"):
+            # 2026-10-23: a procedural plan material (an sdf part, blib.plan_material) has no image to tint through:
+            # its zones kept the part's colour, so the steel cowls and oxblood bands of the Proteus pods came out
+            # cream (cloud test A). The zone's planned colour replaces it; the smart material adds the variation.
+            for l in list(base.links):
+                t.links.remove(l)
+            t.links.new(rgb.outputs[0], base)
+            done = True
+            continue
         mean = image_mean_luminance(img) if img is not None else None
         if not mean or mean <= 1e-4:
             continue
@@ -477,12 +512,25 @@ def split_zones(o, zones):
     pairs = np.unique(fs[rep] * n + fs[np.repeat(start_e, k_e) + within])
     face_a, face_b = pairs // n, pairs % n
     degree = np.bincount(face_a, minlength=n).astype(np.float32)
+    seg = segment_labels(o)
     for z in zones:
         lo, hi = np.array(z["box_min"]), np.array(z["box_max"])
         inside = np.all((centres >= lo) & (centres <= hi), axis=1)
-        for _ in range(2):
-            votes = np.bincount(face_a, weights=inside[face_b].astype(np.float32), minlength=n) / np.maximum(degree, 1.0)
-            inside = votes > 0.5
+        if z.get("segment") is not None:
+            # 2026-10-04: a zone named by the segmentation's labels (ms segment; the ms_segment face attribute)
+            # instead of a box: exactly the labelled faces, inside the box only when the plan gave one
+            want = segment_mask(seg, z["segment"], n)
+            if z.get("mirror"):
+                # "mirror": the labelled faces' mirror images too, when the segmenter labelled one side only
+                lo_o, hi_o = blib.dims(o)
+                want = mirror_mask(centres, want, float(lo_o.y + hi_o.y) / 2, 0.004 * (hi_o - lo_o).length)
+            inside = (inside & want) if z.get("box_given") else want
+        else:
+            for _ in range(2):
+                votes = np.bincount(face_a, weights=inside[face_b].astype(np.float32), minlength=n) / np.maximum(degree, 1.0)
+                inside = votes > 0.5
+        log("zone %s: %d faces%s" % (z.get("name"), int(inside.sum()),
+                                      " by segment %s" % z["segment"] if z.get("segment") is not None else ""))
         if inside.sum() < 20:
             continue
         made = {}
@@ -786,11 +834,35 @@ EMISSIVE = {"strength": 0.0}
 
 
 import muzzle as muzzlekit  # noqa: E402 - the open bores end-on (pure numpy, tested)
-from glasskit import crease_bars, rim_band, smooth_rim  # noqa: E402
+from glasskit import crease_bars, mirror_mask, rim_band, segment_labels, segment_mask, smooth_rim  # noqa: E402
 from glasskit import (  # noqa: E402 - the glass and cockpit passes, shared with cabin.py
     base_image, face_rgb, face_pairs, components, mesh_tree, escapes,
     exterior_faces, canopy_hull, glass_shell, pane_object, glass_paint, pick_glass,
     cut_out, line_interior, interior_material, glass_material, delete_faces, cockpit_contents)
+
+
+def zone_glass_kw(z):
+    """A glass zone's own pane, when its plan material sets "alpha" (materials.md's table: tinted or armoured glass
+    is near-black at 0.55): the material's colour as the tint (no albedo floor: glass is darker than paint), its
+    alpha and its roughness. {} means the default canopy glass. 2026-10-04: the owner asked for a canopy dark enough
+    not to see inside, and the pane's tint and alpha were fixed in glass_material."""
+    zm = z.get("material") or {}
+    a = zm.get("alpha")
+    if not isinstance(a, (int, float)) or isinstance(a, bool):
+        return {}
+    kw = {"alpha": float(a), "rough": float(zm.get("roughness", 0.05))}
+    if isinstance(zm.get("specular"), (int, float)) and not isinstance(zm.get("specular"), bool):
+        kw["specular"] = float(zm["specular"])          # 0.15-0.25 for a clear canopy the cockpit must read through
+    h = str(zm.get("color") or "").lstrip("#")
+    if len(h) == 6 and h.lower() != "808080":
+        from colour import srgb_to_linear
+        kw["tint"] = tuple(srgb_to_linear(int(h[i:i + 2], 16) / 255.0) for i in (0, 2, 4))
+    return kw
+
+
+def zone_glass_material(zname, kw):
+    """The glass material for a zone: the asset's one pane when `kw` is empty, else a pane of its own named for it."""
+    return glass_material("MI_%s_Glass" % NAME) if not kw else glass_material("MI_%s_Glass_%s" % (NAME, zname), **kw)
 
 
 def lift_roughness(mats, floor=0.35, trigger=0.40):
@@ -1171,9 +1243,52 @@ for p in args["parts"]:
                        if ((z.get("material") or {}).get("glass") or (z.get("material") or {}).get("finish") == "glass")
                        and z.get("pick") != "atlas"]
         interiors = [q for q in args["parts"] if q.get("interior") and q is not p]
+        carvers = [q for q in args["parts"] if q.get("carve") and q is not p]
+        if p.get("body") and carvers:
+            # 2026-10-04: a replacement part ("carve": true) takes the body's faces under it with it - the Kestrel's
+            # seed nozzle was a soft drum with melted rings ("gooey", owner) and an exact sdf nozzle sits in its box
+            # instead. Carved by the part's own solid outline (its convex hull, fitted into its box as the part will
+            # be, grown by a small margin for the seed's slivers), not its box: the box took the fuselage deck above
+            # the nozzle too and the hull was open from behind ("there's space I can see through thru the back").
+            # The seed file is not touched (rule 10). Reported per part so a carve that ate a wing shows.
+            from mathutils.bvhtree import BVHTree
+            me = o.data
+            nf = len(me.polygons)
+            cen = np.empty(nf * 3, np.float32)
+            me.polygons.foreach_get("center", cen)
+            cen = cen.reshape(-1, 3)
+            gone = np.zeros(nf, bool)
+            rec["carved_for"] = {}
+            for q in carvers:
+                tmp = import_part(q)
+                fit(tmp, q)
+                hb = bmesh.new()
+                hb.from_mesh(tmp.data)
+                hull = bmesh.ops.convex_hull(hb, input=hb.verts)
+                bmesh.ops.delete(hb, geom=[g for g in hull["geom_interior"] if isinstance(g, bmesh.types.BMVert)], context="VERTS")
+                tree = BVHTree.FromBMesh(hb)
+                ext = Vector(q["box_max"]) - Vector(q["box_min"])
+                margin = 0.02 * min(ext)
+                inside = np.zeros(nf, bool)
+                inbox = np.all((cen >= np.array(q["box_min"]) - margin) & (cen <= np.array(q["box_max"]) + margin), axis=1)
+                for i in np.nonzero(inbox)[0]:
+                    c = Vector(cen[i])
+                    loc, nrm, _idx, dist = tree.find_nearest(c)
+                    if loc is not None and (dist <= margin or (c - loc).dot(nrm) < 0):
+                        inside[i] = True
+                hb.free()
+                bpy.data.objects.remove(tmp, do_unlink=True)
+                rec["carved_for"][q["name"]] = int(inside.sum())
+                gone |= inside
+            if gone.any():
+                delete_faces(o, gone)
+                log("%s: %d faces carved out for %s" % (p["name"], int(gone.sum()), ", ".join(q["name"] for q in carvers)))
         if p.get("body") and interiors and glass_zones:
-            # an interior part replaces the seed's own cockpit: its contents go before the glass is picked
-            carve, cst = cockpit_contents(o, glass_zones, [(q["box_min"], q["box_max"]) for q in interiors])
+            # an interior part replaces the seed's own cockpit: its contents go before the glass is picked. The carve
+            # box is the part's own unless the plan gives "carve_box" (2026-10-23: the box the insert fills and the box
+            # the seed's painted cockpit is carved out of are two different things on the Mk II)
+            carve, cst = cockpit_contents(o, glass_zones, [(q.get("carve_min") or q["box_min"], q.get("carve_max") or q["box_max"])
+                                                           for q in interiors])
             if cst["faces"]:
                 delete_faces(o, carve)
             rec["cockpit_carved"] = cst
@@ -1205,10 +1320,12 @@ for p in args["parts"]:
                     made.append((cut_out(o, mask, "Glass_" + zname), ""))
                 if panes is not None:
                     made.append((pane_object(o, panes, "Panes_" + zname), ".panes"))
+                gkw = zone_glass_kw(z)
                 for g, tag in made:
                     g.data.materials.clear()
-                    g.data.materials.append(glass_material("MI_%s_Glass" % NAME))
-                    glass_parts.append((g, {"name": "%s.%s%s" % (p["name"], z.get("name", "glass"), tag), "kind": "glass", **gstats}))
+                    g.data.materials.append(zone_glass_material(zname, gkw))
+                    glass_parts.append((g, {"name": "%s.%s%s" % (p["name"], z.get("name", "glass"), tag), "kind": "glass",
+                                            "zone": zname, "glass_kw": gkw, **gstats}))
                 if made:
                     report.setdefault("glass_zones", []).append({"part": p["name"], "zone": z.get("name"), **gstats})
                     if z.get("line", True):
@@ -1267,8 +1384,14 @@ for p in args["parts"]:
                 rec.setdefault("glow_zones", []).append(glow_emission(mats, z["glow"]))
                 EMISSIVE["strength"] = max(EMISSIVE["strength"], float(z.get("strength") or zm.get("strength") or 8.0))
                 continue
-            tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")), force=bool(zm.get("color_lock")),
-                         flat=bool(z.get("flat")))
+            if zm.get("keep_texture") and not zm.get("color_lock"):
+                # the seed's own paint stays under the zone's surface, only metal and roughness are the plan's: a
+                # segment zone's faces run past the feature they name (the Mk II's canopy label took a ragged band of
+                # deck round the mullions, and flat brass drew that edge on the deck, 2026-10-23)
+                rec.setdefault("zones_kept_texture", []).append(z.get("name"))
+            else:
+                tint_to_plan(o, zm.get("color"), mats, metal=bool(zm.get("metal")), force=bool(zm.get("color_lock")),
+                             flat=bool(z.get("flat")))
             surface_to_plan(o, zm, mats)
             if zm.get("finish") == "emissive":
                 # a lamp, a screen, an engine glow: its colour emitted, baked into T_<Name>_E; the strength (6-12, 1-2
@@ -1662,6 +1785,9 @@ def sharp_by_angle(o, degrees=30):
 # hard-surface edges back on the vendor seeds before anything is copied, decimated or baked
 if args.get("sharpen", True):
     fitted = {p["name"] for p in args["parts"] if p.get("fitted")}
+    # "sharpen": false in the plan keeps the flattening off a part whose detail is sculpted (the Mk II's cockpit
+    # insert lost half its faces to it, 2026-10-23)
+    fitted |= {p["name"] for p in args["parts"] if p.get("sharpen") is False}
     for o, r in parts:
         if r["kind"] == "vendor" and r["name"] not in fitted:      # a fitted seed's texture mottled under the flattening
             r["sharpened"] = sharpen_planar(o)
@@ -1974,8 +2100,9 @@ if args.get("projection"):
     front_line = lo_all.x + 0.55 * (hi_all.x - lo_all.x)     # the front picture: parts that sit wholly in the front 45%
     for o, r in parts:
         spec = next((p for p in args["parts"] if p["name"] == r["name"]), {})
-        if (spec.get("material") or {}).get("glass") or spec.get("interior"):
-            continue                 # a cockpit insert is not in the side picture's paint (it is behind the glass)
+        if (spec.get("material") or {}).get("glass") or spec.get("interior") or spec.get("no_projection"):
+            continue                 # a cockpit insert is not in the side picture's paint (it is behind the glass);
+                                     # "projection": false in the plan keeps the pictures off a part (2026-10-04)
         pm_ = spec.get("material") or {}
         mode = proj.get("mode", "full")
         spec["letters_only"] = mode == "letters" or (mode == "auto" and bool(pm_.get("keep_texture")) and not pm_.get("color_lock"))
@@ -2125,6 +2252,21 @@ def frame_material():
 
 
 IS_WEAPON = (args.get("spec") or {}).get("category") == "weapon"
+SIZE_LONGEST = bool(args.get("size_longest"))
+
+if SIZE_LONGEST and float((args.get("spec") or {}).get("size_m") or 0) > 0:
+    # a natural object's brief size is its longest side, whichever axis that is (spec.size_m): the body keeps the
+    # seed's depth, and a coral seeded deeper than its side picture came out 1.09 m for a 0.9 m brief (2026-10-03).
+    # One uniform scale about the asset centre, so its proportions are the seed's.
+    every = [o for o, _r in parts + glass_parts + liner_parts + frame_parts]
+    bounds = [blib.dims(o) for o in every]
+    extent = max(max(b[1][i] for b in bounds) - min(b[0][i] for b in bounds) for i in range(3))
+    factor = float(args["spec"]["size_m"]) / max(extent, 1e-9)
+    for o in every:
+        o.data.transform(o.matrix_world.inverted() @ Matrix.Scale(factor, 4) @ o.matrix_world)
+        o.data.update()
+    report["size_longest"] = {"scale": round(factor, 4), "longest_m": round(float(args["spec"]["size_m"]), 4)}
+    log("natural object: scaled x%.4f so its longest side is the brief's %.3f m" % (factor, float(args["spec"]["size_m"])))
 
 if args.get("draft"):
     # `assemble --draft` (2026-10-02): the Havoc's glass and cockpit took ~18 full assembles of 5-9 min each for 1%
@@ -2221,8 +2363,10 @@ for o, _r in liner_parts:
 extra_tris = sum(blib.tri_count(o) for o, _r in glass_parts + liner_parts + frame_parts)
 left = max(budget - code_tris - extra_tris, int(budget * 0.3))
 areas = [surface_area(o) for o, _r in vendor]
-for (o, r), a in zip(vendor, areas):
-    share = max(2000, int(left * a / max(sum(areas), 1e-9)))
+from budget import shares as vendor_shares  # noqa: E402 - pure python, tested
+# a part's planned "triangles" fixes its share; the others split the rest by area (2026-10-23)
+wanted = [next((p.get("triangles") for p in args["parts"] if p["name"] == r["name"]), None) for _o, r in vendor]
+for (o, r), share in zip(vendor, vendor_shares(left, areas, want=wanted)):
     r["triangles_seed"] = blib.tri_count(o)
     r["triangles"] = decimate_to(o, share)
 for o, r in parts:
@@ -2304,6 +2448,38 @@ lod0.data.uv_layers["UVMap"].active = True
 lod0.data.uv_layers["UVMap"].active_render = True
 
 size = int(args.get("atlas_size", 2048))
+
+
+def texel_report(o, px):
+    """Texel density of LOD0 in its atlas (blender/texel.py, 2026-10-04): px/cm per face in world metres, summarised
+    per part by its atlas tile; a part far under the asset's mean is a gate warning."""
+    me = o.data
+    n = len(me.polygons)
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    M = np.array(o.matrix_world)
+    co = co.reshape(-1, 3) @ M[:3, :3].T + M[:3, 3]
+    lv = np.empty(len(me.loops), np.int64)
+    me.loops.foreach_get("vertex_index", lv)
+    ls = np.empty(n, np.int64)
+    me.polygons.foreach_get("loop_start", ls)
+    lt = np.empty(n, np.int64)
+    me.polygons.foreach_get("loop_total", lt)
+    uv = np.empty(len(me.loops) * 2, np.float32)
+    me.uv_layers["UVMap"].data.foreach_get("uv", uv)
+    tiles = [(r["name"], *r["atlas_tile"]) for _o, r in parts if r.get("atlas_tile")]
+    return texel.summarize(texel.polygon_areas(co, lv, ls, lt), texel.uv_polygon_areas(uv, ls, lt), px, tiles,
+                           texel.uv_centroids(uv, ls, lt))
+
+
+try:
+    report["texel_density"] = texel_report(lod0, size)
+    log("texel density: %s px/cm mean, %s at the 10th percentile, %.0f%% of the %d px atlas used%s" % (
+        report["texel_density"]["px_per_cm"], report["texel_density"]["p10_px_per_cm"],
+        report["texel_density"]["atlas_used"] * 100, size,
+        "; " + "; ".join(report["texel_density"]["warnings"]) if report["texel_density"]["warnings"] else ""))
+except Exception as exc:  # noqa: BLE001 - a measurement, never a reason to stop the bake
+    log("texel density not measured: %s" % exc)
 lo, hi = blib.dims(high)
 diag = (hi - lo).length
 
@@ -2441,6 +2617,13 @@ covered = pixels(ao)[:, :, 0] > 0.001            # texels a part landed on; the 
 report["roughness_mean"] = round(float(px[:, :, 1][covered].mean()), 3) if covered.any() else None
 report["metallic_mean"] = round(float(px[:, :, 2][covered].mean()), 3) if covered.any() else None
 report["atlas_coverage"] = round(float(covered.mean()), 3)
+from normalfix import flip_inward  # noqa: E402 - pure numpy, tested
+_npx = pixels(normal).copy()
+report["normal_inward_share"] = round(flip_inward(_npx, covered), 4)
+normal.pixels.foreach_set(_npx.ravel())
+if report["normal_inward_share"]:
+    log("normal map: %.2f%% of the texels faced into the surface (a thin sheet's back face) and were turned out"
+        % (report["normal_inward_share"] * 100))
 
 
 def dilate(img, covered, steps=None):
@@ -2498,7 +2681,7 @@ bpy.data.objects.remove(high, do_unlink=True)
 
 # glass parts keep a glass slot of their own, outside the atlas
 for o, r in glass_parts:
-    g = glass_material("MI_%s_Glass" % NAME)
+    g = zone_glass_material(r.get("zone", "glass"), r.get("glass_kw") or {})
     o.data.materials.clear()
     o.data.materials.append(g)
     blib.select_only([lod0, o])
@@ -2537,6 +2720,43 @@ def lod_copy(src, ratio, name):
     decimate_to(o, int(blib.tri_count(src) * ratio))
     return o
 
+
+if args.get("wind_masks"):
+    # a nature asset's wind masks in its vertex colour (2026-10-03, windmask.py): R the distance along the surface from
+    # the holdfast, G blade flutter, B a phase per blade - made on LOD0 so the decimated LODs carry them
+    from mathutils.bvhtree import BVHTree
+    from windmask import masks as wind_masks  # noqa: E402 - pure numpy, tested
+    me = lod0.data
+    n = len(me.vertices)
+    co = np.empty(n * 3, np.float64)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    nrm = np.empty(n * 3, np.float64)
+    me.vertices.foreach_get("normal", nrm)
+    nrm = nrm.reshape(-1, 3)
+    ed = np.empty(len(me.edges) * 2, np.int64)
+    me.edges.foreach_get("vertices", ed)
+    ed = ed.reshape(-1, 2)
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    tree = BVHTree.FromBMesh(bm)
+    span = float(np.linalg.norm(co.max(axis=0) - co.min(axis=0)))
+    eps = 1e-4 * span
+    thick = np.full(n, np.inf)
+    for i in range(n):
+        d = Vector(nrm[i])
+        hit = tree.ray_cast(Vector(co[i]) - d * eps, -d, span)
+        if hit[0] is not None:
+            thick[i] = hit[3] + eps
+    bm.free()
+    stem, flutter, phase = wind_masks(co, ed, thick)
+    attr = me.color_attributes.new("WindMask", "FLOAT_COLOR", "POINT")
+    attr.data.foreach_set("color", np.stack([stem, flutter, phase, np.ones(n, np.float32)], axis=1).ravel())
+    me.color_attributes.active_color = attr
+    me.color_attributes.render_color_index = list(me.color_attributes).index(attr)
+    report["wind_masks"] = {"stem_max": round(float(stem.max()), 3), "flutter_share": round(float((flutter > 0.4).mean()), 3),
+                            "blades": int(len(np.unique(phase[flutter > 0.4]))) if (flutter > 0.4).any() else 0}
+    log("wind masks: %s" % report["wind_masks"])
 
 lod1 = lod_copy(lod0, 0.5, "SM_%s_LOD1" % NAME)
 lod2 = lod_copy(lod1, 0.5, "SM_%s_LOD2" % NAME)
@@ -2664,7 +2884,11 @@ for o in (hull, lod1, lod2):
 # ---------------------------------------------------------------- exports
 blib.select_only([lod0] + socket_objs)
 p = os.path.join(OUT, "SM_%s.glb" % NAME)
-bpy.ops.export_scene.gltf(filepath=p, use_selection=True, export_format="GLB", export_yup=True)
+try:
+    # the wind masks stay out of the GLB: a glTF viewer multiplies COLOR_0 into the base colour and tinted the plants
+    bpy.ops.export_scene.gltf(filepath=p, use_selection=True, export_format="GLB", export_yup=True, export_vertex_color="NONE")
+except TypeError:
+    bpy.ops.export_scene.gltf(filepath=p, use_selection=True, export_format="GLB", export_yup=True)
 report["files"].append(os.path.basename(p))
 if args.get("spec"):
     txt = bpy.data.texts.new("ms_spec.json")
@@ -2674,6 +2898,11 @@ if args.get("reference") and os.path.exists(args["reference"]):
     ref_img.name = "ms_reference"
     ref_img.pack()
     ref_img.use_fake_user = True
+# 2026-10-23: the LODs counted again as exported. Counted when they were made, LOD0 read 119,996 while the GLB and
+# the .blend held 116,445 (faces dropped between the count and the export), and the package gate failed on a file
+# that was under its budget (cloud test A, round 5)
+for i, o in enumerate((lod0, lod1, lod2)):
+    report["lods"][i]["triangles"] = blib.tri_count(o)
 p = os.path.join(OUT, "SM_%s.blend" % NAME)
 bpy.ops.wm.save_as_mainfile(filepath=p, compress=True)
 report["files"].append(os.path.basename(p))
@@ -2691,9 +2920,13 @@ for ob in (lod0, lod1, lod2, hull):
 for e in socket_objs:
     e.location = e.location * CM
     e.empty_display_size *= CM
+# use_tspace (2026-10-04, Mixar's Unreal preset): the tangents the normal map was baked against travel in the file, so
+# Unreal's "import normals and tangents" reads the bake as Blender meant it instead of recomputing tangents at the seams
 fbx_kw = dict(use_selection=True, apply_unit_scale=True, global_scale=0.01, apply_scale_options="FBX_SCALE_NONE",
-              axis_forward="-Z", axis_up="Y", mesh_smooth_type="FACE", use_mesh_modifiers=True, path_mode="STRIP",
-              embed_textures=False, add_leaf_bones=False, bake_anim=False)
+              axis_forward="-Z", axis_up="Y", mesh_smooth_type="FACE", use_tspace=True, use_mesh_modifiers=True,
+              path_mode="STRIP", embed_textures=False, add_leaf_bones=False, bake_anim=False)
+if args.get("wind_masks"):
+    fbx_kw["colors_type"] = "LINEAR"           # mask values, not colours: no sRGB curve on the way to Unreal
 blib.select_only([lod0, hull] + socket_objs)
 fbx_main = os.path.join(OUT, "SM_%s.fbx" % NAME)
 bpy.ops.export_scene.fbx(filepath=fbx_main, **fbx_kw)
@@ -2737,8 +2970,9 @@ if report["lods"] and report["lods"][0]["triangles"] > int(args["tri_budget"]) *
 roles = {m["role"] for m in report["maps"]}
 warn += ["no %s map" % r for r in ("BC", "N", "ORM") if r not in roles]
 want = float((args.get("spec") or {}).get("size_m") or 0)
-if want and report.get("dimensions_m") and abs(report["dimensions_m"][0] - want) > 0.1 * want:
-    warn.append("length %.3f m is more than 10%% off the brief's %.3f m" % (report["dimensions_m"][0], want))
+got = max(report["dimensions_m"]) if SIZE_LONGEST and report.get("dimensions_m") else (report.get("dimensions_m") or [0])[0]
+if want and report.get("dimensions_m") and abs(got - want) > 0.1 * want:
+    warn.append("%s %.3f m is more than 10%% off the brief's %.3f m" % ("longest side" if SIZE_LONGEST else "length", got, want))
 if ((args.get("spec") or {}).get("glass") or any((z.get("material") or {}).get("glass") for q in args["parts"] for z in q.get("zones") or [])) \
         and not report.get("glass"):
     warn.append("glass was asked for but none was made")
@@ -2750,6 +2984,7 @@ if report.get("roughness_mean") is not None and report["roughness_mean"] < 0.3:
     warn.append("mean roughness %.2f reads as glaze (under 0.3)" % report["roughness_mean"])
 if (report.get("collision") or {}).get("triangles", 0) > 256:
     warn.append("collision hull %d tris (over 256)" % report["collision"]["triangles"])
+warn += (report.get("texel_density") or {}).get("warnings") or []
 mz = report.get("muzzle")
 if mz is not None and not mz.get("open"):
     warn.append("the muzzle looks closed: %s end-on (preview_detail_muzzle.png); a shot must be able to leave the gun"

@@ -586,7 +586,7 @@ and does it show the side, the front end and the top? Answer JSON only:
 {{"ok": true/false, "score": 0-10, "fixes": "what to change, if anything"}}"""
 
 
-def _register(job, name, glb, picture, out_dir, yaw_sweep=False, extra_yaw=0.0, extra_pitch=0.0):
+def _register(job, name, glb, picture, out_dir, yaw_sweep=False, extra_yaw=0.0, extra_pitch=0.0, front_yaw=None):
     """The seed turned so its side silhouette matches the part's side picture (blender/register_part.py). -> result or None."""
     try:
         import numpy as np
@@ -602,7 +602,7 @@ def _register(job, name, glb, picture, out_dir, yaw_sweep=False, extra_yaw=0.0, 
         render = os.path.join(out_dir, "seed_render.png")
         _blender(job, "register_part.py", {"glb": glb, "mask": mask, "picture": picture, "out_blend": blend, "out_json": res_path,
                                            "yaw_sweep": bool(yaw_sweep), "out_render": render,
-                                           "extra_yaw": extra_yaw, "extra_pitch": extra_pitch},
+                                           "extra_yaw": extra_yaw, "extra_pitch": extra_pitch, "front_yaw": front_yaw},
                  "register_%s" % name, timeout=600)
         res = json.load(open(res_path))
         if res.get("iou", 0) < 0.35:

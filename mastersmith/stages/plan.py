@@ -128,6 +128,13 @@ def object_dims(length_m, side_px, front_px):
     return float(length_m), float(width), float(height)
 
 
+def longest_side(dims, size_m):
+    """(L, W, H) scaled as one so the longest of the three is the brief's size: a nature brief's size is its longest
+    side (a 4.4 m kelp stands taller than it is long, a coral is wider than deep), not its length."""
+    k = float(size_m) / max(max(dims), 1e-9)
+    return tuple(float(v) * k for v in dims)
+
+
 def pct(v):
     try:
         return min(100.0, max(0.0, float(v)))
@@ -333,6 +340,16 @@ def clean_material(mat):
     # every lamp glowed at the default whatever the plan said (2026-10-02)
     if finish == "emissive" and isinstance(mat.get("strength"), (int, float)) and not isinstance(mat.get("strength"), bool):
         out["strength"] = round(min(50.0, max(0.5, float(mat["strength"]))), 2)
+    # 2026-10-04: a glass zone's own pane (materials.md's table: tinted or armoured glass is near-black at alpha
+    # 0.55). "alpha" set on a glass material makes the pane from its colour, alpha and roughness instead of the
+    # default canopy glass; the owner asked for a Kestrel canopy "dark so you can't see inside". Clamped to the band
+    # where a pane still reads as glass (under 0.2 it vanishes, over 0.7 it is paint).
+    if out["glass"] and isinstance(mat.get("alpha"), (int, float)) and not isinstance(mat.get("alpha"), bool):
+        out["alpha"] = round(min(0.7, max(0.2, float(mat["alpha"]))), 3)
+    # 2026-10-23: a clear bubble canopy the cockpit must read through takes a lower specular than the 0.45 default
+    # (the Mk II's pane at 0.45 mirrored the studio and three reviewers called it "a dark blue mirror")
+    if out["glass"] and isinstance(mat.get("specular"), (int, float)) and not isinstance(mat.get("specular"), bool):
+        out["specular"] = round(min(0.8, max(0.05, float(mat["specular"]))), 3)
     return out
 
 
@@ -340,15 +357,27 @@ def clean_material(mat):
 # and was patched six times on 2026-09-29 for keys the agent had already written (pick, keep, lettering, line, shell).
 TOP_KEYS = {"parts", "notes", "overall_width_m"}
 PART_KEYS = {"name", "what", "method", "side_box", "front_span", "material", "zones", "reference_detail", "skin",
-             "edge_break", "interior", "centreline", "lettering"}
+             "edge_break", "interior", "centreline", "lettering", "carve", "projection", "triangles", "sharpen",
+             "carve_box", "carve_span"}
 ZONE_KEYS = {"name", "side_box", "front_span", "material", "pick", "keep", "strength", "fill", "line", "shell", "flat",
-             "glow", "vertices", "triangles", "tolerance", "bounds"}
-MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength"}
+             "glow", "vertices", "triangles", "tolerance", "bounds", "segment", "mirror", "inner_mm"}
+MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha", "specular"}
 GLOW_KEYS = {"hue", "hue_tol", "min_sat", "min_val"}
-PICKS = ("auto", "dark", "pale", "lit", "box", "atlas", "fitted")
+PICKS = ("auto", "dark", "pale", "lit", "box", "atlas", "fitted", "hull")
 # what a validated plan.json carries besides the plan (fed back through `ms plan` it is not "ignored")
 DERIVED = {"box_min", "box_max", "color_planned", "pbr_set", "dropped", "dims_m", "side", "front", "side_grid",
-           "front_grid", "ignored"}
+           "front_grid", "ignored", "carve_min", "carve_max"}
+
+
+def clean_segment(value):
+    """A zone's segmentation label(s): one non-negative int or a non-empty list of them, else None."""
+    def ok(v):
+        return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+    if ok(value):
+        return int(value)
+    if isinstance(value, (list, tuple)) and value and all(ok(v) for v in value):
+        return [int(v) for v in value]
+    return None
 
 
 def unknown_keys(where, d, known):
@@ -423,7 +452,9 @@ def validate_plan(raw, dims, max_parts=None):
         part = {"name": name, "what": str(p.get("what") or name)[:400],
                 # 2026-09-28: an explicit "code" is kept under all-vendor too - the hybrid build codes the machined parts
                 # (rails, sights, trigger, barrel) and meshes only the sculpted ones (receiver, grip, handguard)
-                "method": method if method in ("code", "vendor") else ("vendor" if config.ALL_VENDOR else "code"),
+                # 2026-10-23: "sdf" (set by `ms sdf`, meshed into registered.blend like a seed) is kept: taken as vendor,
+                # every `ms plan` after an `ms sdf` lost it (cloud test A, 2026-10-22)
+                "method": method if method in ("code", "vendor", "sdf") else ("vendor" if config.ALL_VENDOR else "code"),
                 "side_box": [pct(v) for v in p["side_box"]], "front_span": [pct(v) for v in p["front_span"]],
                 "box_min": box_min, "box_max": box_max, "material": clean_material(p.get("material")),
                 # 2026-09-28: a code part whose shape is not the drawn one (the bullpup's folding sights) opts out of the
@@ -432,11 +463,46 @@ def validate_plan(raw, dims, max_parts=None):
         # 2026-09-29: "skin" (a code part dressed in its own diffused mesh's texture), "edge_break" (false keeps a code
         # part's edges razor sharp), "interior" (a cockpit or cabin inside the body, checked to fit in it) and an
         # explicit "centreline" pass through to the assembler
-        if str(p.get("method") or "code").lower() not in ("code", "vendor"):
-            ignored.append("%s.method=%r (code or vendor; taken as %s)" % (name, p.get("method"), part["method"]))
-        for key in ("skin", "edge_break", "interior", "centreline"):
+        if str(p.get("method") or "code").lower() not in ("code", "vendor", "sdf"):
+            ignored.append("%s.method=%r (code, vendor or sdf; taken as %s)" % (name, p.get("method"), part["method"]))
+        # 2026-10-04: "carve" (a replacement part: the body's faces inside its box go before it is placed - the
+        # Kestrel's soft seed nozzle under an exact sdf one)
+        for key in ("skin", "edge_break", "interior", "centreline", "carve"):
             if key in p:
                 part[key] = bool(p[key])
+        # 2026-10-04: "projection": false keeps the approved pictures off a part (the Kestrel's exact sdf nozzle took
+        # the side view's blurred brass ring as a yellow smear; it is bare steel by plan)
+        if p.get("projection") is False:
+            part["no_projection"] = True
+        # 2026-10-23: "triangles" fixes a vendor part's share of the triangle budget (the Mk II's cockpit insert held
+        # 9% of the surface and got 10k of 120k: its dials and HOTAS blurred away), "sharpen": false keeps the
+        # planar-flattening pass off a part whose detail is sculpted, not panelled (the same insert: 5,073 of its
+        # 10,442 faces were flattened)
+        if p.get("triangles") is not None:
+            try:
+                part["triangles"] = max(1000, int(p["triangles"]))
+            except (TypeError, ValueError):
+                ignored.append("%s.triangles=%r (a whole number of LOD0 triangles)" % (name, p.get("triangles")))
+        # an interior part is sculpted detail (seat, dash, controls) by its nature: unsharpened unless the plan says
+        # "sharpen": true (the Mk II's first insert lost its dials to the flattening before the key existed)
+        if p.get("sharpen") is False or (part.get("interior") and p.get("sharpen") is not True):
+            part["sharpen"] = False
+        # 2026-10-23: "carve_box" [x0, x1, z_top, z_bottom] (+ "carve_span" [y0, y1], the part's own span otherwise) on
+        # an interior part: the box the seed's own cockpit is carved out of, apart from the box the insert fills. The
+        # Mk II's tub box raised into the canopy carved the seed's painted cockpit "shards" under the panes, but the
+        # insert then filled that box too and every bulkhead poked through the deck (round 9's three drafts).
+        if "carve_box" in p or "carve_span" in p:
+            if not part.get("interior"):
+                ignored.append("%s.carve_box (only an interior part has a carve box; \"carve\": true for a replacement part)" % name)
+            else:
+                try:
+                    cmin, cmax = to_metres(p.get("carve_box") or p["side_box"], p.get("carve_span") or p["front_span"], dims)
+                    part["carve_min"], part["carve_max"] = cmin, cmax
+                    part["carve_box"] = [pct(v) for v in (p.get("carve_box") or p["side_box"])]
+                    if p.get("carve_span"):
+                        part["carve_span"] = [pct(v) for v in p["carve_span"]]
+                except (ValueError, TypeError) as exc:
+                    ignored.append("%s.carve_box=%r (four percents off the side grid; %s)" % (name, p.get("carve_box"), exc))
         # 2026-09-29: "lettering", side boxes (percent of the side grid) around painted words: the picture prints
         # there at full strength over the mesher's own copy, and reads the right way round on the far side
         boxes = []
@@ -454,9 +520,9 @@ def validate_plan(raw, dims, max_parts=None):
                 ignored.append("%s.lettering[%d]=%r (x1 > x0 and z_bottom > z_top)" % (name, k, b))
         if boxes:
             part["lettering"] = boxes
-        if p.get("zones") and part["method"] != "vendor":
-            ignored.append("%s.zones (zones are for vendor parts; a code part is one material)" % name)
-        if part["method"] == "vendor":
+        if p.get("zones") and part["method"] == "code":
+            ignored.append("%s.zones (zones are for vendor and sdf parts; a code part is one material)" % name)
+        if part["method"] != "code":
             zones = []
             for k, z in enumerate(p.get("zones") or []):
                 zn = "%s.zones[%s]" % (name, z.get("name") if isinstance(z, dict) else k)
@@ -465,6 +531,14 @@ def validate_plan(raw, dims, max_parts=None):
                     continue
                 ignored += unknown_keys(zn, z, ZONE_KEYS)
                 ignored += unknown_keys(zn + ".material", z.get("material"), MATERIAL_KEYS)
+                # 2026-10-04: a zone may name the segmentation's labels (`ms segment` -> parts/<Part>/segments.json)
+                # instead of, or as well as, a box: one label or a list; without a box it covers the whole part
+                segment = clean_segment(z.get("segment"))
+                if "segment" in z and segment is None:
+                    ignored.append("%s.segment=%r (a label from segments.json, or a list of them)" % (zn, z["segment"]))
+                box_given = bool(z.get("side_box"))
+                if segment is not None and not box_given:
+                    z = dict(z, side_box=[0, 100, 0, 100], front_span=z.get("front_span") or [0, 100])
                 try:
                     zmin, zmax = to_metres(z.get("side_box") or [], z.get("front_span") or p["front_span"], dims)
                 except (ValueError, TypeError) as exc:
@@ -472,7 +546,9 @@ def validate_plan(raw, dims, max_parts=None):
                     continue
                 zone = {"name": clean_name(z.get("name"), set()), "box_min": zmin, "box_max": zmax,
                         "side_box": [pct(v) for v in z["side_box"]], "material": clean_material(z.get("material"))}
-                # 2026-09-29: how a glass zone's faces are picked (auto / dark / pale / lit / box / atlas / fitted),
+                if segment is not None:
+                    zone["segment"], zone["box_given"] = segment, box_given
+                # 2026-09-29: how a glass zone's faces are picked (auto / dark / pale / lit / box / atlas / fitted / hull),
                 # how many patches it keeps, whether holes in its frame get a glass shell and the walls seen through
                 # it a lining, and an emissive zone's strength
                 if "pick" in z:
@@ -488,13 +564,13 @@ def validate_plan(raw, dims, max_parts=None):
                         ignored.append("%s dropped: %s" % (zn, panes))
                         continue
                     zone.update(panes)
-                for key in ("keep", "strength"):
+                for key in ("keep", "strength", "inner_mm"):    # inner_mm: how far behind a pane its inner skin is glass too
                     if key in z:
                         if isinstance(z[key], (int, float)) and not isinstance(z[key], bool):
                             zone[key] = z[key]
                         else:
                             ignored.append("%s.%s=%r (a number)" % (zn, key, z[key]))
-                for key in ("fill", "line", "shell", "flat"):  # shell the frame's holes; line the cockpit's backs;
+                for key in ("fill", "line", "shell", "flat", "mirror"):  # shell the frame's holes; line the cockpit's backs;
                                                                 # "shell": the whole canopy one clean shell; "flat":
                                                                 # the planned colour only, none of the texture
                     if key in z:

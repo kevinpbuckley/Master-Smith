@@ -342,3 +342,15 @@ def test_a_thin_part_standing_out_is_snapped_to_the_picture():
         assert b["side_box"][2] == pytest.approx(50, abs=0.5) and b["side_box"][3] == pytest.approx(57, abs=0.5)
         assert b["box_max"][1] - b["box_min"][1] == pytest.approx(b["box_max"][2] - b["box_min"][2], rel=0.05)   # round
         assert parts[0]["side_box"] == [0, 70, 25, 100]          # the body is not snapped
+
+
+def test_plan_keeps_an_sdf_part_and_its_zones():
+    dims = (4.0, 3.9, 1.6)
+    raw = {"parts": [{"name": "Body", "method": "vendor", "side_box": [0, 100, 0, 100], "front_span": [0, 100]},
+                     {"name": "PodL", "method": "sdf", "side_box": [5, 40, 55, 99], "front_span": [65, 83],
+                      "zones": [{"name": "Band", "side_box": [17, 22, 55, 99], "front_span": [65, 83],
+                                 "material": {"color": "#7a2a26"}}]}]}
+    plan = validate_plan(raw, dims)
+    pod = plan["parts"][1]
+    assert pod["method"] == "sdf" and [z["name"] for z in pod["zones"]] == ["Band"]
+    assert not any("PodL" in w for w in plan.get("ignored") or [])
