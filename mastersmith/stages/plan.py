@@ -135,18 +135,23 @@ def longest_side(dims, size_m):
     return tuple(float(v) * k for v in dims)
 
 
-def pct(v):
+# 2026-10-26 (hard r15): an sdf part's box is its own measured bounds and may stand past the object's frame by this
+# much (the Mk II's raised fin tip, 6 cm over the frame's top: clamped to it, fill_box squashed the fin 11% in z)
+SDF_MARGIN = 15.0
+
+
+def pct(v, margin=0.0):
     try:
-        return min(100.0, max(0.0, float(v)))
+        return min(100.0 + margin, max(-margin, float(v)))
     except (TypeError, ValueError):
         return None
 
 
-def to_metres(side_box, front_span, dims):
+def to_metres(side_box, front_span, dims, margin=0.0):
     """Percent boxes -> (box_min, box_max) in the asset frame (+X forward, +Y left, +Z up, origin at the centre)."""
     L, W, H = dims
-    x0, x1, zt, zb = (pct(v) for v in side_box)
-    y0, y1 = (pct(v) for v in front_span)
+    x0, x1, zt, zb = (pct(v, margin) for v in side_box)
+    y0, y1 = (pct(v, margin) for v in front_span)
     if None in (x0, x1, zt, zb, y0, y1):
         raise ValueError("a box has a missing number")
     x0, x1 = sorted((x0, x1))
@@ -314,6 +319,7 @@ def snap_to_silhouette(plan, threshold=0.1):
 # 2026-09-30: "concrete" and "emissive" were documented finishes but missing here, so an emissive zone came
 # out polymer and never glowed
 FINISHES = ("polymer", "rubber", "metal", "painted", "glass", "wood", "fabric", "concrete", "emissive")
+MAX_ZONES = 64                                 # zones a part may carry (2026-10-26: was 12)
 
 
 def clean_material(mat):
@@ -345,7 +351,36 @@ def clean_material(mat):
     # default canopy glass; the owner asked for a Kestrel canopy "dark so you can't see inside". Clamped to the band
     # where a pane still reads as glass (under 0.2 it vanishes, over 0.7 it is paint).
     if out["glass"] and isinstance(mat.get("alpha"), (int, float)) and not isinstance(mat.get("alpha"), bool):
-        out["alpha"] = round(min(0.7, max(0.2, float(mat["alpha"]))), 3)
+        # 2026-10-26: down to 0.08 for a clear canopy the cockpit is seen through (the Mk II's 0.07 was raised to 0.2,
+        # and with a front and a back pane in every line of sight three reviewers called the panes hazy)
+        out["alpha"] = round(min(0.7, max(0.08, float(mat["alpha"]))), 3)
+    # 2026-10-26: a kept texture's roughness floor and metallic ceiling (paint_not_chrome's 0.30 / 0.12 left the Mk II's
+    # superstructure and belly with glossy streaks and chrome patches: "reads wet plastic")
+    for key in ("roughness_min", "metal_max"):
+        if isinstance(mat.get(key), (int, float)) and not isinstance(mat.get(key), bool):
+            out[key] = round(min(1.0, max(0.0, float(mat[key]))), 3)
+    # 2026-10-26: "weather" (0-1) on a painted surface: the smart material's cavity grime raised, a 10-30 cm mottle and
+    # vertical dust streaks (three reviewers of the Mk II's exact hull: "uniform clean CG cream, no weathering")
+    if isinstance(mat.get("weather"), (int, float)) and not isinstance(mat.get("weather"), bool) and not out["glass"]:
+        out["weather"] = round(min(1.0, max(0.0, float(mat["weather"]))), 3)
+    # 2026-10-26 (hard r14): "streaks" (0-1, default 1) scales the weathering's vertical dust streaks (the r13 reviewers:
+    # "diagonal dust smears on the side decks the hero does not have")
+    if isinstance(mat.get("streaks"), (int, float)) and not isinstance(mat.get("streaks"), bool) and not out["glass"]:
+        out["streaks"] = round(min(1.0, max(0.0, float(mat["streaks"]))), 3)
+    # 2026-10-26 (hard r15): "dirt_reach" (metres, 0.002-0.2) on a surface: how far the cavity grime's ambient occlusion
+    # reaches (default 1.5% of the length, x (1 + weather): 9.8 cm on the 4 m Mk II, a fuzzy grey band at every wall
+    # foot and coaming, "fuzzy chines" and "torn paper" to all three r14 reviewers)
+    if isinstance(mat.get("dirt_reach"), (int, float)) and not isinstance(mat.get("dirt_reach"), bool) and not out["glass"]:
+        out["dirt_reach"] = round(min(0.2, max(0.002, float(mat["dirt_reach"]))), 4)
+    # 2026-10-26 (hard r16): "bump" (0-1, default 0.3) on a surface: the smart material's fine bump strength (the r15
+    # reviewers read the powder-coat set's bump on the Mk II's flat cream veneers as "crumpled paper" in close-up, where
+    # the clay render showed the geometry flat)
+    if isinstance(mat.get("bump"), (int, float)) and not isinstance(mat.get("bump"), bool) and not out["glass"]:
+        out["bump"] = round(min(1.0, max(0.0, float(mat["bump"]))), 3)
+    # 2026-10-26 (hard r14): "edge_alpha" on glass: the pane's alpha at grazing angles (alpha head-on), so a clear pane
+    # still shows its sheen and outline at an angle (three r13 reviewers: "alpha 0.16 is invisible")
+    if out["glass"] and isinstance(mat.get("edge_alpha"), (int, float)) and not isinstance(mat.get("edge_alpha"), bool):
+        out["edge_alpha"] = round(min(0.95, max(0.1, float(mat["edge_alpha"]))), 3)
     # 2026-10-23: a clear bubble canopy the cockpit must read through takes a lower specular than the 0.45 default
     # (the Mk II's pane at 0.45 mirrored the studio and three reviewers called it "a dark blue mirror")
     if out["glass"] and isinstance(mat.get("specular"), (int, float)) and not isinstance(mat.get("specular"), bool):
@@ -358,15 +393,16 @@ def clean_material(mat):
 TOP_KEYS = {"parts", "notes", "overall_width_m"}
 PART_KEYS = {"name", "what", "method", "side_box", "front_span", "material", "zones", "reference_detail", "skin",
              "edge_break", "interior", "centreline", "lettering", "carve", "projection", "triangles", "sharpen",
-             "carve_box", "carve_span"}
+             "carve_box", "carve_span", "skin_box", "skin_span", "flat_normal"}
 ZONE_KEYS = {"name", "side_box", "front_span", "material", "pick", "keep", "strength", "fill", "line", "shell", "flat",
              "glow", "vertices", "triangles", "tolerance", "bounds", "segment", "mirror", "inner_mm"}
-MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha", "specular"}
+MATERIAL_KEYS = {"color", "finish", "metal", "roughness", "glass", "keep_texture", "color_lock", "strength", "alpha", "specular",
+                 "roughness_min", "metal_max", "weather", "streaks", "edge_alpha", "dirt_reach", "bump"}
 GLOW_KEYS = {"hue", "hue_tol", "min_sat", "min_val"}
 PICKS = ("auto", "dark", "pale", "lit", "box", "atlas", "fitted", "hull")
 # what a validated plan.json carries besides the plan (fed back through `ms plan` it is not "ignored")
 DERIVED = {"box_min", "box_max", "color_planned", "pbr_set", "dropped", "dims_m", "side", "front", "side_grid",
-           "front_grid", "ignored", "carve_min", "carve_max"}
+           "front_grid", "ignored", "carve_min", "carve_max", "skin_min", "skin_max"}
 
 
 def clean_segment(value):
@@ -443,8 +479,10 @@ def validate_plan(raw, dims, max_parts=None):
         name = clean_name(p.get("name"), taken)
         ignored += unknown_keys(name, p, PART_KEYS)
         ignored += unknown_keys(name + ".material", p.get("material"), MATERIAL_KEYS)
+        sdf_part = str(p.get("method") or "").lower() == "sdf"
+        mg = SDF_MARGIN if sdf_part else 0.0
         try:
-            box_min, box_max = to_metres(p.get("side_box") or [], p.get("front_span") or [], dims)
+            box_min, box_max = to_metres(p.get("side_box") or [], p.get("front_span") or [], dims, mg)
         except (ValueError, TypeError) as exc:
             dropped.append({"name": name, "reason": str(exc)})
             continue
@@ -455,7 +493,7 @@ def validate_plan(raw, dims, max_parts=None):
                 # 2026-10-23: "sdf" (set by `ms sdf`, meshed into registered.blend like a seed) is kept: taken as vendor,
                 # every `ms plan` after an `ms sdf` lost it (cloud test A, 2026-10-22)
                 "method": method if method in ("code", "vendor", "sdf") else ("vendor" if config.ALL_VENDOR else "code"),
-                "side_box": [pct(v) for v in p["side_box"]], "front_span": [pct(v) for v in p["front_span"]],
+                "side_box": [pct(v, mg) for v in p["side_box"]], "front_span": [pct(v, mg) for v in p["front_span"]],
                 "box_min": box_min, "box_max": box_max, "material": clean_material(p.get("material")),
                 # 2026-09-28: a code part whose shape is not the drawn one (the bullpup's folding sights) opts out of the
                 # reference detail projection: the picture's hood interior printed a pale patch on the code sight
@@ -470,6 +508,27 @@ def validate_plan(raw, dims, max_parts=None):
         for key in ("skin", "edge_break", "interior", "centreline", "carve"):
             if key in p:
                 part[key] = bool(p[key])
+        # 2026-10-25: "skin": "<Part>" on an sdf or vendor part bakes THAT part's seed (parts/<Part>/registered.blend)
+        # onto this one's exact geometry - the Mk II's hull rebuilt as an SDF wedge wearing the Hi3D seed's livery
+        if isinstance(p.get("skin"), str):
+            part["skin"] = p["skin"]
+            if part["method"] == "code":
+                ignored.append("%s.skin=%r (a code part's skin is its own seed: \"skin\": true)" % (name, p["skin"]))
+        # 2026-10-25 (hard r2): "skin_box" [x0, x1, z_top, z_bottom] (+ "skin_span" [y0, y1]) is the box the skin's seed
+        # fills, its own planned box: fitted to the sdf hull's box instead, the Mk II's seed was squeezed 5% narrower and
+        # 6 cm short at the bow (the hull's box lacks its steel edges), and its livery landed off the hull's lines
+        if "skin_box" in p or "skin_span" in p:
+            if not isinstance(p.get("skin"), str):
+                ignored.append("%s.skin_box (only a part with \"skin\": \"<Part>\" has one)" % name)
+            else:
+                try:
+                    smin, smax = to_metres(p.get("skin_box") or p["side_box"], p.get("skin_span") or p["front_span"], dims)
+                    part["skin_min"], part["skin_max"] = smin, smax
+                    part["skin_box"] = [pct(v) for v in (p.get("skin_box") or p["side_box"])]
+                    if p.get("skin_span"):
+                        part["skin_span"] = [pct(v) for v in p["skin_span"]]
+                except (ValueError, TypeError, KeyError) as exc:
+                    ignored.append("%s.skin_box=%r (four percents off the side grid; %s)" % (name, p.get("skin_box"), exc))
         # 2026-10-04: "projection": false keeps the approved pictures off a part (the Kestrel's exact sdf nozzle took
         # the side view's blurred brass ring as a yellow smear; it is bare steel by plan)
         if p.get("projection") is False:
@@ -487,6 +546,11 @@ def validate_plan(raw, dims, max_parts=None):
         # "sharpen": true (the Mk II's first insert lost its dials to the flattening before the key existed)
         if p.get("sharpen") is False or (part.get("interior") and p.get("sharpen") is not True):
             part["sharpen"] = False
+        # 2026-10-26 (hard r17): "flat_normal": true writes the neutral normal over the part's atlas tile after the bake
+        # (the Mk II's bow veneer, an exact flat sheet, baked bands of tilted normals along its long ray triangles and
+        # read as "crumpled paper" in every lit front close-up while its clay and unlit renders were flat)
+        if p.get("flat_normal") is True:
+            part["flat_normal"] = True
         # 2026-10-23: "carve_box" [x0, x1, z_top, z_bottom] (+ "carve_span" [y0, y1], the part's own span otherwise) on
         # an interior part: the box the seed's own cockpit is carved out of, apart from the box the insert fills. The
         # Mk II's tub box raised into the canopy carved the seed's painted cockpit "shards" under the panes, but the
@@ -526,8 +590,9 @@ def validate_plan(raw, dims, max_parts=None):
             zones = []
             for k, z in enumerate(p.get("zones") or []):
                 zn = "%s.zones[%s]" % (name, z.get("name") if isinstance(z, dict) else k)
-                if not isinstance(z, dict) or k >= 12:
-                    ignored.append("%s (%s)" % (zn, "not a zone" if not isinstance(z, dict) else "12 zones at most"))
+                # 2026-10-26: 64 (was 12): the Mk II's paint collar follows the canopy's foot in 5 cm slabs
+                if not isinstance(z, dict) or k >= MAX_ZONES:
+                    ignored.append("%s (%s)" % (zn, "not a zone" if not isinstance(z, dict) else "%d zones at most" % MAX_ZONES))
                     continue
                 ignored += unknown_keys(zn, z, ZONE_KEYS)
                 ignored += unknown_keys(zn + ".material", z.get("material"), MATERIAL_KEYS)

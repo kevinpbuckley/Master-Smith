@@ -630,6 +630,9 @@ def smart_material(o, pbr, mats, length_m):
         # a set's own highlights (brushed-steel scratches) over the wear pass's lighter edges read as white flecks on
         # the muzzle brake and rails (2026-09-28): the variation is damped, most on metal
         spread = float(pbr.get("colour_var", 0.3))
+        # 2026-10-26 (hard r7): on weathered paint the set's fine light-and-dark is damped to a quarter at weather 1:
+        # at 0.2 it read as "a sandy speckle", "sandpaper" on the Mk II's cream (all three r6 reviewers)
+        spread *= 1.0 - 0.75 * min(1.0, float(pbr.get("weather", 0.0) or 0.0))
         var.inputs["To Min"].default_value = 1.0 - spread
         var.inputs["To Max"].default_value = 1.0 + spread
         K.new(bw.outputs[0], var.inputs["Value"])
@@ -645,14 +648,19 @@ def smart_material(o, pbr, mats, length_m):
         K.new(src, scale.inputs[0])
         K.new(var.outputs["Result"], scale.inputs["Scale"])
         # cavity dirt from ambient occlusion: darker and rougher in recesses and at the joins between parts
+        weather = float(pbr.get("weather", 0.0) or 0.0)
         ao = N.new("ShaderNodeAmbientOcclusion")
-        ao.samples = 8
-        ao.inputs["Distance"].default_value = max(0.004, 0.015 * length_m)
+        # 2026-10-26 (hard r7): the base colour bakes at one sample, so this node's own rays are all the AO gets: at 8
+        # the weathered grime (a long reach) baked as a dotted speckle round every edge ("sandpaper", the r6 reviewers)
+        ao.samples = 48 if weather > 0 else 8
+        ao.inputs["Distance"].default_value = max(0.004, 0.015 * length_m) * (1.0 + weather)
+        if pbr.get("dirt_reach") is not None:                  # 2026-10-26 (hard r15): the plan's own reach
+            ao.inputs["Distance"].default_value = float(pbr["dirt_reach"])
         dirt = N.new("ShaderNodeMapRange")
         dirt.clamp = True
         dirt.inputs["From Min"].default_value = 0.92
         dirt.inputs["From Max"].default_value = 0.5
-        dirt.inputs["To Max"].default_value = float(pbr.get("dirt", 0.3))
+        dirt.inputs["To Max"].default_value = min(0.9, float(pbr.get("dirt", 0.3)) * (1.0 + 1.2 * weather))
         K.new(ao.outputs["AO"], dirt.inputs["Value"])
         grime = N.new("ShaderNodeMix")
         grime.data_type = "RGBA"
@@ -660,9 +668,40 @@ def smart_material(o, pbr, mats, length_m):
         K.new(dirt.outputs["Result"], grime.inputs["Factor"])
         K.new(scale.outputs["Vector"], grime.inputs["A"])
         grime.inputs["B"].default_value = (0.42, 0.40, 0.38, 1.0)
+        out_col = grime.outputs["Result"]
+        # 2026-10-26 (hard r14, the r13 reviewers: "diagonal dust smears on the side decks"): "streaks" 0-1 scales them
+        streaks = float(pbr.get("streaks", 1.0) if pbr.get("streaks") is not None else 1.0)
+        if weather > 0:
+            # 2026-10-26: weathered paint (the hero's worn ship): a 10-30 cm mottle of +-4% and dust streaks running
+            # down the sides (noise stretched 10x along Z), up to 10% darker, both in object space so they bake
+            # r7 (the r6 reviewers: "a 2 mm sandy speckle"): the mottle at 40-80 cm (scale 1.6, one octave) and +-3%
+            # r8 (the r7 reviewers: "flat, uniform, no weathering: plastic"): a second mottle at 15-30 cm (scale 4.5) of
+            # -7/+5%, and the streaks to 13%; the AO's 48 rays keep the speckle away
+            for sc, st, lo_v, hi_v, f0, f1 in ((1.6, (1.0, 1.0, 1.0), 1.0 - 0.04 * weather, 1.0 + 0.03 * weather, 0.3, 0.7),
+                                               (4.5, (1.0, 1.0, 1.0), 1.0 - 0.07 * weather, 1.0 + 0.05 * weather, 0.35, 0.65),
+                                               (6.0, (1.0, 1.0, 0.1), 1.0, 1.0 - 0.13 * weather * streaks, 0.55, 0.75)):
+                mp = N.new("ShaderNodeMapping")
+                mp.inputs["Scale"].default_value = st
+                K.new(coord.outputs["Object"], mp.inputs["Vector"])
+                nz = N.new("ShaderNodeTexNoise")
+                nz.inputs["Scale"].default_value = sc
+                nz.inputs["Detail"].default_value = 0.5 if sc < 2.0 else 2.0
+                K.new(mp.outputs["Vector"], nz.inputs["Vector"])
+                rng = N.new("ShaderNodeMapRange")
+                rng.clamp = True
+                rng.inputs["From Min"].default_value = f0
+                rng.inputs["From Max"].default_value = f1
+                rng.inputs["To Min"].default_value = lo_v
+                rng.inputs["To Max"].default_value = hi_v
+                K.new(nz.outputs["Fac"], rng.inputs["Value"])
+                mul = N.new("ShaderNodeVectorMath")
+                mul.operation = "SCALE"
+                K.new(out_col, mul.inputs[0])
+                K.new(rng.outputs["Result"], mul.inputs["Scale"])
+                out_col = mul.outputs["Vector"]
         for l in list(base.links):
             K.remove(l)
-        K.new(grime.outputs["Result"], base)
+        K.new(out_col, base)
         # roughness: ours, varied by the set's, rougher in the dirt
         rough = b.inputs["Roughness"]
         r_src = rough.links[0].from_socket if rough.is_linked else None
@@ -677,7 +716,8 @@ def smart_material(o, pbr, mats, length_m):
         if maps.get("displacement"):
             d_tex = tex("displacement", False)
             bump = N.new("ShaderNodeBump")
-            bump.inputs["Strength"].default_value = float(pbr.get("bump", 0.3))
+            # r7: weathered paint takes a third of the set's fine bump (its grain was part of the "sandpaper")
+            bump.inputs["Strength"].default_value = float(pbr.get("bump", 0.3)) * (1.0 - 0.67 * min(1.0, weather))
             bump.inputs["Distance"].default_value = 0.0004
             K.new(d_tex.outputs["Color"], bump.inputs["Height"])
             nrm = b.inputs["Normal"]
@@ -750,13 +790,18 @@ def edge_break(o, width):
     return round(w * 1000, 2)
 
 
-def skin_from_seed(o, p, res=1024):
+def skin_from_seed(o, p, res=None):
     """A code part dressed in a diffusion texture: the part's own picture meshed by the vendor (parts/<Part>/
     registered.blend, `ms mesh`), fitted to the same box, and its colour baked onto the code geometry, which keeps its
     exact shape. The assembly then reads as one kind of surface instead of textured vendor parts beside flat code
     parts (owner, 2026-09-29). Texels no ray reached take the mean colour; the colour is then tinted to the plan like
     a vendor part's. -> {"coverage"} or None"""
-    sp = dict(p, kind="vendor", fill_box=True, keep_depth=False, yaw=0, blend=p["skin"], centreline=False)
+    if res is None:                                     # 2026-10-25: a 4 m hull needs the atlas's own resolution
+        ext = max(float(p["box_max"][i] - p["box_min"][i]) for i in range(3))
+        res = 4096 if ext > 2.0 else (2048 if ext > 0.6 else 1024)
+    sp = dict(p, kind="vendor", fill_box=True, keep_depth=False, yaw=0, blend=p["skin"], centreline=False, zones=[])
+    if p.get("skin_min") and p.get("skin_max"):         # 2026-10-25: the seed fills its own box, not this part's
+        sp["box_min"], sp["box_max"] = list(p["skin_min"]), list(p["skin_max"])
     s = import_part(sp)
     s.name = "Skin_" + p["name"]
     fit(s, sp)
@@ -765,7 +810,18 @@ def skin_from_seed(o, p, res=1024):
     blib.select_only([o])
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.02)
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.004)
+    # 2026-10-25 (hard r2): smart project's own packing left the Mk II's hull filling 31% of its square, so it baked at
+    # 4 px/cm in a 4k atlas; packed again (rotated, its islands' outlines) it fills about twice that
+    # 2026-10-26 (hard r3): by the islands' exact outlines (concave), the hull's square filled 0.43 packed by their
+    # convex hulls; its atlas tile reuses this layout, so the fill is the paint's px/cm twice over
+    try:
+        bpy.ops.uv.pack_islands(rotate=True, margin=0.003, shape_method="CONCAVE")
+    except (RuntimeError, TypeError) as exc:
+        try:
+            bpy.ops.uv.pack_islands(rotate=True, margin=0.003, shape_method="CONVEX")
+        except (RuntimeError, TypeError) as exc:
+            log("%s: islands not packed again (%s)" % (o.name, str(exc)[:80]))
     bpy.ops.object.mode_set(mode="OBJECT")
     o.data.uv_layers[0].name = "UVMap"
     img = bpy.data.images.new("T_skin_%s" % p["name"], res, res, alpha=False, float_buffer=False)
@@ -824,9 +880,25 @@ def skin_from_seed(o, p, res=1024):
             for l in list(b.inputs["Base Color"].links):
                 m.node_tree.links.remove(l)
             m.node_tree.links.new(n.outputs["Color"], b.inputs["Base Color"])
+    # 2026-10-25: "coverage" is the share of the whole image, its empty UV space included (the Mk II's fully painted
+    # hull read 0.145); "of_islands" is the share of the UV islands the bake reached (the bake margin can push it to 1)
+    me = o.data
+    me.calc_loop_triangles()
+    uv = np.empty(len(me.uv_layers[0].data) * 2, np.float32)
+    me.uv_layers[0].data.foreach_get("uv", uv)
+    uv = uv.reshape(-1, 2)
+    lt = np.empty(len(me.loop_triangles) * 3, np.int32)
+    me.loop_triangles.foreach_get("loops", lt)
+    lt = lt.reshape(-1, 3)
+    e1, e2 = uv[lt[:, 1]] - uv[lt[:, 0]], uv[lt[:, 2]] - uv[lt[:, 0]]
+    uv_area = float(0.5 * np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum())
+    cov = {"coverage": round(float(hit.mean()), 3), "uv_area": round(uv_area, 3),
+           "of_islands": round(min(1.0, float(hit.mean()) / max(uv_area, 1e-6)), 3), "res": res}
     pm = p.get("material") or {}
+    if pm.get("keep_texture") and not pm.get("color_lock"):      # 2026-10-25: the seed's own livery, as painted
+        return dict(cov, tinted=False)
     tint_to_plan(o, pm.get("color"), set(mats), metal=bool(pm.get("metal")), force=True)
-    return {"coverage": round(float(hit.mean()), 3)}
+    return dict(cov, tinted=True)
 
 
 LENGTH_M = float(args.get("length_m") or 1.0)
@@ -838,7 +910,7 @@ from glasskit import crease_bars, mirror_mask, rim_band, segment_labels, segment
 from glasskit import (  # noqa: E402 - the glass and cockpit passes, shared with cabin.py
     base_image, face_rgb, face_pairs, components, mesh_tree, escapes,
     exterior_faces, canopy_hull, glass_shell, pane_object, glass_paint, pick_glass,
-    cut_out, line_interior, interior_material, glass_material, delete_faces, cockpit_contents)
+    cut_out, line_interior, interior_material, glass_material, delete_faces, cockpit_contents, flatten_glass_edges)
 
 
 def zone_glass_kw(z):
@@ -853,6 +925,8 @@ def zone_glass_kw(z):
     kw = {"alpha": float(a), "rough": float(zm.get("roughness", 0.05))}
     if isinstance(zm.get("specular"), (int, float)) and not isinstance(zm.get("specular"), bool):
         kw["specular"] = float(zm["specular"])          # 0.15-0.25 for a clear canopy the cockpit must read through
+    if isinstance(zm.get("edge_alpha"), (int, float)) and not isinstance(zm.get("edge_alpha"), bool):
+        kw["edge"] = float(zm["edge_alpha"])             # 2026-10-26: the pane's alpha at grazing angles (glass_material)
     h = str(zm.get("color") or "").lstrip("#")
     if len(h) == 6 and h.lower() != "808080":
         from colour import srgb_to_linear
@@ -1233,6 +1307,9 @@ for p in args["parts"]:
             rec["edge_break_mm"] = edge_break(o, args["edge_break_m"])
         if p.get("skin") and os.path.exists(p["skin"]):
             rec["skin"] = skin_from_seed(o, p)
+    if p["kind"] == "vendor" and not glass and p.get("skin") and os.path.exists(p["skin"]):
+        # 2026-10-25: an sdf hull wearing the seed's paint ("skin": "Body" in the plan)
+        rec["skin"] = skin_from_seed(o, p)
     # code parts carry the reference's fine detail; vendor parts (and skinned code parts) already have their own texture
     if p["kind"] == "code" and args.get("detail") and p.get("reference_detail", True) and not glass and not rec.get("skin"):
         rec["reference_detail"] = add_reference_detail(o, args["detail"])
@@ -1367,7 +1444,9 @@ for p in args["parts"]:
             rec["surface_planned"] = surface_to_plan(o, pm, rest)
         else:
             rec["roughness_lift"] = lift_roughness(rest)
-            rec["paint_not_chrome"] = paint_not_chrome(rest, pm.get("finish") or ("metal" if pm.get("metal") else "painted"))
+            rec["paint_not_chrome"] = paint_not_chrome(rest, pm.get("finish") or ("metal" if pm.get("metal") else "painted"),
+                                                       metal_max=float(pm.get("metal_max", 0.12)),
+                                                       rough_min=max(0.30, float(pm.get("roughness_min", 0.30))))
         rec["kept_texture"] = keep
         if args.get("surface_detail", True):
             rec["surface_detail"] = surface_detail(o, pm, mats=rest, vendor=True)
@@ -1415,14 +1494,24 @@ for p in args["parts"]:
     if lib and not (p.get("material") or {}).get("glass"):
         length_m = float(args.get("length_m") or 1.0)
         sets = []
+        # 2026-10-26: a material's "weather" (plan) rides along to its smart material; a zone without one takes its part's
+        w_part = float((p.get("material") or {}).get("weather") or 0.0)
+        s_part = (p.get("material") or {}).get("streaks", 1.0)
+        r_part = (p.get("material") or {}).get("dirt_reach")
+        b_part = (p.get("material") or {}).get("bump")                # 2026-10-26 (hard r16): the plan's own bump
         if p["kind"] == "vendor" and args.get("tint_vendor", True):
             if not rec.get("kept_texture"):
-                sets.append((p.get("pbr_set"), rest))
+                sets.append((p.get("pbr_set"), rest, w_part, s_part, r_part, b_part))
             for z, mats in zoned:
-                sets.append((z.get("pbr_set"), mats))
+                zmat = z.get("material") or {}
+                sets.append((z.get("pbr_set"), mats, float(zmat.get("weather", w_part) or 0.0), zmat.get("streaks", s_part),
+                             zmat.get("dirt_reach", r_part), zmat.get("bump", b_part)))
         else:
-            sets.append((p.get("pbr_set"), {sl.material for sl in o.material_slots if sl.material and sl.material.node_tree}))
-        rec["smart_materials"] = sum(smart_material(o, lib[key], mats, length_m) for key, mats in sets if key in lib and mats)
+            sets.append((p.get("pbr_set"), {sl.material for sl in o.material_slots if sl.material and sl.material.node_tree},
+                         w_part, s_part, r_part, b_part))
+        rec["smart_materials"] = sum(smart_material(o, dict(lib[key], weather=w, streaks=s, dirt_reach=r,
+                                                            **({"bump": float(bp)} if bp is not None else {})), mats, length_m)
+                                     for key, mats, w, s, r, bp in sets if key in lib and mats)
     if (args.get("finish_profile") == "restrained" and p["kind"] == "vendor"
             and not glass and args.get("tint_vendor", True)):
         from restrained_finish import apply as restrained_finish
@@ -1434,6 +1523,9 @@ for p in args["parts"]:
         if slot.material:
             slot.material.name = "MS_src_%s_%s" % (p["name"], slot.material.name)
     if (p.get("material") or {}).get("glass"):
+        # 2026-10-25: a whole glass part (an sdf canopy shell) takes its own material's tint, alpha and roughness
+        rec["zone"] = p["name"]
+        rec["glass_kw"] = zone_glass_kw({"material": p.get("material") or {}})
         glass_parts.append((o, rec))
     else:
         parts.append((o, rec))
@@ -2281,6 +2373,9 @@ if args.get("draft"):
     for o, _r in frame_parts:
         o.data.materials.clear()
         o.data.materials.append(frame_material())
+    for o, r in glass_parts:                            # 2026-10-26: a whole glass part (an sdf canopy) showed its
+        o.data.materials.clear()                        # source material in the draft, opaque: the delivery's glass
+        o.data.materials.append(zone_glass_material(r.get("zone", "glass"), r.get("glass_kw") or {}))
     copies = []
     for o in [o for o, _r in parts + glass_parts + liner_parts + frame_parts]:
         c = o.copy()
@@ -2416,7 +2511,133 @@ def tile_layout(sizes, gap=0.004):
 
 # the atlas: each part keeps its own unwrap inside a square tile sized by its surface area. Packing every island of every
 # part together failed on the truck: thousands of tread islands, each with a margin, shrank to dots (7% of the atlas used)
+def uv_fill(o):
+    """The share of its own UV square (the span the tile scales it by) a part's unwrap covers, 0.05-1: the tiles are
+    sized by surface area, which assumes the unwrap fills its square (2026-10-25)."""
+    me = o.data
+    me.calc_loop_triangles()
+    uv = np.empty(len(me.uv_layers["UVMap"].data) * 2, np.float32)
+    me.uv_layers["UVMap"].data.foreach_get("uv", uv)
+    uv = uv.reshape(-1, 2)
+    lt = np.empty(len(me.loop_triangles) * 3, np.int32)
+    me.loop_triangles.foreach_get("loops", lt)
+    lt = lt.reshape(-1, 3)
+    if not len(lt):
+        return 1.0
+    e1, e2 = uv[lt[:, 1]] - uv[lt[:, 0]], uv[lt[:, 2]] - uv[lt[:, 0]]
+    area = float(0.5 * np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum())
+    span = float(np.max(uv.max(axis=0) - uv.min(axis=0)))
+    return min(1.0, max(0.05, area / max(span * span, 1e-12)))
+
+
+def uv_collapsed(o):
+    """True when most of a part's faces have almost no UV area: one long ring island scaled to the square (the Mk II's
+    steel rim edge had a 0.45 fill but a median 0.03 px/cm against its mean 1.4, 2026-10-26)."""
+    me = o.data
+    me.calc_loop_triangles()
+    n = len(me.loop_triangles)
+    if not n or not me.uv_layers:
+        return False
+    uv = np.empty(len(me.uv_layers["UVMap"].data) * 2, np.float32)
+    me.uv_layers["UVMap"].data.foreach_get("uv", uv)
+    uv = uv.reshape(-1, 2)
+    co = np.empty(len(me.vertices) * 3, np.float32)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    lt = np.empty(n * 3, np.int32)
+    me.loop_triangles.foreach_get("loops", lt)
+    vt = np.empty(n * 3, np.int32)
+    me.loop_triangles.foreach_get("vertices", vt)
+    lt, vt = lt.reshape(-1, 3), vt.reshape(-1, 3)
+    e1, e2 = uv[lt[:, 1]] - uv[lt[:, 0]], uv[lt[:, 2]] - uv[lt[:, 0]]
+    a2 = 0.5 * np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0])
+    a3 = 0.5 * np.linalg.norm(np.cross(co[vt[:, 1]] - co[vt[:, 0]], co[vt[:, 2]] - co[vt[:, 0]]), axis=1)
+    ok = a3 > 1e-12
+    if not ok.any() or a2.sum() <= 0:
+        return False
+    return float(np.median(a2[ok] / a3[ok])) < 0.25 * float(a2.sum() / a3.sum())
+
+
+def pack_tight(o, margin=0.003):
+    """An untextured part's islands packed again by their exact outlines, rotated (2026-10-26, hard r3: smart project's
+    0.02 margin left the Mk II's steel rim edge at a third of its square and 1.3 px/cm)."""
+    blib.select_only([o])
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    try:
+        bpy.ops.uv.pack_islands(rotate=True, margin=margin, shape_method="CONCAVE")
+    except (RuntimeError, TypeError) as exc:
+        log("%s: islands not packed again (%s)" % (o.name, str(exc)[:80]))
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def uses_uv_images(o):
+    """True when an image texture in the part's materials reads its UVMap (a kept texture, a baked skin): its islands
+    must stay where they are. Smart materials map their images in object space."""
+    for sl in o.material_slots:
+        m = sl.material
+        if not m or not m.node_tree:
+            continue
+        for n in m.node_tree.nodes:
+            if n.type != "TEX_IMAGE":
+                continue
+            v = n.inputs.get("Vector")
+            if v is None or not v.is_linked:
+                return True
+            src = v.links[0].from_node
+            if src.type == "UVMAP" or (src.type == "TEX_COORD" and v.links[0].from_socket.name == "UV"):
+                return True
+    return False
+
+
+for o, _r in parts:
+    # 2026-10-25: an untextured part whose unwrap fills little of its square is cut and unwrapped again first: the
+    # Mk II's steel rim edge was one hollow ring in UV (4-6% fill, 1.5 px/cm against the asset's 4.1) that no packing
+    # compacts. Seams between faces in different cells of a coarse grid (1/8 of the part's plan size) make it short
+    # strips that the angle-based unwrap lays flat and packs (0.04 -> 0.22). Fold or crossing-edge seams cut a
+    # marching-cubes mesh into thousands of islands and made it worse.
+    if uses_uv_images(o):
+        continue
+    if uv_fill(o) > 0.25 and not uv_collapsed(o):
+        pack_tight(o)
+        continue
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    M = o.matrix_world
+    lo_w, hi_w = blib.dims(o)
+    step = max((hi_w - lo_w)[:2]) / 8.0
+
+    def cell(f):
+        c = M @ f.calc_center_median()
+        return (math.floor(c.x / step), math.floor(c.y / step))
+    for e in bm.edges:
+        # 2026-10-26: and at sharp (> 60 degree) edges, so a closed bar or strip opens flat instead of crushing
+        e.seam = len(e.link_faces) == 2 and (cell(e.link_faces[0]) != cell(e.link_faces[1]) or
+                                             e.calc_face_angle(0.0) > math.radians(60))
+    bm.to_mesh(o.data)
+    bm.free()
+    blib.select_only([o])
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    try:
+        bpy.ops.uv.unwrap(method="ANGLE_BASED", margin=0.004)
+    except (RuntimeError, TypeError) as exc:
+        log("%s: not unwrapped again (%s)" % (o.name, str(exc)[:80]))
+    bpy.ops.object.mode_set(mode="OBJECT")
+    if uv_fill(o) < 0.15:
+        # 2026-10-26 (hard r3): a cage of closed box bars (the Mk II's canopy frame) has no seam along each bar, so
+        # the cells' angle-based unwrap crushed it to 0.05 fill and 0.5 px/cm; smart project cuts it at its corners
+        blib.select_only([o])
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.003)
+        bpy.ops.object.mode_set(mode="OBJECT")
+    # 2026-10-26 (hard r6): a part of hundreds of thin bars (the Mk II's panel seams, one flat colour) still filled
+    # 0.09 of its square at the 0.003 margin, 1.6 px/cm against the asset's 4.2 (the gate's texel warning); its
+    # margins were most of the square, so it packs at a third of that
+    pack_tight(o, 0.001 if uv_fill(o) < 0.15 else 0.003)
 tiles = tile_layout([math.sqrt(max(surface_area(o), 1e-12)) for o, _r in parts])
+log("atlas tiles: %s" % ", ".join("%s fill %.2f" % (r["name"], uv_fill(o)) for o, r in parts))
 for (o, r), (u0, v0, side) in zip(parts, tiles):
     src = o.data.uv_layers["UVMap"]
     dst = o.data.uv_layers.new(name="Atlas")
@@ -2593,6 +2814,22 @@ finally:
         if prev is not None:
             t.links.new(prev, b.inputs["Normal"])
 report["bevel_mm"] = round(float(args.get("bevel_m") or 0) * 1000, 2)
+# 2026-10-26 (hard r17): a part planned "flat_normal" takes the neutral normal over its whole atlas tile (an exact flat
+# sheet's bake came back in bands of tilted normals along its long ray triangles: "crumpled paper" under light)
+_flat = {p["name"] for p in args["parts"] if p.get("flat_normal")}
+if _flat:
+    px = np.empty(size * size * 4, np.float32)
+    normal.pixels.foreach_get(px)
+    px = px.reshape(size, size, 4)
+    for _o, r in parts:
+        if r["name"] in _flat and r.get("atlas_tile"):
+            u0, v0, side = r["atlas_tile"]
+            i0, i1 = int(round(v0 * size)), int(round((v0 + side) * size))
+            j0, j1 = int(round(u0 * size)), int(round((u0 + side) * size))
+            px[i0:i1, j0:j1, :3] = (0.5, 0.5, 1.0)
+            r["flat_normal"] = True
+    normal.pixels.foreach_set(px.ravel())
+    log("flat normal over the tiles of %s" % ", ".join(sorted(_flat)))
 emit = bake("E", "EMIT", True) if EMISSIVE["strength"] > 0 else None
 scn.cycles.samples = 16
 scn.world = scn.world or bpy.data.worlds.new("World")
@@ -2882,6 +3119,7 @@ for o in (hull, lod1, lod2):
     o.hide_render = False
 
 # ---------------------------------------------------------------- exports
+flatten_glass_edges()                                   # the renders are done: the exporters read a constant alpha
 blib.select_only([lod0] + socket_objs)
 p = os.path.join(OUT, "SM_%s.glb" % NAME)
 try:
@@ -2904,7 +3142,9 @@ if args.get("reference") and os.path.exists(args["reference"]):
 for i, o in enumerate((lod0, lod1, lod2)):
     report["lods"][i]["triangles"] = blib.tri_count(o)
 p = os.path.join(OUT, "SM_%s.blend" % NAME)
+flatten_glass_edges(restore=True)                       # the .blend keeps the grazing-angle glass (ms closeup)
 bpy.ops.wm.save_as_mainfile(filepath=p, compress=True)
+flatten_glass_edges()
 report["files"].append(os.path.basename(p))
 report["files"] += [m["file"] for m in report["maps"]]
 report["engine"] = args.get("engine", "unreal")

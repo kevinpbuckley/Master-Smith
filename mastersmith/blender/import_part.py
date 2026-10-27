@@ -34,18 +34,54 @@ ob.data.transform(__import__("mathutils").Matrix.Translation(-(lo + hi) * 0.5))
 ob.name = "Part"
 ob.data.materials.clear()
 ob.data.materials.append(blib.plan_material(args.get("name", "part"), args.get("material")))
-# marching cubes tiles flat faces with tiny triangles: dissolve the planar ones (2 degrees keeps every real edge)
+# marching cubes tiles flat faces with tiny triangles: dissolve the planar ones (2 degrees keeps every real edge).
+# A script's own triangles (kit.mesh_part) are kept: dissolved, a finely tessellated bubble turned faceted (2026-10-25)
 blib.select_only([ob])
-mod = ob.modifiers.new("planar", "DECIMATE")
-mod.decimate_type = "DISSOLVE"
-mod.angle_limit = math.radians(2.0)
-bpy.ops.object.modifier_apply(modifier="planar")
+if args.get("dissolve", True):
+    mod = ob.modifiers.new("planar", "DECIMATE")
+    mod.decimate_type = "DISSOLVE"
+    mod.angle_limit = math.radians(2.0)
+    bpy.ops.object.modifier_apply(modifier="planar")
+else:
+    # 2026-10-26: a script's closed pieces that overlap (a faceted canopy's 40 crease bars, its sill and its arch) made
+    # one piece by a self-union: apart, the report counted 39 islands, 12 of them "far" from the biggest
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    closed = all(len(e.link_faces) == 2 for e in bm.edges)
+    bm.verts.ensure_lookup_table()
+    seen, pieces = set(), 0
+    for v0 in bm.verts:
+        if v0.index in seen:
+            continue
+        pieces += 1
+        stack = [v0]
+        seen.add(v0.index)
+        while stack:
+            v = stack.pop()
+            for e in v.link_edges:
+                w = e.other_vert(v)
+                if w.index not in seen:
+                    seen.add(w.index)
+                    stack.append(w)
+    bm.free()
+    if closed and pieces > 1:
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        try:
+            bpy.ops.mesh.intersect_boolean(operation="UNION", use_self=True, solver="EXACT")
+        except (RuntimeError, TypeError) as exc:
+            print("[import_part] pieces not united: %s" % str(exc)[:120], flush=True)
+        bpy.ops.object.mode_set(mode="OBJECT")
+        print("[import_part] %d closed pieces united by a self-union" % pieces, flush=True)
 bpy.ops.object.mode_set(mode="EDIT")
 bpy.ops.mesh.select_all(action="SELECT")
 bpy.ops.mesh.quads_convert_to_tris()
 bpy.ops.object.mode_set(mode="OBJECT")
-# crease what is really an edge
-bpy.ops.object.shade_smooth_by_angle(angle=math.radians(30))
+# crease what is really an edge. 2026-10-26: a script's own triangles at 6 degrees: at 30 the Mk II's faceted canopy
+# (panes 8-26 degrees apart) shaded as one soft dome; a rim strip sampled every 2 cm turns under 4 degrees a step
+# 2026-10-26 (hard r17): a script may set its own angle (kit.mesh_part(..., smooth=30): a curved glass bubble)
+bpy.ops.object.shade_smooth_by_angle(angle=math.radians(args.get("smooth_deg") or (30 if args.get("dissolve", True) else 6)))
 bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(args["out_blend"]), compress=True)
 if args.get("out_render"):
     blib.setup_render(512, 24, look="preview")

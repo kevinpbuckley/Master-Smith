@@ -811,7 +811,7 @@ def interior_material(name, colour=(0.018, 0.02, 0.024), rough=0.8):
     return m
 
 
-def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05, specular=0.45):
+def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05, specular=0.45, edge=None):
     """See-through glass that reads in every viewer (Tonetta's glass skill, 2026-09-29): alpha 0.3 (below 0.2 the pane
     vanishes, above 0.7 it is paint), specular 0.45 (0.8 on grey mirrored the backdrop and read as opaque grey), no
     normal map, blended, both sides drawn. A zone's "specular" lowers it for a clear bubble canopy whose cockpit must
@@ -826,10 +826,43 @@ def glass_material(name, tint=(0.02, 0.03, 0.04), alpha=0.3, rough=0.05, specula
         b.inputs["Specular IOR Level"].default_value = float(specular)
     for l in list(b.inputs["Normal"].links):
         m.node_tree.links.remove(l)
+    if edge is not None and float(edge) > alpha:
+        # 2026-10-26 (Mk II hard r14, three reviewers: "alpha 0.16 is invisible, the bars read as loose wire"): the
+        # alpha rises from `alpha` facing the eye to `edge` at grazing angles (Layer Weight's facing, squared), so a
+        # flat pane shows its sheen and outline at an angle and stays clear head-on; the GLB gets the plain alpha
+        lw = m.node_tree.nodes.new("ShaderNodeLayerWeight")
+        lw.inputs["Blend"].default_value = 0.5
+        sq = m.node_tree.nodes.new("ShaderNodeMath")
+        sq.operation = "POWER"
+        sq.inputs[1].default_value = 2.0
+        mr = m.node_tree.nodes.new("ShaderNodeMapRange")
+        mr.clamp = True
+        mr.inputs["To Min"].default_value = alpha
+        mr.inputs["To Max"].default_value = float(edge)
+        m.node_tree.links.new(lw.outputs["Facing"], sq.inputs[0])
+        m.node_tree.links.new(sq.outputs[0], mr.inputs["Value"])
+        m.node_tree.links.new(mr.outputs["Result"], b.inputs["Alpha"])
+        m["ms_glass_edge"] = float(edge)
     m.surface_render_method = "BLENDED"
     m.use_backface_culling = False
     m["ms_glass"] = True
     return m
+
+
+def flatten_glass_edges(restore=False):
+    """The edge-alpha glass back to its plain alpha before a glTF or FBX export (they read a constant), and with
+    `restore` its grazing-angle alpha linked again (the delivered .blend keeps it for `ms closeup`)."""
+    for m in bpy.data.materials:
+        if m.get("ms_glass_edge") is None or not m.node_tree:
+            continue
+        b = next((n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        mr = next((n for n in m.node_tree.nodes if n.type == "MAP_RANGE"), None)
+        if b is None:
+            continue
+        for l in list(b.inputs["Alpha"].links):
+            m.node_tree.links.remove(l)
+        if restore and mr is not None:
+            m.node_tree.links.new(mr.outputs["Result"], b.inputs["Alpha"])
 
 
 def delete_faces(o, mask):

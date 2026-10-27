@@ -383,6 +383,25 @@ plane (not world Y=0) by mirroring the intact side with scale -1, UVs kept.
       bore = kit.cylinder(kit.mm(5.56) / 2, L * 1.1, axis="x")
       return tube - bore
   ```
+  Hull-sized exact geometry (2026-10-25, the Mk II's hull after sixteen seed rounds stayed "soft clay"): `prism(points,
+  length, axis)` extrudes a polygon (a planform, a fin), `polygon2d`, `lerp_profile(stations)` (a deck or keel line),
+  `ellipsoid`, `faceted(radii, normals)` + `facet_normals(pitches, yaws)` (a greenhouse canopy of flat panes) and
+  `faceted_edges(..., width)` (its creases, for frame bars), `plane_through`, and `custom(f)` with `kit.np` for any
+  field written by hand (a chined tent over a footprint: `max(foot2d, z - min(deck(x), rim + slope * inset))`). An sdf
+  or vendor part with `"skin": "<Part>"` is baked with THAT part's seed colour (parts/<Part>/registered.blend fitted
+  to the same box) and, with `keep_texture`, keeps it untinted: the exact hull wearing the mesher's livery.
+  What the Mk II's 18-round exact build added (2026-10-25/26, `out/ProteusMkIIHard`, every round kept under
+  `rounds/NN/`): `faceted_bars(radii, normals, r)` (round mullions on the real creases; the two-plane band wedged
+  at the corners), `kit.mesh_part(verts, faces, smooth=deg)` (a part given as its own triangles: a 2-4 mm blade or
+  pane a voxel grid turns into foil), `decimate` inside `write_glb` (a 650k-triangle hull in seconds; Blender's planar
+  dissolve took 12 minutes); plan keys `"skin_box"` / `"skin_span"` (the box the skin's seed fills when it is not the
+  part's), `"flat_normal": true` (the neutral normal written over a part's atlas tile after the bake: thin veneers
+  baked tilted-normal bands), `"edge_alpha"` on glass (alpha at grazing angles, alpha head-on: a clear pane that
+  still shows), and on a painted surface `"weather"` (0-1: cavity grime up, a 10-30 cm mottle, dust streaks),
+  `"streaks"` (0-1), `"dirt_reach"` (metres) and `"bump"` (0-1); a part may carry 64 zones (was 12). A hard build has
+  no `ms_segment` labels: its rig picks surfaces by the scripts' own numbers (`out/ProteusMkIIHard/rig_ship_hard.py`:
+  pods by distance from their axis, not a box). The loop's reviewers plateaued at 6.65/10 asking for weathered
+  livery paint and a real interior, which are not sdf work.
   Idioms: a Picatinny rail = `box` minus `box(slot).repeat([mm(10), 0, 0], [n, 1, 1])`; a muzzle brake = `cylinder`
   minus `cylinder(port, axis="y").repeat(...)` minus the bore; a moulded join = `smooth_union(a, b, mm(2))`; a
   rounded body = `rounded_box`; a tapered stock comb = `wedge`; symmetric features = `.mirror("y")`. Sizes come

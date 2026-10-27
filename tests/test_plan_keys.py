@@ -102,3 +102,73 @@ def test_a_zone_may_name_segmentation_labels_instead_of_a_box():
     assert zones["Barrel"]["side_box"] == [0, 100, 0, 100]                    # the whole part: the labels decide
     assert zones["Pads"]["segment"] == [1, 4] and zones["Pads"]["box_given"] is True
     assert "segment" not in zones["Bad"] and any("Bad].segment" in s for s in plan["ignored"])
+
+
+def test_a_skinned_part_may_fit_its_seed_to_a_box_of_its_own():
+    """2026-10-25 (hard r2): the skin's seed fills its own box; fitted to the sdf hull's it was squeezed 5% narrower."""
+    hull = _part(name="Hull", skin="Body", side_box=[1, 98, 4, 100], front_span=[3, 97], skin_box=[0, 100, 0, 100], skin_span=[0, 100])
+    plain = _part(name="Fin", side_box=[0, 20, 0, 50], skin_box=[0, 100, 0, 100])
+    plan = planmod.validate_plan({"parts": [hull, plain]}, DIMS)
+    parts = {p["name"]: p for p in plan["parts"]}
+    h = parts["Hull"]
+    assert h["skin_min"][0] < h["box_min"][0] and h["skin_max"][1] > h["box_max"][1]
+    assert "skin_min" not in parts["Fin"] and any("Fin.skin_box" in s for s in plan["ignored"])
+    assert planmod.validate_plan(plan, DIMS)["ignored"] == []
+
+
+def test_kept_texture_floor_keys_and_clear_glass():
+    """2026-10-26: a kept texture's roughness floor and metallic ceiling reach the assembler; a clear canopy's alpha
+    goes down to 0.08."""
+    m = planmod.clean_material({"finish": "painted", "keep_texture": True, "roughness_min": 0.62, "metal_max": 0.02})
+    assert m["roughness_min"] == 0.62 and m["metal_max"] == 0.02
+    assert "roughness_min" not in planmod.clean_material({"finish": "painted"})
+    # 2026-10-26: "weather" on paint, clamped to 0-1, never on glass
+    assert planmod.clean_material({"finish": "painted", "weather": 1.7})["weather"] == 1.0
+    assert "weather" not in planmod.clean_material({"finish": "glass", "weather": 0.5})
+    assert planmod.clean_material({"finish": "glass", "alpha": 0.1})["alpha"] == 0.1
+    assert planmod.clean_material({"finish": "glass", "alpha": 0.01})["alpha"] == 0.08
+
+
+def test_streaks_and_edge_alpha_pass_through_clamped():
+    """2026-10-26 (hard r14): "streaks" on paint and "edge_alpha" on glass reach the assembler, clamped."""
+    paint = {"name": "Deck", "side_box": [0, 50, 0, 50], "material": {"finish": "painted", "weather": 0.6, "streaks": 3}}
+    glass = {"name": "Pane", "side_box": [50, 90, 0, 40], "material": {"finish": "glass", "alpha": 0.2, "edge_alpha": 0.7}}
+    plan = planmod.validate_plan({"parts": [_part(zones=[paint, glass])]}, DIMS)
+    zones = {z["name"]: z for z in plan["parts"][0]["zones"]}
+    assert zones["Deck"]["material"]["streaks"] == 1.0 and zones["Deck"]["material"]["weather"] == 0.6
+    assert zones["Pane"]["material"]["edge_alpha"] == 0.7
+    assert "edge_alpha" not in zones["Deck"]["material"]
+    assert plan["ignored"] == []
+
+
+def test_dirt_reach_and_sdf_box_margin():
+    """2026-10-26 (hard r15): "dirt_reach" reaches the assembler clamped; an sdf part's box may stand past the frame
+    (the Mk II's raised fin tip), any other part's is clamped to it."""
+    paint = {"name": "Deck", "side_box": [0, 50, 0, 50], "material": {"finish": "painted", "weather": 0.6, "dirt_reach": 0.5}}
+    sdf = _part(name="Fin", method="sdf", side_box=[0, 20, -6, 50], zones=[paint])
+    vendor = _part(name="Pod", side_box=[0, 20, -6, 50])
+    plan = planmod.validate_plan({"parts": [sdf, vendor]}, DIMS)
+    parts = {p["name"]: p for p in plan["parts"]}
+    assert parts["Fin"]["zones"][0]["material"]["dirt_reach"] == 0.2
+    assert parts["Fin"]["side_box"][2] == -6 and abs(parts["Fin"]["box_max"][2] - (0.15 + 0.06 * 0.3)) < 1e-9
+    assert parts["Pod"]["side_box"][2] == 0 and abs(parts["Pod"]["box_max"][2] - 0.15) < 1e-9
+    assert plan["ignored"] == []
+
+
+def test_bump_key():
+    """2026-10-26 (hard r16): a surface's "bump" reaches the assembler clamped to 0-1; glass takes none."""
+    paint = {"name": "Deck", "side_box": [0, 50, 0, 50], "material": {"finish": "painted", "bump": 1.7}}
+    part = _part(name="Veneer", method="sdf", zones=[paint], material={"finish": "painted", "bump": 0.05})
+    plan = planmod.validate_plan({"parts": [part]}, DIMS)
+    p = plan["parts"][0]
+    assert p["material"]["bump"] == 0.05 and p["zones"][0]["material"]["bump"] == 1.0
+    assert plan["ignored"] == []
+
+
+def test_flat_normal_key():
+    """2026-10-26 (hard r17): "flat_normal": true on a part reaches the assembler; anything else is not set."""
+    plan = planmod.validate_plan({"parts": [_part(name="Veneer", method="sdf", flat_normal=True),
+                                            _part(name="Other", method="sdf", flat_normal="yes")]}, DIMS)
+    a, b = plan["parts"]
+    assert a.get("flat_normal") is True and "flat_normal" not in b
+    assert plan["ignored"] == []

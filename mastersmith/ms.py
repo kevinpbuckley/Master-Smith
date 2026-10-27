@@ -861,13 +861,19 @@ def cmd_sdf(a):
         sys.exit("no script: write %s with `def part(kit, L, W, H)` returning a kit shape (see mastersmith/sdfkit.py)" % src)
     L, W, H = [part["box_max"][i] - part["box_min"][i] for i in range(3)]
     shape = sdfkit.run_part_script(open(src, encoding="utf-8").read(), L, W, H)
-    voxel = (a.voxel / 1000.0) if a.voxel else sdfkit.auto_voxel(L, W, H)
-    half = [L / 2, W / 2, H / 2]
-    verts, faces = sdfkit.mesh(shape, [-h for h in half], half, voxel)
     glb = os.path.join(d, "seed.glb")
-    sdfkit.write_glb(verts, faces, glb)
-    print("sdf mesh: %d tris at %.2f mm voxels -> %s" % (len(faces), voxel * 1000, glb))
-    _blender(job, "import_part.py", {"glb": glb, "material": part["material"], "name": part["name"],
+    explicit = isinstance(shape, sdfkit.MeshPart)
+    if explicit:                                         # 2026-10-25: the script's own triangles, written as they are
+        sdfkit.write_glb(shape.verts, shape.faces, glb, target=10 ** 9)
+        print("mesh part: %d tris -> %s" % (len(shape.faces), glb))
+    else:
+        voxel = (a.voxel / 1000.0) if a.voxel else sdfkit.auto_voxel(L, W, H)
+        half = [L / 2, W / 2, H / 2]
+        verts, faces = sdfkit.mesh(shape, [-h for h in half], half, voxel)
+        sdfkit.write_glb(verts, faces, glb)
+        print("sdf mesh: %d tris at %.2f mm voxels -> %s" % (len(faces), voxel * 1000, glb))
+    _blender(job, "import_part.py", {"glb": glb, "material": part["material"], "name": part["name"], "dissolve": not explicit,
+                                     "smooth_deg": shape.smooth if explicit else None,
                                      "out_blend": os.path.join(d, "registered.blend"),
                                      "out_render": os.path.join(d, "seed_render.png"), "out_json": os.path.join(d, "import.json")},
              "import_%s" % part["name"])
@@ -1016,6 +1022,12 @@ def cmd_assemble(a):
             continue
         fit = json.load(open(os.path.join(d, "fit.json"))) if os.path.exists(os.path.join(d, "fit.json")) else {}
         is_largest = p["name"] == largest["name"]
+        skin = None
+        if isinstance(p.get("skin"), str):               # 2026-10-25: another part's seed baked onto this exact geometry
+            skin = job.path("parts", p["skin"], "registered.blend")
+            if not os.path.exists(skin):
+                print("  %s: \"skin\": %r but %s is missing; built as is" % (p["name"], p["skin"], skin))
+                skin = None
         parts.append({"name": p["name"], "kind": "vendor", "box_min": p["box_min"], "box_max": p["box_max"], "material": p["material"],
                       "fitted": os.path.exists(os.path.join(d, "fit_report.json")), "interior": bool(p.get("interior")), "body": is_largest,
                       "centreline": bool(p.get("centreline")), "zones": p.get("zones") or [], "blend": blend, "yaw": 0,
@@ -1025,7 +1037,9 @@ def cmd_assemble(a):
                       # 2026-10-23: a fixed LOD0 share, the sharpen switch and an interior's own carve box (the Mk II's
                       # cockpit insert). This list is what reaches Blender: a new plan key goes here too.
                       "triangles": p.get("triangles"), "sharpen": p.get("sharpen", True),
-                      "carve_min": p.get("carve_min"), "carve_max": p.get("carve_max")})
+                      "carve_min": p.get("carve_min"), "carve_max": p.get("carve_max"), "skin": skin,
+                      "skin_min": p.get("skin_min"), "skin_max": p.get("skin_max"),
+                      "flat_normal": bool(p.get("flat_normal"))})
     if not parts:
         sys.exit("nothing to assemble")
     delivery = job.path("delivery")

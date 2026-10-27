@@ -5,3 +5,4 @@ scipy>=1.13
 scikit-image>=0.24
 trimesh>=4.0
 pytest>=8.0
+fast_simplification>=0.1.9     # quadric decimation of marching-cubes output (ms sdf, 2026-10-25)
